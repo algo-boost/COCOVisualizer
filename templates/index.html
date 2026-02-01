@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>COCO数据集可视化工具</title>
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js" crossorigin></script>
+    <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist@2.27.0/plotly.min.js" crossorigin></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" crossorigin></script>
+    <link rel="stylesheet" href="/static/react-app.css">
+</head>
+<body>
+    <div id="root"></div>
+    <div id="load-fail" style="display:none; padding: 2rem; text-align: center; color: #888;">
+        <p>脚本加载失败（可能无法访问 CDN），请检查网络或稍后重试。</p>
+    </div>
+    <script>
+      (function(){
+        var t = setTimeout(function(){
+          if (!window.React || !window.ReactDOM) {
+            document.getElementById('root').style.display = 'none';
+            document.getElementById('load-fail').style.display = 'block';
+          }
+        }, 8000);
+        window.addEventListener('load', function(){ clearTimeout(t); });
+      })();
+    </script>
+    <script type="text/babel" src="/static/react-app.jsx"></script>
+</body>
+</html>

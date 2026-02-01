@@ -1,0 +1,107 @@
+{
+  "appName": "COCO Data Visualizer",
+  "loadPage": {
+    "title": "加载数据集",
+    "cocoPathLabel": "COCO JSON 文件路径 *",
+    "cocoPathPlaceholder": "",
+    "imageDirLabel": "图片目录（可选）",
+    "imageDirPlaceholder": "",
+    "datasetNameLabel": "数据集名称（可选）",
+    "datasetNamePlaceholder": "",
+    "loadButtonText": "加载",
+    "cocoPathRequiredMessage": "请输入COCO JSON路径"
+  },
+  "gallery": {
+    "defaultPageSize": 20,
+    "pageSizeOptions": [20, 50, 100],
+    "pageSizeLabel": "条/页",
+    "batchSetLabel": "批量设置:",
+    "exportButtonText": "导出ZIP",
+    "versionButtonText": "版本",
+    "saveButtonText": "保存",
+    "galleryTitlePrefix": "共",
+    "galleryTitleSuffix": "张图片",
+    "selectedSuffix": "已选"
+  },
+  "imageCategories": ["未分类", "低置信度", "误检", "漏检", "少数类", "背景"],
+  "imageCategoryColors": {
+    "未分类": "#888888",
+    "低置信度": "#FF6B6B",
+    "误检": "#F39C12",
+    "漏检": "#E74C3C",
+    "少数类": "#9B59B6",
+    "背景": "#3498DB"
+  },
+  "colorPalette": ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F", "#BB8FCE", "#85C1E9", "#F8B500", "#00CED1", "#FF69B4", "#32CD32", "#FFD700"],
+  "viewer": {
+    "wheelZoomFactorOut": 0.9,
+    "wheelZoomFactorIn": 1.1,
+    "zoomMin": 0.02,
+    "zoomMax": 100,
+    "wheelZoomWithoutModifier": true,
+    "lineWidthOptions": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1],
+    "lineWidthDefault": 0.5,
+    "lineWidthLabel": "线宽:",
+    "backgroundStyle": "checkerboard",
+    "backgroundColor": "#1a1a2e",
+    "checkerboardColor1": "#2d2d44",
+    "checkerboardColor2": "#252548"
+  },
+  "settings": {
+    "modalTitle": "设置",
+    "viewerBackgroundLabel": "查看器背景",
+    "backgroundStyleCheckerboard": "马赛克",
+    "backgroundStyleSolid": "纯色",
+    "lineWidthDefaultLabel": "默认线宽",
+    "closeButtonText": "关闭"
+  },
+  "export": {
+    "defaultAnnotationFilename": "_annotations.json",
+    "zipFilenameSuffix": "_by_category.zip",
+    "modalTitle": "按分类导出",
+    "modalDescription": "选择要导出的图片分类，每个分类将生成独立的COCO数据：",
+    "exportButtonText": "导出",
+    "progressGenerating": "正在生成压缩包..."
+  },
+  "saveModal": {
+    "title": "保存到 COCO 文件",
+    "description": "将当前图片分类与备注写入原 COCO 文件，并生成一条版本记录。请填写版本说明（必填）。",
+    "commentPlaceholder": "版本说明（必填）",
+    "submitButtonText": "保存",
+    "versionCommentRequired": "请填写版本说明"
+  },
+  "versionModal": {
+    "title": "版本记录",
+    "description": "每次「保存」会生成一条版本；回滚将把 COCO 文件恢复为选中版本的内容，并刷新当前页的图片分类与备注。",
+    "latestBadge": "最新",
+    "noComment": "(无说明)",
+    "rollbackButtonText": "回滚到此版本",
+    "rollingText": "回滚中...",
+    "emptyMessage": "暂无版本记录，保存一次后会出现。",
+    "closeButtonText": "关闭"
+  },
+  "nav": {
+    "loadTitle": "加载数据集",
+    "galleryTitle": "图片浏览",
+    "edaTitle": "数据分析"
+  },
+  "eda": {
+    "pageTitle": "数据分析 (EDA)",
+    "sectionCategory": "类别分布",
+    "sectionSize": "尺寸分析",
+    "sectionRatio": "比例分析",
+    "sectionSpace": "空间分析",
+    "sectionDensity": "密度分析",
+    "chartCategoryPie": "类别分布饼图",
+    "chartCategoryBar": "类别数量柱状图",
+    "chartArea": "面积分布",
+    "chartAreaSqrt": "面积平方根分布",
+    "chartLongEdge": "长边分布",
+    "chartWidthHeight": "宽度和高度分布",
+    "chartAspectRatio": "宽高比分布 (宽/高)",
+    "chartLongShortRatio": "长短边比分布 (长边/短边)",
+    "chartCenter": "中心点分布",
+    "chartBbox": "BBox分布（宽×高）",
+    "chartDensity": "密度分布"
+  }
+}

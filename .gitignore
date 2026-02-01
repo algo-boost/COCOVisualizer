@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Flask
+instance/
+.webassets-cache
+
+# 环境变量
+.env
+.env.*
+!.env.example
+
+# 日志
+*.log
+logs/
+
+# 上传文件
+uploads/*
+!uploads/.gitkeep
+
+# 数据与缓存（大型 COCO 数据集及版本缓存）
+data/.coco_versions/
+data/merged_*.json
+
+# PyInstaller 打包输出
+*.manifest
+*.spec.bak
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

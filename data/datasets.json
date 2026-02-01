@@ -1,0 +1,12 @@
+{
+  "dataset_0": {
+    "coco_json_path": "C:\\Users\\Administrator\\Desktop\\coco-visualizer\\coco-visualizer\\data\\merged_dataset_20260201_120123.json",
+    "dataset_name": "dataset",
+    "image_dir": "C:\\Users\\Administrator\\Downloads\\train_coco\\t2"
+  },
+  "dataset_1": {
+    "coco_json_path": "C:\\Users\\Administrator\\Desktop\\coco-visualizer\\coco-visualizer\\data\\merged_dataset_20260201_120455.json",
+    "dataset_name": "dataset",
+    "image_dir": "C:\\Users\\Administrator\\Downloads\\train_coco\\t2"
+  }
+}

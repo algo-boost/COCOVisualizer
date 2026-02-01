@@ -1,0 +1,5 @@
+# 打包所需依赖（与 requirements.txt 一起安装）
+# pip install -r requirements.txt -r requirements-build.txt
+
+pyinstaller>=6.0.0
+Pillow>=9.0.0
