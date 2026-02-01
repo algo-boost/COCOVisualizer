@@ -56,7 +56,7 @@
     "closeButtonText": "关闭"
   },
   "export": {
-    "defaultAnnotationFilename": "_annotations.json",
+    "defaultAnnotationFilename": "_annotations.coco.json",
     "zipFilenameSuffix": "_by_category.zip",
     "modalTitle": "按分类导出",
     "modalDescription": "选择要导出的图片分类，每个分类将生成独立的COCO数据：",

@@ -7,7 +7,6 @@ import webbrowser
 import threading
 from pathlib import Path
 
-# 支持 PyInstaller 打包：区分开发模式与打包后运行
 if getattr(sys, 'frozen', False):
     _app_dir = Path(sys.executable).parent
     _meipass = Path(sys._MEIPASS)
@@ -28,6 +27,7 @@ if str(_app_dir) not in sys.path:
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from coco_eda_utils import CocoEDA
+from PIL import Image
 import numpy as np
 import pandas as pd
 
@@ -107,11 +107,11 @@ def _ensure_dataset_loaded(dataset_id):
         coco_data = json.load(f)
     if isinstance(coco_data.get('source_dirs'), dict):
         eda.source_dirs = coco_data['source_dirs']
+    _fill_image_dimensions(eda)
     current_datasets[dataset_id] = eda
     return eda
 
 
-# 版本记录：每个 COCO 文件保留最近 N 个版本
 MAX_VERSIONS = 30
 VERSIONS_DIR_NAME = '.coco_versions'
 
@@ -280,6 +280,82 @@ def upload_file():
 COCO_ANNOTATION_FILENAME = '_annotations.coco.json'
 
 
+def _add_normalized_bbox_stats(eda, df):
+    """在 bbox 特征 df 上合并图片宽高，并增加归一化列（相对图像尺寸 0-1）。若 images 无 width/height 则跳过归一化。"""
+    if df.empty or 'image_id' not in df.columns:
+        return df
+    if 'width' not in eda.images_df.columns or 'height' not in eda.images_df.columns:
+        return df
+    imgs = eda.images_df[['id', 'width', 'height']].rename(
+        columns={'id': 'image_id', 'width': 'img_w', 'height': 'img_h'}
+    )
+    df = df.merge(imgs, on='image_id', how='left')
+    # 避免除零
+    df['img_w'] = df['img_w'].replace(0, np.nan)
+    df['img_h'] = df['img_h'].replace(0, np.nan)
+    df['img_area'] = df['img_w'] * df['img_h']
+    df['img_area'] = df['img_area'].replace(0, np.nan)
+    df['img_max_side'] = np.maximum(df['img_w'].fillna(0), df['img_h'].fillna(0))
+    df['img_max_side'] = df['img_max_side'].replace(0, np.nan)
+    df['img_min_side'] = np.minimum(df['img_w'].fillna(np.inf), df['img_h'].fillna(np.inf))
+    df['img_min_side'] = df['img_min_side'].replace(np.inf, np.nan)
+    df['w_norm'] = df['w'] / df['img_w']
+    df['h_norm'] = df['h'] / df['img_h']
+    df['area_norm'] = df['area'] / df['img_area']
+    df['sqrt_area_norm'] = np.sqrt(np.maximum(df['area_norm'], 0))
+    df['max_side_norm'] = df['max_side'] / df['img_max_side']
+    df['min_side_norm'] = df['min_side'] / df['img_min_side']
+    df['c_x_norm'] = df['c_x'] / df['img_w']
+    df['c_y_norm'] = df['c_y'] / df['img_h']
+    return df
+
+
+def _resolve_image_path(eda, row):
+    """根据 eda 和 images_df 的一行解析图片文件路径，与 get_image 逻辑一致。返回 Path 或 None。"""
+    image_dir = eda.image_dir
+    if getattr(eda, 'source_dirs', None) and row.get('source_path') is not None:
+        image_dir = eda.source_dirs.get(str(row['source_path']), image_dir) or image_dir
+    if not image_dir:
+        image_dir = str(Path(eda.coco_json_path).parent)
+    file_name = row.get('file_name')
+    if not file_name:
+        return None
+    file_path = Path(file_name)
+    if file_path.is_absolute():
+        path = file_path
+    else:
+        path = Path(image_dir) / file_name
+    if path.exists():
+        return path
+    for alt in (Path(eda.coco_json_path).parent / file_name, Path(image_dir) / Path(file_name).name):
+        if alt.exists():
+            return alt
+    return None
+
+
+def _fill_image_dimensions(eda):
+    """若 images_df 中某张图缺少 width/height，则预加载该图并用 Pillow 计算宽高并写回。"""
+    if eda.images_df.empty or 'file_name' not in eda.images_df.columns:
+        return
+    for col in ('width', 'height'):
+        if col not in eda.images_df.columns:
+            eda.images_df[col] = np.nan
+    for idx, row in eda.images_df.iterrows():
+        w, h = row.get('width'), row.get('height')
+        if pd.notna(w) and pd.notna(h) and int(w) > 0 and int(h) > 0:
+            continue
+        path = _resolve_image_path(eda, row)
+        if path is None:
+            continue
+        try:
+            with Image.open(path) as im:
+                w, h = im.size
+            eda.images_df.at[idx, 'width'] = int(w)
+            eda.images_df.at[idx, 'height'] = int(h)
+        except Exception:
+            pass
+
+
 def _scan_folder_for_coco(root_path):
     """递归扫描目录下所有 _annotations.coco.json，返回 [{coco_path, image_dir, relative_path}, ...]"""
     root = Path(root_path).resolve()
@@ -344,14 +420,16 @@ def load_dataset():
             name=dataset_name,
             image_dir=image_dir if image_dir else None
         )
+        _fill_image_dimensions(eda)
         
         # 存储数据集
         dataset_id = f"{dataset_name}_{len(current_datasets)}"
         current_datasets[dataset_id] = eda
         _persist_dataset(dataset_id, coco_path, dataset_name, image_dir if image_dir else None)
         
-        # 计算所有特征
+        # 计算所有特征并归一化（相对图像尺寸）
         df = eda.compute_bbox_features()
+        df = _add_normalized_bbox_stats(eda, df)
         
         # 获取基本信息
         class_dist = eda.get_class_distribution()
@@ -391,38 +469,38 @@ def load_dataset():
             visualization_data['category_data'][category] = {
                 'count': len(cat_df),
                 'area': {
-                    'values': safe_tolist(cat_df['area']) if 'area' in cat_df.columns else [],
-                    'sqrt_values': safe_tolist(cat_df['sqrt_area']) if 'sqrt_area' in cat_df.columns else []
+                    'values': safe_tolist(cat_df['area_norm']) if 'area_norm' in cat_df.columns else [],
+                    'sqrt_values': safe_tolist(cat_df['sqrt_area_norm']) if 'sqrt_area_norm' in cat_df.columns else []
                 },
                 'dimensions': {
-                    'width': safe_tolist(cat_df['w']) if 'w' in cat_df.columns else [],
-                    'height': safe_tolist(cat_df['h']) if 'h' in cat_df.columns else [],
-                    'max_side': safe_tolist(cat_df['max_side']) if 'max_side' in cat_df.columns else [],
-                    'min_side': safe_tolist(cat_df['min_side']) if 'min_side' in cat_df.columns else []
+                    'width': safe_tolist(cat_df['w_norm']) if 'w_norm' in cat_df.columns else [],
+                    'height': safe_tolist(cat_df['h_norm']) if 'h_norm' in cat_df.columns else [],
+                    'max_side': safe_tolist(cat_df['max_side_norm']) if 'max_side_norm' in cat_df.columns else [],
+                    'min_side': safe_tolist(cat_df['min_side_norm']) if 'min_side_norm' in cat_df.columns else []
                 },
                 'ratios': {
                     'wh_ratio': safe_tolist(cat_df['wh_ratio']) if 'wh_ratio' in cat_df.columns else [],
                     'aspect_ratio': safe_tolist(cat_df['aspect_ratio']) if 'aspect_ratio' in cat_df.columns else []
                 },
                 'spatial': {
-                    'center_x': safe_tolist(cat_df['c_x']) if 'c_x' in cat_df.columns else [],
-                    'center_y': safe_tolist(cat_df['c_y']) if 'c_y' in cat_df.columns else []
+                    'center_x': safe_tolist(cat_df['c_x_norm']) if 'c_x_norm' in cat_df.columns else [],
+                    'center_y': safe_tolist(cat_df['c_y_norm']) if 'c_y_norm' in cat_df.columns else []
                 }
             }
         
-        # 所有类别的汇总统计（用于箱线图等）
+        # 所有类别的汇总统计（归一化值，用于箱线图等）
         visualization_data['all_categories_stats'] = {
             'area': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
-                'values': safe_tolist(df['area']) if 'area' in df.columns else []
+                'values': safe_tolist(df['area_norm']) if 'area_norm' in df.columns else []
             },
             'sqrt_area': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
-                'values': safe_tolist(df['sqrt_area']) if 'sqrt_area' in df.columns else []
+                'values': safe_tolist(df['sqrt_area_norm']) if 'sqrt_area_norm' in df.columns else []
             },
             'max_side': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
-                'values': safe_tolist(df['max_side']) if 'max_side' in df.columns else []
+                'values': safe_tolist(df['max_side_norm']) if 'max_side_norm' in df.columns else []
             },
             'wh_ratio': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
@@ -434,18 +512,39 @@ def load_dataset():
             },
             'width': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
-                'values': safe_tolist(df['w']) if 'w' in df.columns else []
+                'values': safe_tolist(df['w_norm']) if 'w_norm' in df.columns else []
             },
             'height': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
-                'values': safe_tolist(df['h']) if 'h' in df.columns else []
+                'values': safe_tolist(df['h_norm']) if 'h_norm' in df.columns else []
             },
             'center': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
-                'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [],
-                'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else []
+                'x': safe_tolist(df['c_x_norm']) if 'c_x_norm' in df.columns else [],
+                'y': safe_tolist(df['c_y_norm']) if 'c_y_norm' in df.columns else []
             }
         }
+        # 未归一化（像素值）统计，供前端切换
+        visualization_data['all_categories_stats_raw'] = {
+            'area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['area']) if 'area' in df.columns else []},
+            'sqrt_area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['sqrt_area']) if 'sqrt_area' in df.columns else []},
+            'max_side': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['max_side']) if 'max_side' in df.columns else []},
+            'wh_ratio': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['wh_ratio']) if 'wh_ratio' in df.columns else []},
+            'aspect_ratio': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['aspect_ratio']) if 'aspect_ratio' in df.columns else []},
+            'width': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['w']) if 'w' in df.columns else []},
+            'height': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['h']) if 'h' in df.columns else []},
+            'center': {'category': df['name'].tolist() if 'name' in df.columns else [], 'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [], 'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else []}
+        }
+        visualization_data['category_data_raw'] = {}
+        for category in categories:
+            cat_df = df[df['name'] == category]
+            visualization_data['category_data_raw'][category] = {
+                'count': len(cat_df),
+                'area': {'values': safe_tolist(cat_df['area']) if 'area' in cat_df.columns else [], 'sqrt_values': safe_tolist(cat_df['sqrt_area']) if 'sqrt_area' in cat_df.columns else []},
+                'dimensions': {'width': safe_tolist(cat_df['w']) if 'w' in cat_df.columns else [], 'height': safe_tolist(cat_df['h']) if 'h' in cat_df.columns else [], 'max_side': safe_tolist(cat_df['max_side']) if 'max_side' in cat_df.columns else [], 'min_side': safe_tolist(cat_df['min_side']) if 'min_side' in cat_df.columns else []},
+                'ratios': {'wh_ratio': safe_tolist(cat_df['wh_ratio']) if 'wh_ratio' in cat_df.columns else [], 'aspect_ratio': safe_tolist(cat_df['aspect_ratio']) if 'aspect_ratio' in cat_df.columns else []},
+                'spatial': {'center_x': safe_tolist(cat_df['c_x']) if 'c_x' in cat_df.columns else [], 'center_y': safe_tolist(cat_df['c_y']) if 'c_y' in cat_df.columns else []}
+            }
         
         # 首次打开：若该 COCO 尚无任何版本记录，则自动保存为 init 版本（只要打开过就留记录）
         if not _list_versions(eda.coco_json_path):
@@ -530,7 +629,9 @@ def _load_dataset_merged_impl(items, dataset_name='merged'):
         json.dump(merged_coco, f, indent=2, ensure_ascii=False)
     eda = CocoEDA(coco_json_path=str(merged_path), name=dataset_name, image_dir=list(source_dirs.values())[0] if source_dirs else None)
     eda.source_dirs = source_dirs
+    _fill_image_dimensions(eda)
     df = eda.compute_bbox_features()
+    df = _add_normalized_bbox_stats(eda, df)
     class_dist = eda.get_class_distribution()
     categories = class_dist['name'].tolist()
     visualization_data = {
@@ -550,19 +651,39 @@ def _load_dataset_merged_impl(items, dataset_name='merged'):
         },
         'category_data': {},
         'all_categories_stats': {
-            'area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['area']) if 'area' in df.columns else []},
-            'sqrt_area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['sqrt_area']) if 'sqrt_area' in df.columns else []},
-            'max_side': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['max_side']) if 'max_side' in df.columns else []},
+            'area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['area_norm']) if 'area_norm' in df.columns else []},
+            'sqrt_area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['sqrt_area_norm']) if 'sqrt_area_norm' in df.columns else []},
+            'max_side': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['max_side_norm']) if 'max_side_norm' in df.columns else []},
             'wh_ratio': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['wh_ratio']) if 'wh_ratio' in df.columns else []},
             'aspect_ratio': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['aspect_ratio']) if 'aspect_ratio' in df.columns else []},
-            'width': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['w']) if 'w' in df.columns else []},
-            'height': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['h']) if 'h' in df.columns else []},
-            'center': {'category': df['name'].tolist() if 'name' in df.columns else [], 'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [], 'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else []}
+            'width': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['w_norm']) if 'w_norm' in df.columns else []},
+            'height': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['h_norm']) if 'h_norm' in df.columns else []},
+            'center': {'category': df['name'].tolist() if 'name' in df.columns else [], 'x': safe_tolist(df['c_x_norm']) if 'c_x_norm' in df.columns else [], 'y': safe_tolist(df['c_y_norm']) if 'c_y_norm' in df.columns else []}
         }
     }
     for category in categories:
         cat_df = df[df['name'] == category]
         visualization_data['category_data'][category] = {
+            'count': len(cat_df),
+            'area': {'values': safe_tolist(cat_df['area_norm']) if 'area_norm' in cat_df.columns else [], 'sqrt_values': safe_tolist(cat_df['sqrt_area_norm']) if 'sqrt_area_norm' in cat_df.columns else []},
+            'dimensions': {'width': safe_tolist(cat_df['w_norm']) if 'w_norm' in cat_df.columns else [], 'height': safe_tolist(cat_df['h_norm']) if 'h_norm' in cat_df.columns else [], 'max_side': safe_tolist(cat_df['max_side_norm']) if 'max_side_norm' in cat_df.columns else [], 'min_side': safe_tolist(cat_df['min_side_norm']) if 'min_side_norm' in cat_df.columns else []},
+            'ratios': {'wh_ratio': safe_tolist(cat_df['wh_ratio']) if 'wh_ratio' in cat_df.columns else [], 'aspect_ratio': safe_tolist(cat_df['aspect_ratio']) if 'aspect_ratio' in cat_df.columns else []},
+            'spatial': {'center_x': safe_tolist(cat_df['c_x_norm']) if 'c_x_norm' in cat_df.columns else [], 'center_y': safe_tolist(cat_df['c_y_norm']) if 'c_y_norm' in cat_df.columns else []}
+        }
+    visualization_data['all_categories_stats_raw'] = {
+        'area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['area']) if 'area' in df.columns else []},
+        'sqrt_area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['sqrt_area']) if 'sqrt_area' in df.columns else []},
+        'max_side': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['max_side']) if 'max_side' in df.columns else []},
+        'wh_ratio': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['wh_ratio']) if 'wh_ratio' in df.columns else []},
+        'aspect_ratio': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['aspect_ratio']) if 'aspect_ratio' in df.columns else []},
+        'width': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['w']) if 'w' in df.columns else []},
+        'height': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['h']) if 'h' in df.columns else []},
+        'center': {'category': df['name'].tolist() if 'name' in df.columns else [], 'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [], 'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else []}
+    }
+    visualization_data['category_data_raw'] = {}
+    for category in categories:
+        cat_df = df[df['name'] == category]
+        visualization_data['category_data_raw'][category] = {
             'count': len(cat_df),
             'area': {'values': safe_tolist(cat_df['area']) if 'area' in cat_df.columns else [], 'sqrt_values': safe_tolist(cat_df['sqrt_area']) if 'sqrt_area' in cat_df.columns else []},
             'dimensions': {'width': safe_tolist(cat_df['w']) if 'w' in cat_df.columns else [], 'height': safe_tolist(cat_df['h']) if 'h' in cat_df.columns else [], 'max_side': safe_tolist(cat_df['max_side']) if 'max_side' in cat_df.columns else [], 'min_side': safe_tolist(cat_df['min_side']) if 'min_side' in cat_df.columns else []},
@@ -609,6 +730,7 @@ def get_filtered_data():
         if eda is None:
             return jsonify({'error': '数据集不存在'}), 400
         df = eda.compute_bbox_features()
+        df = _add_normalized_bbox_stats(eda, df)
         
         # 应用筛选
         if selected_categories and len(selected_categories) > 0:
@@ -616,19 +738,19 @@ def get_filtered_data():
             if df.empty:
                 return jsonify({'error': '筛选后无数据'}), 400
         
-        # 返回筛选后的数据
+        # 返回筛选后的数据（归一化值）
         filtered_data = {
             'area': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
-                'values': safe_tolist(df['area']) if 'area' in df.columns else []
+                'values': safe_tolist(df['area_norm']) if 'area_norm' in df.columns else []
             },
             'sqrt_area': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
-                'values': safe_tolist(df['sqrt_area']) if 'sqrt_area' in df.columns else []
+                'values': safe_tolist(df['sqrt_area_norm']) if 'sqrt_area_norm' in df.columns else []
             },
             'max_side': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
-                'values': safe_tolist(df['max_side']) if 'max_side' in df.columns else []
+                'values': safe_tolist(df['max_side_norm']) if 'max_side_norm' in df.columns else []
             },
             'wh_ratio': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
@@ -640,22 +762,32 @@ def get_filtered_data():
             },
             'width': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
-                'values': safe_tolist(df['w']) if 'w' in df.columns else []
+                'values': safe_tolist(df['w_norm']) if 'w_norm' in df.columns else []
             },
             'height': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
-                'values': safe_tolist(df['h']) if 'h' in df.columns else []
+                'values': safe_tolist(df['h_norm']) if 'h_norm' in df.columns else []
             },
             'center': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
-                'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [],
-                'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else []
+                'x': safe_tolist(df['c_x_norm']) if 'c_x_norm' in df.columns else [],
+                'y': safe_tolist(df['c_y_norm']) if 'c_y_norm' in df.columns else []
             }
         }
-        
+        filtered_data_raw = {
+            'area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['area']) if 'area' in df.columns else []},
+            'sqrt_area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['sqrt_area']) if 'sqrt_area' in df.columns else []},
+            'max_side': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['max_side']) if 'max_side' in df.columns else []},
+            'wh_ratio': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['wh_ratio']) if 'wh_ratio' in df.columns else []},
+            'aspect_ratio': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['aspect_ratio']) if 'aspect_ratio' in df.columns else []},
+            'width': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['w']) if 'w' in df.columns else []},
+            'height': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['h']) if 'h' in df.columns else []},
+            'center': {'category': df['name'].tolist() if 'name' in df.columns else [], 'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [], 'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else []}
+        }
         return jsonify({
             'success': True,
-            'data': filtered_data
+            'data': filtered_data,
+            'data_raw': filtered_data_raw
         })
     except Exception as e:
         import traceback
@@ -737,17 +869,44 @@ def get_images_by_category():
                 
                 annotations.append(ann)
             
+            # width/height 可能不在 COCO images 中，从 bbox 推断
+            if 'width' in img_info.index and 'height' in img_info.index and pd.notna(img_info.get('width')) and pd.notna(img_info.get('height')):
+                img_w, img_h = int(img_info['width']), int(img_info['height'])
+            else:
+                img_w, img_h = 0, 0
+                for _, row in group_df.iterrows():
+                    bbox = extract_bbox(row.get('bbox'))
+                    if bbox and len(bbox) >= 4:
+                        x, y, bw, bh = bbox[0], bbox[1], bbox[2], bbox[3]
+                        img_w = max(img_w, int(x + bw))
+                        img_h = max(img_h, int(y + bh))
+                if img_w <= 0:
+                    img_w = 1
+                if img_h <= 0:
+                    img_h = 1
             img_item = {
                 'image_id': int(image_id),
                 'file_name': img_info['file_name'],
-                'width': int(img_info['width']),
-                'height': int(img_info['height']),
+                'width': img_w,
+                'height': img_h,
                 'annotations': annotations,
                 'num_annotations': len(annotations)
             }
-            # 图片级别扩展字段（COCO 扩展）
-            if 'image_category' in img_info and img_info['image_category'] is not None:
-                img_item['image_category'] = str(img_info['image_category'])
+            # 图片级别扩展字段（COCO 扩展）；支持一图多类 image_categories（数组）
+            img_cats = img_info.get('image_categories')
+            if img_cats is not None:
+                if isinstance(img_cats, str):
+                    try:
+                        img_cats = json.loads(img_cats) if img_cats.strip() else ['未分类']
+                    except (json.JSONDecodeError, AttributeError):
+                        img_cats = [img_info.get('image_category', '未分类')]
+                else:
+                    img_cats = list(img_cats) if img_cats else ['未分类']
+            else:
+                single = img_info.get('image_category')
+                img_cats = [single] if single is not None and str(single).strip() else ['未分类']
+            img_item['image_category'] = img_cats[0] if img_cats else '未分类'
+            img_item['image_categories'] = img_cats
             if 'note' in img_info and img_info['note'] is not None:
                 img_item['note'] = str(img_info['note'])
             if 'source_path' in img_info and img_info['source_path'] is not None:
@@ -911,7 +1070,12 @@ def save_image_metadata():
                 continue
             if iid in meta_by_id:
                 meta = meta_by_id[iid]
-                img['image_category'] = meta.get('image_category', '未分类')
+                cats = meta.get('image_categories')
+                if cats is None:
+                    single = meta.get('image_category', '未分类')
+                    cats = [single] if single else ['未分类']
+                img['image_categories'] = list(cats)
+                img['image_category'] = cats[0] if cats else '未分类'
                 img['note'] = meta.get('note', '')
         
         # 写入前先保存为一条版本记录（支持版本说明 comment）

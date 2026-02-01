@@ -73,7 +73,7 @@ const DEFAULT_CONFIG = {
         closeButtonText: '关闭'
     },
     export: {
-        defaultAnnotationFilename: '_annotations.json',
+        defaultAnnotationFilename: '_annotations.coco.json',
         zipFilenameSuffix: '_by_category.zip',
         modalTitle: '按分类导出',
         modalDescription: '选择要导出的图片分类，每个分类将生成独立的COCO数据：',
@@ -283,7 +283,8 @@ function App() {
             const initClass = {};
             const defaultCat = (config.imageCategories && config.imageCategories[0]) || '未分类';
             imgData.images.forEach(img => {
-                initClass[img.image_id] = img.image_category || defaultCat;
+                const cats = img.image_categories;
+                initClass[img.image_id] = Array.isArray(cats) && cats.length > 0 ? cats : (img.image_category ? [img.image_category] : [defaultCat]);
             });
             setImageClassifications(initClass);
             const initNotes = {};
@@ -295,9 +296,13 @@ function App() {
         setPage('gallery');
     };
 
-    // 更新图片分类
+    // 更新图片分类（单类，覆盖）
     const updateImageCategory = (imageId, category) => {
-        setImageClassifications(prev => ({ ...prev, [imageId]: category }));
+        setImageClassifications(prev => ({ ...prev, [imageId]: [category] }));
+    };
+    // 更新图片多分类（一图多类）
+    const updateImageCategories = (imageId, categoriesArray) => {
+        setImageClassifications(prev => ({ ...prev, [imageId]: categoriesArray && categoriesArray.length ? categoriesArray : [(imageCategories && imageCategories[0]) || '未分类'] }));
     };
 
     // 更新图片备注
@@ -305,11 +310,11 @@ function App() {
         setImageNotes(prev => ({ ...prev, [imageId]: note }));
     };
 
-    // 批量更新选中图片的分类
+    // 批量更新选中图片的分类（每张图设为单类）
     const batchUpdateCategory = (imageIds, category) => {
         setImageClassifications(prev => {
             const newState = { ...prev };
-            imageIds.forEach(id => { newState[id] = category; });
+            imageIds.forEach(id => { newState[id] = [category]; });
             return newState;
         });
     };
@@ -330,8 +335,10 @@ function App() {
             if (data.success && data.images) {
                 const newClass = {};
                 const newNotes = {};
+                const defaultCat = (config.imageCategories && config.imageCategories[0]) || '未分类';
                 data.images.forEach(img => {
-                    newClass[img.image_id] = img.image_category || '未分类';
+                    const cats = img.image_categories;
+                    newClass[img.image_id] = Array.isArray(cats) && cats.length > 0 ? cats : (img.image_category ? [img.image_category] : [defaultCat]);
                     newNotes[img.image_id] = img.note || '';
                 });
                 setImageClassifications(newClass);
@@ -363,6 +370,7 @@ function App() {
                     imageCategoryColors={imageCategoryColors}
                     onImageClick={(img) => { setSelectedImage(img); setViewerOpen(true); }}
                     onUpdateCategory={updateImageCategory}
+                    onUpdateCategories={updateImageCategories}
                     onBatchUpdateCategory={batchUpdateCategory}
                     onRollback={refetchImageMetaAfterRollback}
                 />
@@ -380,6 +388,7 @@ function App() {
                     onClose={() => setViewerOpen(false)}
                     onNavigate={(img) => setSelectedImage(img)}
                     onUpdateCategory={updateImageCategory}
+                    onUpdateCategories={updateImageCategories}
                     onUpdateNote={updateImageNote}
                 />
             )}
@@ -709,7 +718,7 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
 }
 
 // ==================== 图片宫格页面 ====================
-function GalleryPage({ datasetData, images, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, onImageClick, onUpdateCategory, onBatchUpdateCategory, onRollback }) {
+function GalleryPage({ datasetData, images, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, onImageClick, onUpdateCategory, onUpdateCategories, onBatchUpdateCategory, onRollback }) {
     const config = useConfig();
     const gallery = config.gallery || DEFAULT_CONFIG.gallery;
     const [currentPage, setCurrentPage] = useState(1);
@@ -734,13 +743,14 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
         });
     });
 
-    // 图片分类统计
+    // 图片分类统计（一图可属多类，按归属计数）
     const imageCategoryStats = {};
     (imageCategories || []).forEach(cat => { imageCategoryStats[cat] = 0; });
     const defaultImageCat = (imageCategories && imageCategories[0]) || '未分类';
     images.forEach(img => {
-        const cat = imageClassifications[img.image_id] || defaultImageCat;
-        imageCategoryStats[cat] = (imageCategoryStats[cat] || 0) + 1;
+        const cats = imageClassifications[img.image_id];
+        const arr = Array.isArray(cats) && cats.length ? cats : [defaultImageCat];
+        arr.forEach(cat => { imageCategoryStats[cat] = (imageCategoryStats[cat] || 0) + 1; });
     });
 
     // 目录列表（多目录合并时用于筛选）
@@ -756,10 +766,11 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
         if (selectedDirectory !== 'all' && (img.source_path != null ? img.source_path : '') !== selectedDirectory) return false;
         // 标注类别筛选
         if (selectedLabelCategory !== 'all' && !img.annotations.some(a => a.category === selectedLabelCategory)) return false;
-        // 图片分类筛选
+        // 图片分类筛选（归属该分类即显示）
         if (selectedImageCategory !== 'all') {
-            const imgCat = imageClassifications[img.image_id] || defaultImageCat;
-            if (imgCat !== selectedImageCategory) return false;
+            const arr = imageClassifications[img.image_id];
+            const imgCats = Array.isArray(arr) && arr.length ? arr : [defaultImageCat];
+            if (!imgCats.includes(selectedImageCategory)) return false;
         }
         // 文件名搜索
         if (searchText && !img.file_name.toLowerCase().includes(searchText.toLowerCase())) return false;
@@ -784,11 +795,12 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     const handleSave = async (versionComment) => {
         setSaving(true);
         try {
-            const images_meta = images.map(img => ({
-                image_id: img.image_id,
-                image_category: imageClassifications[img.image_id] || (imageCategories && imageCategories[0]) || '未分类',
-                note: imageNotes[img.image_id] || ''
-            }));
+            const defaultCat = (imageCategories && imageCategories[0]) || '未分类';
+            const images_meta = images.map(img => {
+                const cats = imageClassifications[img.image_id];
+                const arr = Array.isArray(cats) && cats.length ? cats : [defaultCat];
+                return { image_id: img.image_id, image_categories: arr, note: imageNotes[img.image_id] || '' };
+            });
             const res = await fetch('/api/save_image_metadata', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -887,7 +899,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                     image={img}
                                     datasetId={datasetData.dataset_id}
                                     selected={selectedImages.has(img.image_id)}
-                                    imageCategory={imageClassifications[img.image_id] || (imageCategories && imageCategories[0]) || '未分类'}
+                                    imageCategory={(() => { const c = imageClassifications[img.image_id]; const a = Array.isArray(c) && c.length ? c : [(imageCategories && imageCategories[0]) || '未分类']; return a.length === 1 ? a[0] : a; })()}
                                     imageCategoryColors={imageCategoryColors}
                                     colorPalette={config.colorPalette}
                                     hasNote={!!imageNotes[img.image_id]}
@@ -1178,15 +1190,19 @@ function ImageCard({ image, datasetId, selected, imageCategory, imageCategoryCol
     const labelCategories = [...new Set(image.annotations.map(a => a.category))].slice(0, 3);
     const catColors = imageCategoryColors || {};
     const palette = colorPalette || DEFAULT_CONFIG.colorPalette;
+    const defaultCat = DEFAULT_CONFIG.imageCategories && DEFAULT_CONFIG.imageCategories[0];
+    const cats = Array.isArray(imageCategory) ? imageCategory : (imageCategory ? [imageCategory] : []);
+    const primaryCat = cats[0];
+    const showBadge = primaryCat && primaryCat !== defaultCat;
 
     return (
         <div className={`image-card ${selected ? 'selected' : ''}`} onClick={onClick}>
             <div className="image-card-checkbox" onClick={(e) => { e.stopPropagation(); onSelect(!selected); }}>
                 <input type="checkbox" checked={selected} readOnly />
             </div>
-            {imageCategory && imageCategory !== (DEFAULT_CONFIG.imageCategories && DEFAULT_CONFIG.imageCategories[0]) && (
-                <div className="image-card-category" style={{ background: catColors[imageCategory] || '#888' }}>
-                    {imageCategory}
+            {showBadge && (
+                <div className="image-card-category" style={{ background: catColors[primaryCat] || '#888' }} title={cats.length > 1 ? cats.join(', ') : primaryCat}>
+                    {cats.length > 1 ? `${primaryCat}+${cats.length - 1}` : primaryCat}
                 </div>
             )}
             {hasNote && <div className="image-card-note-icon" title="有备注">📝</div>}
@@ -1330,6 +1346,12 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
     const [exportProgress, setExportProgress] = useState('');
     const [selectedCategories, setSelectedCategories] = useState(() => new Set(catList));
     const [exportWithBoxes, setExportWithBoxes] = useState(true);
+    const [exportMultiCategoryMode, setExportMultiCategoryMode] = useState('all'); // 'all' 放入所有归属目录 | 'priority' 仅放入最高优先级目录
+    const defaultZipName = `${datasetData?.dataset_name || 'export'}${exp.zipFilenameSuffix || '_by_category.zip'}`;
+    const [zipFileName, setZipFileName] = useState(defaultZipName);
+    useEffect(() => {
+        if (datasetData?.dataset_name) setZipFileName(`${datasetData.dataset_name}${exp.zipFilenameSuffix || '_by_category.zip'}`);
+    }, [datasetData?.dataset_name, exp.zipFilenameSuffix]);
 
     const toggleCategory = (cat) => {
         const newSet = new Set(selectedCategories);
@@ -1350,20 +1372,23 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
             const defaultCat = catList[0] || '未分类';
 
             images.forEach(img => {
-                const cat = imageClassifications[img.image_id] || defaultCat;
-                if (selectedCategories.has(cat)) {
-                    groupedImages[cat].push({
-                        ...img,
-                        image_category: cat,
-                        note: imageNotes[img.image_id] || ''
+                const cats = imageClassifications[img.image_id];
+                const imgCats = Array.isArray(cats) && cats.length ? cats : [defaultCat];
+                const imgWithMeta = { ...img, image_category: imgCats[0], note: imageNotes[img.image_id] || '' };
+                if (exportMultiCategoryMode === 'all') {
+                    imgCats.forEach(cat => {
+                        if (selectedCategories.has(cat)) groupedImages[cat].push(imgWithMeta);
                     });
+                } else {
+                    const firstInOrder = catList.find(c => imgCats.includes(c) && selectedCategories.has(c));
+                    if (firstInOrder) groupedImages[firstInOrder].push(imgWithMeta);
                 }
             });
 
             const zip = new JSZip();
             const datasetId = datasetData.dataset_id;
             let exportedDirs = 0;
-            const annFilename = exp.defaultAnnotationFilename || '_annotations.json';
+            const annFilename = exp.defaultAnnotationFilename || '_annotations.coco.json';
 
             for (const cat of catList) {
                 if (!selectedCategories.has(cat) || groupedImages[cat].length === 0) continue;
@@ -1452,7 +1477,9 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
             const url = URL.createObjectURL(zipBlob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `${datasetData.dataset_name}${exp.zipFilenameSuffix || '_by_category.zip'}`;
+            let name = (zipFileName && zipFileName.trim()) ? zipFileName.trim() : defaultZipName;
+            if (!name.endsWith('.zip')) name += '.zip';
+            a.download = name.replace(/[/\\?*:|"<>]/g, '_');
             a.click();
             URL.revokeObjectURL(url);
             setExportProgress('');
@@ -1475,13 +1502,40 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
                 </div>
                 <div className="modal-body">
                     <p style={{marginBottom: '15px', color: '#666'}}>{exp.modalDescription}</p>
+                    <div style={{ marginBottom: '15px' }}>
+                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: '#555' }}>ZIP 文件名</label>
+                        <input
+                            type="text"
+                            className="filter-input"
+                            value={zipFileName}
+                            onChange={(e) => setZipFileName(e.target.value)}
+                            placeholder={defaultZipName}
+                            style={{ width: '100%', maxWidth: '400px' }}
+                        />
+                        <span style={{ fontSize: '12px', color: '#888', marginLeft: '8px' }}>（不含路径，未填则用默认名）</span>
+                    </div>
+                    <div style={{ marginBottom: '15px' }}>
+                        <span style={{ fontSize: '13px', color: '#555', marginRight: '10px' }}>多类别图片：</span>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginRight: '16px', cursor: 'pointer' }}>
+                            <input type="radio" name="multiCatMode" checked={exportMultiCategoryMode === 'all'} onChange={() => setExportMultiCategoryMode('all')} />
+                            <span>放入所有归属目录</span>
+                        </label>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                            <input type="radio" name="multiCatMode" checked={exportMultiCategoryMode === 'priority'} onChange={() => setExportMultiCategoryMode('priority')} />
+                            <span>仅放入最高优先级目录</span>
+                        </label>
+                    </div>
                     <label className="export-with-boxes-option" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '15px', cursor: 'pointer' }}>
                         <input type="checkbox" checked={exportWithBoxes} onChange={(e) => setExportWithBoxes(e.target.checked)} />
                         <span>同时导出带框图片（每张原图会多生成一张 _bbox.png，框上方显示类别；若有 score 则显示置信度）</span>
                     </label>
                     <div className="export-categories">
                         {catList.map(cat => {
-                            const count = images.filter(img => (imageClassifications[img.image_id] || defaultCat) === cat).length;
+                            const count = images.filter(img => {
+                                const c = imageClassifications[img.image_id];
+                                const arr = Array.isArray(c) && c.length ? c : [defaultCat];
+                                return arr.includes(cat);
+                            }).length;
                             return (
                                 <label key={cat} className="export-category-item">
                                     <input
@@ -1514,7 +1568,7 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
 }
 
 // ==================== 图片查看器（仅查看，支持图片分类与备注） ====================
-function ImageViewer({ image, images, datasetId, categories, imageClassifications, imageNotes, imageCategories, onClose, onNavigate, onUpdateCategory, onUpdateNote }) {
+function ImageViewer({ image, images, datasetId, categories, imageClassifications, imageNotes, imageCategories, onClose, onNavigate, onUpdateCategory, onUpdateCategories, onUpdateNote }) {
     const config = useConfig();
     const viewer = config.viewer || DEFAULT_CONFIG.viewer;
     const catList = imageCategories || DEFAULT_CONFIG.imageCategories;
@@ -1544,7 +1598,9 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     const imageIdx = images.findIndex(i => i.image_id === currentImage.image_id);
     let imageUrl = `/api/get_image?dataset_id=${datasetId}&file_name=${encodeURIComponent(currentImage.file_name)}`;
     if (currentImage.source_path != null && currentImage.source_path !== '') imageUrl += `&source_path=${encodeURIComponent(currentImage.source_path)}`;
-    const currentCategory = imageClassifications[currentImage.image_id] || (catList[0] || '未分类');
+    const rawCats = imageClassifications[currentImage.image_id];
+    const currentCategories = Array.isArray(rawCats) && rawCats.length ? rawCats : [catList[0] || '未分类'];
+    const currentCategory = currentCategories[0];
     const currentNote = imageNotes[currentImage.image_id] || '';
 
     useEffect(() => { setNoteInput(currentNote); }, [currentImage.image_id, currentNote]);
@@ -1558,6 +1614,16 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         if (iw === 0 || ih === 0) return 1;
         return Math.min(cw / iw, ch / ih, 1);
     }, []);
+
+    // 仅根据容器与图片元数据（宽高）计算适应缩放，不依赖图片加载，任意分辨率打开即自适应
+    const getFitZoomFromMeta = useCallback(() => {
+        const el = containerRef.current;
+        const w = currentImage.width, h = currentImage.height;
+        if (!el || !w || !h) return 1;
+        const cw = el.clientWidth - 40, ch = el.clientHeight - 40;
+        if (cw <= 0 || ch <= 0) return 1;
+        return Math.min(cw / w, ch / h, 1);
+    }, [currentImage.width, currentImage.height]);
 
     const drawAnnotations = useCallback(() => {
         const canvas = canvasRef.current;
@@ -1619,14 +1685,15 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         setPanY(0);
     }, [currentImage.image_id]);
 
-    // 仅切换图片时重置为适应窗口，不要依赖 fitZoom/drawAnnotations，否则 zoom 一变就会触发并重置
+    // 切换图片时立即按元数据做自适应缩放（不等待图片加载），任意分辨率都先适应屏幕
     useEffect(() => {
-        if (imgRef.current && imgRef.current.complete) {
-            setZoom(fitZoom());
-            drawAnnotations();
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 故意只依赖 image_id，避免 zoom 变化时重置
-    }, [currentImage.image_id]);
+        const z = getFitZoomFromMeta();
+        setZoom(z);
+        const t = requestAnimationFrame(() => {
+            setZoom(getFitZoomFromMeta());
+        });
+        return () => cancelAnimationFrame(t);
+    }, [currentImage.image_id, getFitZoomFromMeta]);
 
     const handleImageLoad = () => {
         setZoom(fitZoom());
@@ -1654,7 +1721,14 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
 
     const handleCategoryChange = (e) => {
         const cat = e.target.value;
-        if (onUpdateCategory) onUpdateCategory(currentImage.image_id, cat);
+        const next = [cat, ...currentCategories.filter(c => c !== cat)];
+        if (onUpdateCategories) onUpdateCategories(currentImage.image_id, next); else if (onUpdateCategory) onUpdateCategory(currentImage.image_id, cat);
+    };
+    const toggleCategory = (cat) => {
+        const has = currentCategories.includes(cat);
+        const next = has ? currentCategories.filter(c => c !== cat) : [...currentCategories, cat];
+        if (next.length === 0) next.push(catList[0] || '未分类');
+        if (onUpdateCategories) onUpdateCategories(currentImage.image_id, next);
     };
 
     const handleNoteBlur = () => {
@@ -1684,15 +1758,17 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                 if (noteInputRef.current) noteInputRef.current.focus();
             } else if (e.key >= '1' && e.key <= '9') {
                 const idx = parseInt(e.key, 10) - 1;
-                if (catList[idx] && onUpdateCategory) {
+                if (catList[idx]) {
                     e.preventDefault();
-                    onUpdateCategory(currentImage.image_id, catList[idx]);
+                    const cat = catList[idx];
+                    if (onUpdateCategories) onUpdateCategories(currentImage.image_id, [cat, ...currentCategories.filter(c => c !== cat)]);
+                    else if (onUpdateCategory) onUpdateCategory(currentImage.image_id, cat);
                 }
             }
         };
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
-    }, [imageIdx, currentImage.image_id, noteInput, currentNote, catList]);
+    }, [imageIdx, currentImage.image_id, noteInput, currentNote, catList, currentCategories, onUpdateCategories, onUpdateCategory]);
 
     // 跟踪 Ctrl/Cmd 按下状态（部分浏览器/系统在 wheel 事件中不设置 ctrlKey/metaKey）
     useEffect(() => {
@@ -1843,12 +1919,21 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                         <span>图片信息</span>
                     </div>
                     <div className="viewer-sidebar-form">
-                        <label className="viewer-form-label">图片分类 (1–9 快捷键)</label>
+                        <label className="viewer-form-label">主分类 (1–9 快捷键)</label>
                         <select className="viewer-form-select" value={currentCategory} onChange={handleCategoryChange}>
                             {catList.map((cat, i) => (
                                 <option key={cat} value={cat}>{i < 9 ? `${i + 1}. ${cat}` : cat}</option>
                             ))}
                         </select>
+                        <label className="viewer-form-label">也属于（多选）</label>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+                            {catList.filter(c => c !== currentCategory && c !== (catList[0] || '未分类')).map(cat => (
+                                <label key={cat} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', cursor: 'pointer' }}>
+                                    <input type="checkbox" checked={currentCategories.includes(cat)} onChange={() => toggleCategory(cat)} />
+                                    <span style={{ background: (config.imageCategoryColors || {})[cat] || '#666', padding: '2px 6px', borderRadius: '4px', color: '#fff' }}>{cat}</span>
+                                </label>
+                            ))}
+                        </div>
                         <label className="viewer-form-label">备注 (N 聚焦)</label>
                         <textarea
                             ref={noteInputRef}
@@ -1915,6 +2000,7 @@ function EDAPage({ datasetData }) {
     const [densityCategory, setDensityCategory] = useState('');
     const [densityMetric, setDensityMetric] = useState('area');
     const [edaTab, setEdaTab] = useState('category');
+    const [useNormalized, setUseNormalized] = useState(true);
 
     // 生成箱线图的通用函数
     const generateBoxPlot = (ref, data, title, yLabel) => {
@@ -1957,24 +2043,35 @@ function EDAPage({ datasetData }) {
             }], { title: '类别数量', xaxis: { title: '类别' }, yaxis: { title: '数量' }, height: 400 }, { responsive: true });
         }
 
-        const stats = datasetData.all_categories_stats;
+        const stats = useNormalized
+            ? (datasetData.all_categories_stats || datasetData.all_categories_stats_raw)
+            : (datasetData.all_categories_stats_raw || datasetData.all_categories_stats);
         if (!stats) return;
 
+        const isNorm = useNormalized;
+        const areaTitle = isNorm ? '面积分布（归一化）' : '面积分布（像素）';
+        const areaY = isNorm ? '面积 (0-1)' : '面积 (像素)';
+        const sqrtTitle = isNorm ? '面积平方根分布（归一化）' : '面积平方根分布（像素）';
+        const sqrtY = isNorm ? 'sqrt(面积) (0-1)' : 'sqrt(面积) (像素)';
+        const maxTitle = isNorm ? '长边分布（归一化）' : '长边分布（像素）';
+        const maxY = isNorm ? '长边 (0-1)' : '长边 (像素)';
+        const whTitle = isNorm ? '宽度和高度分布（归一化）' : '宽度和高度分布（像素）';
+        const whY = isNorm ? '归一化 (0-1)' : '像素';
+        const centerTitle = isNorm ? '中心点分布（归一化）' : '中心点分布（像素）';
+        const centerXY = isNorm ? ' (0-1)' : ' (像素)';
+        const bboxTitle = isNorm ? 'BBox分布（宽×高 归一化，按类别）' : 'BBox分布（宽×高 像素，按类别）';
+        const bboxXY = isNorm ? ' (0-1)' : ' (像素)';
+
         // 3. 面积分布
-        generateBoxPlot(areaRef, stats.area, '面积分布', '面积');
-
+        generateBoxPlot(areaRef, stats.area, areaTitle, areaY);
         // 4. 面积平方根分布
-        generateBoxPlot(sqrtAreaRef, stats.sqrt_area, '面积平方根分布', 'sqrt(Area)');
-
+        generateBoxPlot(sqrtAreaRef, stats.sqrt_area, sqrtTitle, sqrtY);
         // 5. 长边分布
-        generateBoxPlot(maxSideRef, stats.max_side, '长边分布', '长边');
-
-        // 6. 宽高比分布
+        generateBoxPlot(maxSideRef, stats.max_side, maxTitle, maxY);
+        // 6. 宽高比分布（无单位，不随切换变化）
         generateBoxPlot(whRatioRef, stats.wh_ratio, '宽高比分布', '宽高比');
-
         // 7. 长短边比分布
         generateBoxPlot(aspectRatioRef, stats.aspect_ratio, '长短边比分布', '长短边比');
-
         // 8. 宽度和高度分布
         if (whRef.current && stats.width && stats.height) {
             const traces = [];
@@ -1991,9 +2088,8 @@ function EDAPage({ datasetData }) {
                     type: 'box'
                 });
             });
-            Plotly.newPlot(whRef.current, traces, { title: '宽度和高度分布', yaxis: { title: '像素' }, height: 400 }, { responsive: true });
+            Plotly.newPlot(whRef.current, traces, { title: whTitle, yaxis: { title: whY }, height: 400 }, { responsive: true });
         }
-
         // 9. 中心点分布
         if (centerRef.current && stats.center) {
             const cats = [...new Set(stats.center.category)];
@@ -2006,14 +2102,13 @@ function EDAPage({ datasetData }) {
                 marker: { size: 5, opacity: 0.6 }
             }));
             Plotly.newPlot(centerRef.current, traces, { 
-                title: '中心点分布', 
-                xaxis: { title: '中心 X' }, 
-                yaxis: { title: '中心 Y' }, 
+                title: centerTitle, 
+                xaxis: { title: '中心 X' + centerXY }, 
+                yaxis: { title: '中心 Y' + centerXY }, 
                 height: 500 
             }, { responsive: true });
         }
-
-        // 10. bbox分布：不同类别的宽高分布，x=宽度 y=高度，按类别着色，无色卡
+        // 10. bbox分布
         if (bboxRef.current && stats.width && stats.height) {
             const cats = [...new Set(stats.width.category)];
             const traces = cats.map(cat => {
@@ -2028,25 +2123,29 @@ function EDAPage({ datasetData }) {
                 };
             });
             Plotly.newPlot(bboxRef.current, traces, { 
-                title: 'BBox分布（宽×高，按类别）', 
-                xaxis: { title: '宽度' }, 
-                yaxis: { title: '高度' }, 
+                title: bboxTitle, 
+                xaxis: { title: '宽度' + bboxXY }, 
+                yaxis: { title: '高度' + bboxXY }, 
                 height: 500 
             }, { responsive: true });
         }
-    }, [datasetData]);
+    }, [datasetData, useNormalized]);
 
-    // 11. 密度分布图（可选类别和指标）
+    // 11. 密度分布图（可选类别和指标，随归一化/像素切换）
     useEffect(() => {
-        if (!densityRef.current || !datasetData?.category_data || !densityCategory) return;
+        const categoryData = useNormalized
+            ? (datasetData?.category_data || datasetData?.category_data_raw)
+            : (datasetData?.category_data_raw || datasetData?.category_data);
+        if (!densityRef.current || !categoryData || !densityCategory) return;
         
-        const catData = datasetData.category_data[densityCategory];
+        const catData = categoryData[densityCategory];
         if (!catData) return;
 
         let values = [];
+        const suffix = useNormalized ? '（归一化）' : '（像素）';
         const metricNames = { 
-            'area': '面积', 'sqrt_area': '面积平方根', 'max_side': '长边', 'min_side': '短边', 
-            'width': '宽度', 'height': '高度', 'wh_ratio': '宽高比', 'aspect_ratio': '长短边比' 
+            'area': '面积' + suffix, 'sqrt_area': '面积平方根' + suffix, 'max_side': '长边' + suffix, 'min_side': '短边' + suffix, 
+            'width': '宽度' + suffix, 'height': '高度' + suffix, 'wh_ratio': '宽高比', 'aspect_ratio': '长短边比' 
         };
 
         switch(densityMetric) {
@@ -2073,7 +2172,7 @@ function EDAPage({ datasetData }) {
                 height: 400
             }, { responsive: true });
         }
-    }, [densityCategory, densityMetric, datasetData, palette, eda.chartDensity]);
+    }, [densityCategory, densityMetric, datasetData, palette, eda.chartDensity, useNormalized]);
 
     return (
         <div className="main-content">
@@ -2083,6 +2182,21 @@ function EDAPage({ datasetData }) {
                     <span style={{color: '#888', fontSize: '13px'}}>
                         图片: {datasetData.num_images} | 标注: {datasetData.num_annotations} | 类别: {datasetData.num_categories}
                     </span>
+                </div>
+                <div className="toolbar-right" style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+                    <span style={{fontSize: '13px', color: '#888'}}>统计尺度:</span>
+                    <button
+                        type="button"
+                        className={`eda-tab ${useNormalized ? 'active' : ''}`}
+                        onClick={() => setUseNormalized(true)}
+                        style={{padding: '6px 12px', fontSize: '13px'}}
+                    >归一化</button>
+                    <button
+                        type="button"
+                        className={`eda-tab ${!useNormalized ? 'active' : ''}`}
+                        onClick={() => setUseNormalized(false)}
+                        style={{padding: '6px 12px', fontSize: '13px'}}
+                    >像素值</button>
                 </div>
             </div>
             <div className="eda-tabs">
