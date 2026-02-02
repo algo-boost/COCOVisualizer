@@ -14,8 +14,10 @@
 </head>
 <body>
     <div id="root"></div>
-    <div id="load-fail" style="display:none; padding: 2rem; text-align: center; color: #888;">
-        <p>脚本加载失败（可能无法访问 CDN），请检查网络或稍后重试。</p>
+    <div id="load-fail" style="display:none; padding: 2rem; text-align: center; color: #888; max-width: 480px; margin: 2rem auto;">
+        <p><strong>脚本加载失败</strong></p>
+        <p>可能原因：无法访问 jsDelivr CDN（如网络限制或防火墙）。</p>
+        <p>请尝试：检查网络、使用代理/VPN，或稍后重试。若本机可访问外网仍失败，请检查浏览器控制台报错。</p>
     </div>
     <script>
       (function(){

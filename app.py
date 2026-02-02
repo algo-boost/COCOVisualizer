@@ -1165,8 +1165,14 @@ def list_server_paths():
 
 
 if __name__ == '__main__':
-    port = 6009
+    # 使用 6010 避免与 Cursor IDE 等对 6009 的占用冲突
+    port = 6010
     url = f'http://127.0.0.1:{port}'
+    # 启动时打印可访问地址，避免用户误用 0.0.0.0
+    print('')
+    print(f'请在浏览器中访问: http://127.0.0.1:{port} 或 http://localhost:{port}')
+    print('（本机其他设备可用局域网 IP，见下方 "Running on" 行）')
+    print('')
     # 打包模式下自动打开浏览器
     if getattr(sys, 'frozen', False):
         def _open_browser():
@@ -1174,4 +1180,11 @@ if __name__ == '__main__':
             time.sleep(1.5)
             webbrowser.open(url)
         threading.Thread(target=_open_browser, daemon=True).start()
-    app.run(debug=not getattr(sys, 'frozen', False), host='0.0.0.0', port=port)
+    # use_reloader=False 避免调试重载时 socket 断开导致浏览器 ERR_SOCKET_NOT_CONNECTED
+    app.run(
+        debug=not getattr(sys, 'frozen', False),
+        host='0.0.0.0',
+        port=port,
+        use_reloader=False,
+        threaded=True,
+    )

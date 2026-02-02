@@ -28,7 +28,8 @@ mkdir -p templates
 
 echo ""
 echo "启动Flask应用..."
-echo "访问地址: http://0.0.0.0:6009"
+echo "请在浏览器中访问: http://127.0.0.1:6010 或 http://localhost:6010"
+echo "（不要使用 0.0.0.0，该地址仅用于服务绑定）"
 echo "按 Ctrl+C 停止服务"
 echo ""
 

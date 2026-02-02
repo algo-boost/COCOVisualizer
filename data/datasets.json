@@ -1,8 +1,8 @@
 {
   "dataset_0": {
-    "coco_json_path": "C:\\Users\\Administrator\\Desktop\\coco-visualizer\\coco-visualizer\\data\\merged_dataset_20260201_120123.json",
+    "coco_json_path": "/Users/rookie/Desktop/AI/COCOVisualizer/data/merged_dataset_20260202_192618.json",
     "dataset_name": "dataset",
-    "image_dir": "C:\\Users\\Administrator\\Downloads\\train_coco\\t2"
+    "image_dir": "/Users/rookie/Library/Containers/com.tencent.WeWorkMac/Data/Documents/Profiles/855AA130B2884672A17800CF6C3031C0/Caches/Files/2026-02/89EC2FF84B63E58A8596A12D90B9F2D6/coco_export_ed2e6231-6594-4001-b7b4-d2aa80b6e96e"
   },
   "dataset_1": {
     "coco_json_path": "C:\\Users\\Administrator\\Desktop\\coco-visualizer\\coco-visualizer\\data\\merged_dataset_20260201_120455.json",
