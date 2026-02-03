@@ -57,6 +57,11 @@ const DEFAULT_CONFIG = {
         backgroundStyleCheckerboard: '马赛克',
         backgroundStyleSolid: '纯色',
         lineWidthDefaultLabel: '默认线宽',
+        imageCategoriesLabel: '图片分类',
+        imageCategoriesHint: '用于标注图片级分类（如未分类、误检等），可增删改名称与颜色。',
+        addCategoryButton: '添加分类',
+        categoryNamePlaceholder: '分类名称',
+        resetCategoriesButton: '恢复默认',
         closeButtonText: '关闭'
     },
     help: {
@@ -90,6 +95,7 @@ const DEFAULT_CONFIG = {
     versionModal: {
         title: '版本记录',
         description: '每次「保存」会生成一条版本；回滚将把 COCO 文件恢复为选中版本的内容，并刷新当前页的图片分类与备注。',
+        descriptionHint: '最新内容即当前 COCO 文件（直接覆盖）；存档保存在同目录下 .coco_visualizer/ 中，分享该目录即可包含记录。',
         latestBadge: '最新',
         noComment: '(无说明)',
         rollbackButtonText: '回滚到此版本',
@@ -103,6 +109,11 @@ const DEFAULT_CONFIG = {
         backgroundStyleCheckerboard: '马赛克',
         backgroundStyleSolid: '纯色',
         lineWidthDefaultLabel: '默认线宽',
+        imageCategoriesLabel: '图片分类',
+        imageCategoriesHint: '用于标注图片级分类（如未分类、误检等），可增删改名称与颜色。',
+        addCategoryButton: '添加分类',
+        categoryNamePlaceholder: '分类名称',
+        resetCategoriesButton: '恢复默认',
         closeButtonText: '关闭'
     },
     help: {
@@ -140,9 +151,12 @@ const DEFAULT_CONFIG = {
         chartLongShortRatio: '长短边比分布 (长边/短边)',
         chartCenter: '中心点分布',
         chartBbox: 'BBox分布（宽×高）',
-        chartDensity: '密度分布'
+        chartDensity: '密度分布',
+        chartScore: '置信度分布（按类别）'
     }
 };
+
+const UNCLASSIFIED_LABEL = '未分类';
 
 function mergeConfig(defaults, overrides) {
     if (!overrides || typeof overrides !== 'object') return defaults;
@@ -153,6 +167,10 @@ function mergeConfig(defaults, overrides) {
         } else if (overrides[key] !== undefined) {
             out[key] = overrides[key];
         }
+    }
+    // 固定首项为「未分类」，不可被配置覆盖
+    if (out.imageCategories && Array.isArray(out.imageCategories) && out.imageCategories.length > 0) {
+        out.imageCategories = [UNCLASSIFIED_LABEL, ...out.imageCategories.filter(c => c !== UNCLASSIFIED_LABEL)];
     }
     return out;
 }
@@ -248,14 +266,14 @@ function App() {
     };
 
     // 合并加载（多选目录，约定 COCO 文件名为 _annotations.coco.json，与图片同目录）
-    const loadDatasetMerged = async (items, datasetName) => {
+    const loadDatasetMerged = async (items, datasetName, rootPath) => {
         if (!items || items.length === 0) { alert('请至少选择一项'); return; }
         setLoading(true);
         try {
             const res = await fetch('/api/load_dataset_merged', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ items, dataset_name: datasetName || 'merged' })
+                body: JSON.stringify({ items, dataset_name: datasetName || 'merged', root_path: (rootPath || '').trim() })
             });
             const data = await res.json();
             if (data.success) {
@@ -269,32 +287,78 @@ function App() {
         setLoading(false);
     };
 
-    const applyDatasetAndFetchImages = async (data) => {
+    const applyDatasetAndFetchImages = async (data, metaFilters) => {
         setDatasetData(data);
         setCategories(data.categories);
+        const body = { dataset_id: data.dataset_id, selected_categories: data.categories };
+        if (metaFilters && typeof metaFilters === 'object') {
+            if (metaFilters.c_time_start) body.c_time_start = metaFilters.c_time_start;
+            if (metaFilters.c_time_end) body.c_time_end = metaFilters.c_time_end;
+            if (metaFilters.product_id_query) body.product_id_query = metaFilters.product_id_query;
+            if (metaFilters.position) body.position = metaFilters.position;
+        }
         const imgRes = await fetch('/api/get_images_by_category', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ dataset_id: data.dataset_id, selected_categories: data.categories })
+            body: JSON.stringify(body)
         });
         const imgData = await imgRes.json();
         if (imgData.success) {
-            setImages(imgData.images);
+            setImages(imgData.images || []);
             const initClass = {};
             const defaultCat = (config.imageCategories && config.imageCategories[0]) || '未分类';
-            imgData.images.forEach(img => {
+            (imgData.images || []).forEach(img => {
                 const cats = img.image_categories;
                 initClass[img.image_id] = Array.isArray(cats) && cats.length > 0 ? cats : (img.image_category ? [img.image_category] : [defaultCat]);
             });
             setImageClassifications(initClass);
             const initNotes = {};
-            imgData.images.forEach(img => {
+            (imgData.images || []).forEach(img => {
                 initNotes[img.image_id] = img.note || '';
             });
             setImageNotes(initNotes);
         }
         setPage('gallery');
     };
+
+    // 按图片元数据筛选后重新拉取列表（c_time / product_id / position）
+    const refetchImagesWithMetaFilters = useCallback(async (filters) => {
+        if (!datasetData) return;
+        const body = { dataset_id: datasetData.dataset_id, selected_categories: categories };
+        if (filters && typeof filters === 'object') {
+            if (filters.c_time_start) body.c_time_start = filters.c_time_start;
+            if (filters.c_time_end) body.c_time_end = filters.c_time_end;
+            if (filters.product_id_query) body.product_id_query = filters.product_id_query;
+            if (filters.position) body.position = filters.position;
+        }
+        try {
+            const res = await fetch('/api/get_images_by_category', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if (data.success && data.images) {
+                setImages(data.images);
+                const defaultCat = (config.imageCategories && config.imageCategories[0]) || '未分类';
+                const newClass = {};
+                const newNotes = {};
+                data.images.forEach(img => {
+                    const cats = img.image_categories;
+                    newClass[img.image_id] = Array.isArray(cats) && cats.length > 0 ? cats : (img.image_category ? [img.image_category] : [defaultCat]);
+                    newNotes[img.image_id] = img.note || '';
+                });
+                setImageClassifications(newClass);
+                setImageNotes(newNotes);
+            } else if (data.success && Array.isArray(data.images)) {
+                setImages(data.images);
+                setImageClassifications({});
+                setImageNotes({});
+            }
+        } catch (err) {
+            console.warn('refetch with meta filters failed', err);
+        }
+    }, [datasetData, categories, config.imageCategories]);
 
     // 更新图片分类（单类，覆盖）
     const updateImageCategory = (imageId, category) => {
@@ -373,6 +437,8 @@ function App() {
                     onUpdateCategories={updateImageCategories}
                     onBatchUpdateCategory={batchUpdateCategory}
                     onRollback={refetchImageMetaAfterRollback}
+                    metaFilterOptions={datasetData.meta_filter_options}
+                    onApplyMetaFilters={refetchImagesWithMetaFilters}
                 />
             )}
             {page === 'eda' && datasetData && <EDAPage datasetData={datasetData} />}
@@ -567,6 +633,39 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
         onLoad(cocoPath, imageDir, datasetName);
     };
 
+    const handleDetectLastRecord = async () => {
+        const pathToCheck = (cocoPath || rootPath || '').trim();
+        if (!pathToCheck) { alert('请先输入或选择目录/文件路径'); return; }
+        try {
+            const res = await fetch('/api/get_loader_record', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ coco_dir: pathToCheck })
+            });
+            const data = await res.json();
+            if (data.success && data.record) {
+                setCocoPath(data.record.coco_json_path);
+                setImageDir(data.record.image_dir || '');
+                setDatasetName(data.record.dataset_name || 'dataset');
+            } else {
+                alert('该目录下无上次加载记录');
+            }
+        } catch (err) {
+            alert('读取记录失败: ' + err.message);
+        }
+    };
+
+    const handleLoadLastFromScanItem = (item) => {
+        if (!item.loader_record) return;
+        const r = item.loader_record;
+        onLoad(r.coco_json_path, r.image_dir || '', r.dataset_name || 'dataset');
+    };
+
+    const handleLoadSingleFromScanItem = (item) => {
+        const name = item.loader_record?.dataset_name || datasetName;
+        onLoad(item.coco_path, item.image_dir || '', name);
+    };
+
     const handleScan = async () => {
         if (!rootPath.trim()) { alert('请输入根目录路径'); return; }
         setScanning(true);
@@ -602,7 +701,7 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
     const handleLoadMerged = () => {
         const selected = scanItems.filter((_, i) => selectedIndices.has(i));
         if (selected.length === 0) { alert('请至少勾选一个目录'); return; }
-        onLoadMerged(selected, datasetName);
+        onLoadMerged(selected, datasetName, rootPath);
     };
 
     const handleDrop = (e) => {
@@ -679,13 +778,23 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
                     </div>
                     {scanItems.length > 0 && (
                         <div className="load-scan-list">
-                            <div className="load-scan-list-header">已发现 {scanItems.length} 个目录（含 _annotations.coco.json）</div>
+                            <div className="load-scan-list-header">已发现 {scanItems.length} 个目录（含 _annotations.coco.json）。用「单文件加载」保存会写入该目录下的 COCO 文件，打包该目录即可把记录发给他人。</div>
                             {scanItems.map((item, i) => (
-                                <label key={i} className="load-scan-item">
-                                    <input type="checkbox" checked={selectedIndices.has(i)} onChange={() => toggleItem(i)} />
-                                    <span className="load-scan-rel">{item.relative_path || '(根)'}</span>
-                                    <span className="load-scan-path" title={item.coco_path}>{item.coco_path}</span>
-                                </label>
+                                <div key={i} className="load-scan-item" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', flex: '1 1 auto', minWidth: 0 }}>
+                                        <input type="checkbox" checked={selectedIndices.has(i)} onChange={() => toggleItem(i)} />
+                                        <span className="load-scan-rel">{item.relative_path || '(根)'}</span>
+                                        <span className="load-scan-path" title={item.coco_path}>{item.coco_path}</span>
+                                    </label>
+                                    <button type="button" className="load-btn load-btn-secondary" style={{ flexShrink: 0 }} onClick={() => handleLoadSingleFromScanItem(item)} disabled={loading} title="仅加载此目录的 COCO 文件，保存时写入该目录，便于打包发给他人">
+                                        单文件加载
+                                    </button>
+                                    {item.loader_record && (
+                                        <button type="button" className="load-btn load-btn-secondary" style={{ flexShrink: 0 }} onClick={() => handleLoadLastFromScanItem(item)} disabled={loading}>
+                                            加载上次
+                                        </button>
+                                    )}
+                                </div>
                             ))}
                         </div>
                     )}
@@ -694,10 +803,14 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
                 {/* 方式二：单文件加载 */}
                 <div className="load-section">
                     <h2 className="load-section-title">单文件加载</h2>
+                    <p className="load-section-desc" style={{ marginBottom: '10px' }}>保存的记录会写在对应 COCO 文件目录下，下次打开可点「检测上次记录」或从扫描列表「加载上次」。</p>
                     <form onSubmit={handleSubmit}>
                         <div className="load-field">
                             <label className="load-label">{lp.cocoPathLabel}</label>
-                            <input className="load-input" type="text" value={cocoPath} onChange={(e) => setCocoPath(e.target.value)} placeholder={lp.cocoPathPlaceholder || '/path/to/annotations.json'} />
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <input className="load-input" type="text" value={cocoPath} onChange={(e) => setCocoPath(e.target.value)} placeholder={lp.cocoPathPlaceholder || '/path/to/annotations.json 或 COCO 所在目录'} style={{ flex: 1 }} />
+                                <button type="button" className="load-btn load-btn-secondary" onClick={handleDetectLastRecord} title="从该路径（目录或文件）读取上次加载记录并填充">检测上次记录</button>
+                            </div>
                         </div>
                         <div className="load-field">
                             <label className="load-label">{lp.imageDirLabel}</label>
@@ -718,7 +831,7 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
 }
 
 // ==================== 图片宫格页面 ====================
-function GalleryPage({ datasetData, images, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, onImageClick, onUpdateCategory, onUpdateCategories, onBatchUpdateCategory, onRollback }) {
+function GalleryPage({ datasetData, images, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, onImageClick, onUpdateCategory, onUpdateCategories, onBatchUpdateCategory, onRollback, metaFilterOptions, onApplyMetaFilters }) {
     const config = useConfig();
     const gallery = config.gallery || DEFAULT_CONFIG.gallery;
     const [currentPage, setCurrentPage] = useState(1);
@@ -727,6 +840,12 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     const [selectedImageCategory, setSelectedImageCategory] = useState('all'); // 图片分类筛选
     const [selectedDirectory, setSelectedDirectory] = useState('all'); // 目录筛选（多目录合并时）
     const [searchText, setSearchText] = useState('');
+    // 图片元数据筛选（c_time / product_id / position），仅当 COCO 含对应字段时显示
+    const [metaCtimeStart, setMetaCtimeStart] = useState('');
+    const [metaCtimeEnd, setMetaCtimeEnd] = useState('');
+    const [metaProductIdQuery, setMetaProductIdQuery] = useState('');
+    const [metaPosition, setMetaPosition] = useState('');
+    const [metaFilterApplying, setMetaFilterApplying] = useState(false);
     const [selectedImages, setSelectedImages] = useState(new Set());
     const [showExportModal, setShowExportModal] = useState(false);
     const [showVersionModal, setShowVersionModal] = useState(false);
@@ -791,6 +910,23 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
         setSelectedImages(new Set());
     };
 
+    const hasMetaFilterCapability = metaFilterOptions && (metaFilterOptions.has_c_time || metaFilterOptions.has_product_id || metaFilterOptions.has_position);
+    const handleApplyMetaFilters = async () => {
+        if (!onApplyMetaFilters) return;
+        setMetaFilterApplying(true);
+        try {
+            await onApplyMetaFilters({
+                c_time_start: metaCtimeStart.trim() || undefined,
+                c_time_end: metaCtimeEnd.trim() || undefined,
+                product_id_query: metaProductIdQuery.trim() || undefined,
+                position: (metaPosition && metaPosition !== 'all') ? metaPosition : undefined
+            });
+            setCurrentPage(1);
+        } finally {
+            setMetaFilterApplying(false);
+        }
+    };
+
     // 保存图片级分类与备注到原 COCO 文件（带版本说明）
     const handleSave = async (versionComment) => {
         setSaving(true);
@@ -813,7 +949,8 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
             const data = await res.json();
             if (data.success) {
                 setShowSaveModal(false);
-                alert('保存成功！已写入原 COCO 文件并生成版本记录。');
+                const pathMsg = data.saved_path ? `\n写入路径: ${data.saved_path}` : '';
+                alert('保存成功！已覆盖原 COCO 文件，存档已写入对应目录 .coco_visualizer/。' + pathMsg);
             } else {
                 alert('保存失败: ' + (data.error || '未知错误'));
             }
@@ -826,6 +963,59 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     return (
         <>
             <div className="main-content">
+                {hasMetaFilterCapability && (
+                    <div className="meta-filter-bar" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px', padding: '8px 12px', background: '#f5f5f5', borderRadius: '6px', marginBottom: '10px' }}>
+                        <span style={{ fontWeight: 600, marginRight: '4px' }}>元数据筛选:</span>
+                        {metaFilterOptions.has_c_time && (
+                            <>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    <span style={{ whiteSpace: 'nowrap' }}>时间起</span>
+                                    <input type="datetime-local" value={metaCtimeStart} onChange={(e) => setMetaCtimeStart(e.target.value)} style={{ padding: '4px 8px' }} />
+                                </label>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    <span style={{ whiteSpace: 'nowrap' }}>时间止</span>
+                                    <input type="datetime-local" value={metaCtimeEnd} onChange={(e) => setMetaCtimeEnd(e.target.value)} style={{ padding: '4px 8px' }} />
+                                </label>
+                            </>
+                        )}
+                        {metaFilterOptions.has_product_id && (
+                            <>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    <span style={{ whiteSpace: 'nowrap' }}>SN/产品ID</span>
+                                    <input type="text" placeholder="输入模糊查询" value={metaProductIdQuery} onChange={(e) => setMetaProductIdQuery(e.target.value)} style={{ padding: '4px 8px', minWidth: '140px' }} />
+                                </label>
+                                {metaFilterOptions.product_ids && metaFilterOptions.product_ids.length > 0 && (
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <span style={{ whiteSpace: 'nowrap' }}>或选择</span>
+                                        <select
+                                            value={metaProductIdQuery}
+                                            onChange={(e) => setMetaProductIdQuery(e.target.value === '' ? '' : e.target.value)}
+                                            style={{ padding: '4px 8px', minWidth: '160px', maxWidth: '220px' }}
+                                            title="从已有 SN 中选择"
+                                        >
+                                            <option value="">全部</option>
+                                            {metaFilterOptions.product_ids.map(pid => (
+                                                <option key={pid} value={pid} title={pid}>{pid.length > 24 ? pid.slice(0, 21) + '...' : pid}</option>
+                                            ))}
+                                        </select>
+                                    </label>
+                                )}
+                            </>
+                        )}
+                        {metaFilterOptions.has_position && metaFilterOptions.positions && metaFilterOptions.positions.length > 0 && (
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <span style={{ whiteSpace: 'nowrap' }}>朝向</span>
+                                <select value={metaPosition} onChange={(e) => setMetaPosition(e.target.value)} style={{ padding: '4px 8px' }}>
+                                    <option value="all">全部</option>
+                                    {metaFilterOptions.positions.map(p => <option key={p} value={p}>{p}</option>)}
+                                </select>
+                            </label>
+                        )}
+                        <button type="button" className="btn btn-primary btn-sm" onClick={handleApplyMetaFilters} disabled={metaFilterApplying}>
+                            {metaFilterApplying ? '筛选中...' : '应用筛选'}
+                        </button>
+                    </div>
+                )}
                 <div className="top-toolbar">
                     <div className="toolbar-left">
                         <div className="tab-group">
@@ -981,14 +1171,79 @@ function SettingsModal({ onClose }) {
     const st = config.settings || DEFAULT_CONFIG.settings || {};
     const viewer = config.viewer || DEFAULT_CONFIG.viewer;
     const lineWidthOptions = viewer.lineWidthOptions || [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
+    const imageCategories = config.imageCategories || DEFAULT_CONFIG.imageCategories || [];
+    const imageCategoryColors = config.imageCategoryColors || DEFAULT_CONFIG.imageCategoryColors || {};
+    const colorPalette = config.colorPalette || DEFAULT_CONFIG.colorPalette || ['#888'];
 
     const updateViewer = (key, value) => {
         setSettings(prev => ({ ...prev, viewer: { ...(prev.viewer || {}), [key]: value } }));
     };
 
+    const updateCategoryName = (index, newName) => {
+        if (index === 0) return; // 首项「未分类」不可改
+        const name = (newName || '').trim() || imageCategories[index];
+        if (name === imageCategories[index]) return;
+        setSettings(prev => {
+            const cats = [...(prev.imageCategories ?? imageCategories)];
+            const cols = { ...(prev.imageCategoryColors ?? imageCategoryColors) };
+            const oldName = cats[index];
+            cats[index] = name;
+            cols[name] = cols[oldName] != null ? cols[oldName] : '#888';
+            if (oldName !== name) delete cols[oldName];
+            return { ...prev, imageCategories: cats, imageCategoryColors: cols };
+        });
+    };
+
+    const updateCategoryColor = (index, color) => {
+        const name = imageCategories[index];
+        if (!name) return;
+        setSettings(prev => ({
+            ...prev,
+            imageCategoryColors: { ...(prev.imageCategoryColors ?? imageCategoryColors), [name]: color }
+        }));
+    };
+
+    const addCategory = () => {
+        let name = '新分类';
+        const existing = imageCategories;
+        if (existing.includes(name)) {
+            let n = 1;
+            while (existing.includes(name + ' ' + n)) n++;
+            name = name + ' ' + n;
+        }
+        const newColor = colorPalette[existing.length % colorPalette.length];
+        setSettings(prev => ({
+            ...prev,
+            imageCategories: [...(prev.imageCategories ?? imageCategories), name],
+            imageCategoryColors: { ...(prev.imageCategoryColors ?? imageCategoryColors), [name]: newColor }
+        }));
+    };
+
+    const removeCategory = (index) => {
+        if (index === 0 || imageCategories.length <= 1) return; // 首项「未分类」不可删
+        setSettings(prev => {
+            const cats = [...(prev.imageCategories ?? imageCategories)];
+            const cols = { ...(prev.imageCategoryColors ?? imageCategoryColors) };
+            const removed = cats[index];
+            cats.splice(index, 1);
+            delete cols[removed];
+            return { ...prev, imageCategories: cats, imageCategoryColors: cols };
+        });
+    };
+
+    const resetCategoriesToDefault = () => {
+        if (!confirm('确定恢复为默认图片分类列表？')) return;
+        setSettings(prev => {
+            const p = { ...prev };
+            delete p.imageCategories;
+            delete p.imageCategoryColors;
+            return p;
+        });
+    };
+
     return (
         <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '420px' }}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
                 <div className="modal-header">
                     <h3>{st.modalTitle || '设置'}</h3>
                     <button className="modal-close" onClick={onClose}>✕</button>
@@ -1019,6 +1274,52 @@ function SettingsModal({ onClose }) {
                             {lineWidthOptions.map(v => <option key={v} value={v}>{v}</option>)}
                         </select>
                         <p style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>0.1～1 共十档，查看器内可随时调整</p>
+                    </div>
+                    <div className="form-group" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #eee' }}>
+                        <label className="form-label">{st.imageCategoriesLabel || '图片分类'}</label>
+                        <p style={{ fontSize: '12px', color: '#666', marginBottom: '10px' }}>{st.imageCategoriesHint || '用于标注图片级分类，可增删改名称与颜色。'}</p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {imageCategories.map((name, i) => (
+                                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    {i === 0 ? (
+                                        <span className="form-input" style={{ flex: 1, minWidth: 0, background: '#f0f0f0', color: '#666', cursor: 'not-allowed' }} title="固定，不可修改">未分类</span>
+                                    ) : (
+                                        <input
+                                            type="text"
+                                            className="form-input"
+                                            value={name}
+                                            onChange={(e) => updateCategoryName(i, e.target.value)}
+                                            onBlur={(e) => updateCategoryName(i, e.target.value)}
+                                            placeholder={st.categoryNamePlaceholder || '分类名称'}
+                                            style={{ flex: 1, minWidth: 0 }}
+                                        />
+                                    )}
+                                    <input
+                                        type="color"
+                                        value={imageCategoryColors[name] || '#888'}
+                                        onChange={(e) => updateCategoryColor(i, e.target.value)}
+                                        style={{ width: 36, height: 32, padding: 2, cursor: i === 0 ? 'default' : 'pointer', border: '1px solid #ccc', borderRadius: '4px' }}
+                                        title="颜色"
+                                    />
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary"
+                                        onClick={() => removeCategory(i)}
+                                        disabled={i === 0 || imageCategories.length <= 1}
+                                        style={{ padding: '6px 10px' }}
+                                        title={i === 0 ? '未分类不可删除' : (imageCategories.length <= 1 ? '至少保留一个分类' : '删除')}
+                                    >删除</button>
+                                </div>
+                            ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                            <button type="button" className="btn btn-secondary" onClick={addCategory}>
+                                {st.addCategoryButton || '添加分类'}
+                            </button>
+                            <button type="button" className="btn btn-secondary" onClick={resetCategoriesToDefault}>
+                                {st.resetCategoriesButton || '恢复默认'}
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <div className="modal-footer">
@@ -1146,9 +1447,14 @@ function VersionModal({ datasetData, onClose, onRollback }) {
                     <button className="modal-close" onClick={onClose}>✕</button>
                 </div>
                 <div className="modal-body">
-                    <p style={{marginBottom: '12px', color: '#666', fontSize: '13px'}}>
+                    <p style={{marginBottom: '8px', color: '#666', fontSize: '13px'}}>
                         {vm.description}
                     </p>
+                    {vm.descriptionHint && (
+                        <p style={{marginBottom: '12px', color: '#888', fontSize: '12px'}}>
+                            {vm.descriptionHint}
+                        </p>
+                    )}
                     {loading ? (
                         <div className="loading">加载中...</div>
                     ) : versions.length === 0 ? (
@@ -1360,11 +1666,35 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
         setSelectedCategories(newSet);
     };
 
+    const loadJSZip = () => {
+        return new Promise((resolve, reject) => {
+            if (typeof window.JSZip !== 'undefined') {
+                resolve(window.JSZip);
+                return;
+            }
+            const script = document.createElement('script');
+            script.src = '/static/vendor/jszip.min.js';
+            script.async = false;
+            script.onload = () => resolve(window.JSZip);
+            script.onerror = () => reject(new Error('jszip.min.js 加载失败'));
+            document.head.appendChild(script);
+        });
+    };
+
     const handleExport = async () => {
-        if (typeof JSZip === 'undefined') {
-            alert('请等待页面加载完成后再导出');
-            return;
+        let JSZipLib = typeof window.JSZip !== 'undefined' ? window.JSZip : null;
+        if (!JSZipLib) {
+            setExportProgress('正在加载导出组件...');
+            try {
+                JSZipLib = await loadJSZip();
+            } catch (e) {
+                setExportProgress('');
+                alert('导出组件加载失败。请运行 python3 packaging/fetch_vendor_js.py 将 jszip.min.js 下载到 static/vendor/ 目录，或检查网络与控制台报错。');
+                return;
+            }
+            setExportProgress('');
         }
+        const JSZip = JSZipLib;
         setExporting(true);
         try {
             const groupedImages = {};
@@ -1926,14 +2256,18 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                             ))}
                         </select>
                         <label className="viewer-form-label">也属于（多选）</label>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
-                            {catList.filter(c => c !== currentCategory && c !== (catList[0] || '未分类')).map(cat => (
-                                <label key={cat} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', cursor: 'pointer' }}>
-                                    <input type="checkbox" checked={currentCategories.includes(cat)} onChange={() => toggleCategory(cat)} />
-                                    <span style={{ background: (config.imageCategoryColors || {})[cat] || '#666', padding: '2px 6px', borderRadius: '4px', color: '#fff' }}>{cat}</span>
-                                </label>
-                            ))}
-                        </div>
+                        {currentCategory === (catList[0] || '未分类') ? (
+                            <div style={{ fontSize: '12px', color: '#888', marginBottom: '10px' }}>请先选择主分类后再设置多选</div>
+                        ) : (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+                                {catList.filter(c => c !== currentCategory && c !== (catList[0] || '未分类')).map(cat => (
+                                    <label key={cat} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', cursor: 'pointer' }}>
+                                        <input type="checkbox" checked={currentCategories.includes(cat)} onChange={() => toggleCategory(cat)} />
+                                        <span style={{ background: (config.imageCategoryColors || {})[cat] || '#666', padding: '2px 6px', borderRadius: '4px', color: '#fff' }}>{cat}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        )}
                         <label className="viewer-form-label">备注 (N 聚焦)</label>
                         <textarea
                             ref={noteInputRef}
@@ -1996,6 +2330,7 @@ function EDAPage({ datasetData }) {
     const centerRef = useRef(null);
     const bboxRef = useRef(null);
     const densityRef = useRef(null);
+    const scoreRef = useRef(null);
     
     const [densityCategory, setDensityCategory] = useState('');
     const [densityMetric, setDensityMetric] = useState('area');
@@ -2072,6 +2407,10 @@ function EDAPage({ datasetData }) {
         generateBoxPlot(whRatioRef, stats.wh_ratio, '宽高比分布', '宽高比');
         // 7. 长短边比分布
         generateBoxPlot(aspectRatioRef, stats.aspect_ratio, '长短边比分布', '长短边比');
+        // 8. 置信度分布（按类别，兼容无 score 时跳过）
+        if (stats.score && stats.score.values && stats.score.values.length > 0 && scoreRef.current) {
+            generateBoxPlot(scoreRef, stats.score, '置信度分布（按类别）', '置信度 (0-1)');
+        }
         // 8. 宽度和高度分布
         if (whRef.current && stats.width && stats.height) {
             const traces = [];
@@ -2145,7 +2484,8 @@ function EDAPage({ datasetData }) {
         const suffix = useNormalized ? '（归一化）' : '（像素）';
         const metricNames = { 
             'area': '面积' + suffix, 'sqrt_area': '面积平方根' + suffix, 'max_side': '长边' + suffix, 'min_side': '短边' + suffix, 
-            'width': '宽度' + suffix, 'height': '高度' + suffix, 'wh_ratio': '宽高比', 'aspect_ratio': '长短边比' 
+            'width': '宽度' + suffix, 'height': '高度' + suffix, 'wh_ratio': '宽高比', 'aspect_ratio': '长短边比',
+            'score': '置信度'
         };
 
         switch(densityMetric) {
@@ -2157,20 +2497,24 @@ function EDAPage({ datasetData }) {
             case 'height': values = catData.dimensions?.height || []; break;
             case 'wh_ratio': values = catData.ratios?.wh_ratio || []; break;
             case 'aspect_ratio': values = catData.ratios?.aspect_ratio || []; break;
+            case 'score': values = catData.score?.values || []; break;
         }
 
         if (values.length > 0) {
+            const metricLabel = metricNames[densityMetric] || densityMetric;
             Plotly.newPlot(densityRef.current, [{
                 x: values,
                 type: 'histogram',
-                nbinsx: 30,
+                nbinsx: densityMetric === 'score' ? 20 : 30,
                 marker: { color: getCategoryColor(palette, densityCategory) }
             }], { 
-                title: `${densityCategory} - ${metricNames[densityMetric]} ${eda.chartDensity || '密度分布'}`,
-                xaxis: { title: metricNames[densityMetric] },
+                title: `${densityCategory} - ${metricLabel} ${eda.chartDensity || '密度分布'}`,
+                xaxis: { title: metricLabel, range: densityMetric === 'score' ? [0, 1] : undefined },
                 yaxis: { title: '频数' },
                 height: 400
             }, { responsive: true });
+        } else if (densityRef.current && typeof Plotly.purge === 'function') {
+            Plotly.purge(densityRef.current);
         }
     }, [densityCategory, densityMetric, datasetData, palette, eda.chartDensity, useNormalized]);
 
@@ -2219,6 +2563,12 @@ function EDAPage({ datasetData }) {
                             <div className="eda-card-title">{eda.chartCategoryBar}</div>
                             <div ref={barRef} className="eda-chart"></div>
                         </div>
+                        {datasetData.all_categories_stats?.score?.values?.length > 0 && (
+                            <div className="eda-card">
+                                <div className="eda-card-title">{eda.chartScore || '置信度分布（按类别）'}</div>
+                                <div ref={scoreRef} className="eda-chart"></div>
+                            </div>
+                        )}
                     </div>
                 </div>
 
@@ -2304,6 +2654,9 @@ function EDAPage({ datasetData }) {
                                     <option value="height">高度</option>
                                     <option value="wh_ratio">宽高比</option>
                                     <option value="aspect_ratio">长短边比</option>
+                                    {datasetData.all_categories_stats?.score?.values?.length > 0 && (
+                                        <option value="score">置信度</option>
+                                    )}
                                 </select>
                             </div>
                         </div>

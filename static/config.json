@@ -53,6 +53,11 @@
     "backgroundStyleCheckerboard": "马赛克",
     "backgroundStyleSolid": "纯色",
     "lineWidthDefaultLabel": "默认线宽",
+    "imageCategoriesLabel": "图片分类",
+    "imageCategoriesHint": "用于标注图片级分类（如未分类、误检等），可增删改名称与颜色。",
+    "addCategoryButton": "添加分类",
+    "categoryNamePlaceholder": "分类名称",
+    "resetCategoriesButton": "恢复默认",
     "closeButtonText": "关闭"
   },
   "export": {
@@ -73,6 +78,7 @@
   "versionModal": {
     "title": "版本记录",
     "description": "每次「保存」会生成一条版本；回滚将把 COCO 文件恢复为选中版本的内容，并刷新当前页的图片分类与备注。",
+    "descriptionHint": "最新版本即当前 COCO 文件；历史版本保存在同目录下 coco_versions/<文件名>/ 中，分享该目录即可包含版本记录。",
     "latestBadge": "最新",
     "noComment": "(无说明)",
     "rollbackButtonText": "回滚到此版本",

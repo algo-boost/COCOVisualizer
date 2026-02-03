@@ -47,6 +47,15 @@ fi
 rm -rf dist build
 mkdir -p dist
 
+# 拉取前端依赖到 static/vendor/（离线运行所需，打包时会一并打进）
+echo ""
+echo "拉取前端依赖 (static/vendor/)..."
+if python3 packaging/fetch_vendor_js.py 2>/dev/null; then
+    echo "前端依赖已就绪"
+else
+    echo "[警告] 拉取失败或未联网，若 static/vendor/ 不完整，打包后可能无法离线使用。"
+fi
+
 # 执行 PyInstaller
 echo ""
 echo "执行 PyInstaller 打包..."

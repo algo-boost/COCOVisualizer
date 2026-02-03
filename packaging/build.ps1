@@ -42,6 +42,17 @@ if ($LASTEXITCODE -ne 0) {
 if (Test-Path "dist") { Remove-Item -Recurse -Force dist }
 if (Test-Path "build") { Remove-Item -Recurse -Force build }
 
+# Fetch frontend vendor (for offline use, bundled into exe)
+Write-Host ""
+Write-Host "Fetching frontend vendor (static/vendor/)..." -ForegroundColor Yellow
+try {
+    & $pythonCmd packaging/fetch_vendor_js.py 2>$null
+    if ($LASTEXITCODE -eq 0) { Write-Host "Vendor ready" -ForegroundColor Green }
+} catch {}
+if (-not (Test-Path "static\vendor\jszip.min.js")) {
+    Write-Host "Warning: Vendor incomplete (e.g. jszip.min.js missing). Run: python packaging/fetch_vendor_js.py" -ForegroundColor Yellow
+}
+
 # Run PyInstaller
 Write-Host ""
 Write-Host "Running PyInstaller..." -ForegroundColor Yellow

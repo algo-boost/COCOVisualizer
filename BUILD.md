@@ -46,7 +46,7 @@ chmod +x packaging/build.sh
 
 2. **Windows 安装包**：运行 `COCO-Visualizer-Setup-x.x.x.exe`，按向导安装，完成后可从开始菜单或桌面快捷方式启动。
 
-3. 首次运行会自动打开浏览器访问 `http://127.0.0.1:6009`。
+3. 首次运行会自动打开浏览器，访问地址见控制台输出（默认 `http://127.0.0.1:6010`）。
 
 ## 版本号
 
@@ -73,6 +73,8 @@ brew install create-dmg
 
 ## 注意事项
 
-- 打包后的 `data/` 和 `uploads/` 目录会在可执行文件所在目录下自动创建
-- 若需隐藏 Windows 控制台窗口，可修改 `coco_visualizer.spec` 中 `console=False`
-- 跨平台打包需在对应系统上执行（无法在 Windows 上打包 Mac 版本）
+- 打包后的 `data/` 和 `uploads/` 目录会在可执行文件所在目录下自动创建，**需保证该目录有写权限**（建议解压到用户目录后运行，勿放在只读或系统保护目录）。
+- 若需隐藏 Windows 控制台窗口，可修改 `coco_visualizer.spec` 中 `console=False`。
+- 跨平台打包需在对应系统上执行（无法在 Windows 上打包 Mac 版本）。
+- **spec 中不可排除 PIL/Pillow**：应用用其读取图片尺寸，排除会导致运行时报 `ImportError`。
+- **离线使用**：前端依赖（React/Babel/Plotly/JSZip）已改为从本地 `static/vendor/` 加载，打包前会自动执行 `python3 packaging/fetch_vendor_js.py` 拉取。若打包时未联网，请先在有网环境运行一次该脚本，再执行打包，这样生成的程序可完全离线运行。

@@ -17,6 +17,7 @@ datas = [
 ]
 
 # 隐藏导入（PyInstaller 可能无法自动检测）
+# 注意：不要排除 PIL/Pillow，app 用其读取图片尺寸（_fill_image_dimensions）
 hiddenimports = [
     'flask',
     'flask_cors',
@@ -25,6 +26,9 @@ hiddenimports = [
     'pandas',
     'jinja2',
     'markupsafe',
+    'PIL',
+    'PIL.Image',
+    'coco_eda_utils',
 ]
 
 a = Analysis(
@@ -37,7 +41,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'tkinter', 'matplotlib', 'PIL', 'cv2', 'scipy', 'sklearn',
+        'tkinter', 'matplotlib', 'cv2', 'scipy', 'sklearn',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

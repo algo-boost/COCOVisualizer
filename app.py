@@ -38,7 +38,14 @@ CORS(app)
 
 # 配置
 UPLOAD_FOLDER = _upload_folder
-UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+try:
+    UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+except OSError as e:
+    if getattr(sys, 'frozen', False):
+        print(f'[警告] 无法在可执行文件旁创建 uploads 目录: {UPLOAD_FOLDER}', file=sys.stderr)
+        print(f'  错误: {e}', file=sys.stderr)
+        print('  请将程序放在有写权限的目录（如解压后的文件夹）再运行。', file=sys.stderr)
+    raise
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB
 
@@ -47,7 +54,14 @@ current_datasets = {}
 
 # 持久化 dataset_id -> 路径等信息，服务重启后可按需重新加载
 DATA_DIR = _data_dir
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except OSError as e:
+    if getattr(sys, 'frozen', False):
+        print(f'[警告] 无法在可执行文件旁创建 data 目录: {DATA_DIR}', file=sys.stderr)
+        print(f'  错误: {e}', file=sys.stderr)
+        print('  请将程序放在有写权限的目录（如解压后的文件夹）再运行。', file=sys.stderr)
+    raise
 DATASETS_MAP_FILE = DATA_DIR / 'datasets.json'
 
 
@@ -113,13 +127,15 @@ def _ensure_dataset_loaded(dataset_id):
 
 
 MAX_VERSIONS = 30
-VERSIONS_DIR_NAME = '.coco_versions'
+# 存档目录：与 COCO 文件同目录下的 .coco_visualizer，所有版本快照与 manifest 均在此目录
+# 最新内容 = 直接覆盖主 COCO 文件；首次加载时把原版 COCO 存档到 .coco_visualizer 作为首条记录
+VERSIONS_DIR_NAME = '.coco_visualizer'
 
 
 def _versions_dir(coco_json_path):
-    """返回该 COCO 文件对应的版本目录路径"""
-    p = Path(coco_json_path)
-    return p.parent / VERSIONS_DIR_NAME / p.name
+    """返回该 COCO 文件对应的存档目录（与 COCO 同目录下的 .coco_visualizer）"""
+    p = Path(coco_json_path).resolve()
+    return p.parent / VERSIONS_DIR_NAME
 
 
 def _manifest_path(coco_json_path):
@@ -131,7 +147,8 @@ def _version_file_path(coco_json_path, version_id):
 
 
 def _save_version(coco_json_path, coco_data, comment=None):
-    """保存当前内容为一条版本记录，返回 version_id。comment 为版本说明；首版默认为 init。"""
+    """将当前内容保存为一条存档快照（写入对应目录下的 .coco_visualizer/ 下），返回 version_id。
+    不修改主 COCO 文件；主文件由调用方随后写入，保证「主文件 = 最新内容」。comment 为版本说明；首版默认为 init。"""
     from datetime import datetime
     version_id = datetime.now().strftime('%Y%m%d_%H%M%S')
     saved_at = datetime.now().isoformat()
@@ -178,12 +195,62 @@ def _list_versions(coco_json_path):
 
 
 def _rollback_to_version(coco_json_path, version_id):
-    """将 COCO 文件恢复为指定版本"""
+    """将主 COCO 文件恢复为指定版本（从 .coco_visualizer 快照覆盖主文件）"""
     import shutil
     vfile = _version_file_path(coco_json_path, version_id)
     if not vfile.exists():
         raise FileNotFoundError(f'版本不存在: {version_id}')
-    shutil.copy(vfile, coco_json_path)
+    target = Path(coco_json_path).resolve()
+    shutil.copy(vfile, target)
+
+
+# 与 COCO 文件同目录下的「上次加载」记录文件名，便于下次打开时从该目录加载
+LOADER_RECORD_FILENAME = '_coco_visualizer_last.json'
+
+
+def _write_coco_dir_record(coco_json_path, dataset_name, image_dir):
+    """在 COCO 文件所在目录写入上次加载记录，下次打开可从该目录加载。"""
+    p = Path(coco_json_path).resolve()
+    if not p.is_file():
+        return
+    record_path = p.parent / LOADER_RECORD_FILENAME
+    from datetime import datetime
+    record = {
+        'coco_file': p.name,
+        'dataset_name': dataset_name or 'dataset',
+        'image_dir': image_dir or '',
+        'saved_at': datetime.now().isoformat()
+    }
+    try:
+        with open(record_path, 'w', encoding='utf-8') as f:
+            json.dump(record, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _read_coco_dir_record(coco_dir):
+    """从 COCO 所在目录读取上次加载记录；coco_dir 为目录路径。返回 None 或 { coco_json_path, dataset_name, image_dir, saved_at }。"""
+    d = Path(coco_dir).resolve()
+    record_path = d / LOADER_RECORD_FILENAME
+    if not record_path.is_file():
+        return None
+    try:
+        with open(record_path, 'r', encoding='utf-8') as f:
+            record = json.load(f)
+        coco_file = record.get('coco_file')
+        if not coco_file:
+            return None
+        coco_path = d / coco_file
+        if not coco_path.exists():
+            return None
+        return {
+            'coco_json_path': str(coco_path),
+            'dataset_name': record.get('dataset_name', 'dataset'),
+            'image_dir': record.get('image_dir', ''),
+            'saved_at': record.get('saved_at', '')
+        }
+    except Exception:
+        return None
 
 
 def safe_float(val):
@@ -207,6 +274,24 @@ def safe_tolist(series):
     for x in series.tolist():
         val = safe_float(x)
         result.append(val if val is not None else 0)
+    return result
+
+
+def safe_score_tolist(series):
+    """提取有效置信度分数列表（排除 None/nan/inf），用于分布统计；无 score 或全无效时返回 []。"""
+    if series is None or len(series) == 0:
+        return []
+    result = []
+    for x in series.tolist():
+        val = safe_float(x)
+        if val is not None and not math.isinf(val) and 0 <= val <= 1:
+            result.append(val)
+        elif val is not None and not math.isinf(val):
+            # 允许 0-100 形式的分数，归一化到 0-1
+            if 0 <= val <= 100:
+                result.append(val / 100.0)
+            else:
+                result.append(val)
     return result
 
 
@@ -356,6 +441,113 @@ def _fill_image_dimensions(eda):
             pass
 
 
+def _parse_c_time(s):
+    """解析 c_time 字符串为可比较的 datetime，失败返回 None。兼容多种格式。"""
+    if s is None or (isinstance(s, float) and math.isnan(s)):
+        return None
+    s = str(s).strip()
+    if not s:
+        return None
+    from datetime import datetime
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(s[:19].replace('T', ' '), fmt)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _apply_image_meta_filters(images_df, c_time_start=None, c_time_end=None, product_id_query=None, position=None):
+    """根据图片元数据筛选：c_time 时间段、product_id(SN) 模糊查询、position 精确匹配。
+    任一字段在 images_df 中不存在时，该条件忽略（兼容无该字段的 COCO）。返回通过筛选的 image id 集合。"""
+    if images_df.empty or 'id' not in images_df.columns:
+        return set()
+    allowed = set(images_df['id'].astype(int).tolist())
+
+    # c_time 时间段
+    if c_time_start is not None or c_time_end is not None:
+        if 'c_time' in images_df.columns:
+            def in_range(row):
+                t = _parse_c_time(row.get('c_time'))
+                if t is None:
+                    return False
+                if c_time_start is not None:
+                    start = _parse_c_time(c_time_start) if isinstance(c_time_start, str) else c_time_start
+                    if start is not None and t < start:
+                        return False
+                if c_time_end is not None:
+                    end = _parse_c_time(c_time_end) if isinstance(c_time_end, str) else c_time_end
+                    if end is not None and t > end:
+                        return False
+                return True
+            mask = images_df.apply(in_range, axis=1)
+            allowed &= set(images_df.loc[mask, 'id'].astype(int).tolist())
+        # 若无 c_time 列，不缩小 allowed
+
+    # product_id 模糊查询（product_id 即 SN，不单独处理 SN）
+    if product_id_query and str(product_id_query).strip():
+        q = str(product_id_query).strip().lower()
+        if 'product_id' in images_df.columns:
+            def match_product_id(row):
+                pid = row.get('product_id')
+                if pid is None or (isinstance(pid, float) and math.isnan(pid)):
+                    return False
+                return q in str(pid).lower()
+            mask = images_df.apply(match_product_id, axis=1)
+            allowed &= set(images_df.loc[mask, 'id'].astype(int).tolist())
+
+    # position 精确匹配
+    if position and str(position).strip():
+        pos_val = str(position).strip()
+        if 'position' in images_df.columns:
+            def match_position(row):
+                p = row.get('position')
+                if p is None or (isinstance(p, float) and math.isnan(p)):
+                    return False
+                return str(p).strip() == pos_val
+            mask = images_df.apply(match_position, axis=1)
+            allowed &= set(images_df.loc[mask, 'id'].astype(int).tolist())
+
+    return allowed
+
+
+# 元数据筛选中 SN/product_id 下拉选项最多返回数量，避免响应过大
+META_FILTER_PRODUCT_IDS_LIMIT = 500
+
+
+def _build_meta_filter_options(images_df):
+    """从 images_df 构建 meta_filter_options：是否有各字段、position 列表、product_ids 列表、c_time 范围。兼容缺失字段。"""
+    opts = {
+        'has_c_time': 'c_time' in images_df.columns,
+        'has_product_id': 'product_id' in images_df.columns,
+        'has_position': 'position' in images_df.columns,
+        'positions': [],
+        'product_ids': [],
+        'c_time_min': None,
+        'c_time_max': None
+    }
+    if images_df.empty:
+        return opts
+    if opts['has_position']:
+        positions = images_df['position'].dropna().astype(str).str.strip()
+        opts['positions'] = sorted(positions.unique().tolist())
+    if opts['has_product_id']:
+        pids = images_df['product_id'].dropna().astype(str).str.strip()
+        pids = pids[pids.str.len() > 0].unique().tolist()
+        pids = sorted(pids)[:META_FILTER_PRODUCT_IDS_LIMIT]
+        opts['product_ids'] = pids
+    if opts['has_c_time']:
+        times = []
+        for v in images_df['c_time'].dropna():
+            t = _parse_c_time(v)
+            if t is not None:
+                times.append(t)
+        if times:
+            opts['c_time_min'] = min(times).strftime('%Y-%m-%dT%H:%M:%S')
+            opts['c_time_max'] = max(times).strftime('%Y-%m-%dT%H:%M:%S')
+    return opts
+
+
 def _scan_folder_for_coco(root_path):
     """递归扫描目录下所有 _annotations.coco.json，返回 [{coco_path, image_dir, relative_path}, ...]"""
     root = Path(root_path).resolve()
@@ -384,17 +576,40 @@ def _scan_folder_for_coco(root_path):
 
 @app.route('/api/scan_folder', methods=['POST'])
 def scan_folder():
-    """扫描根目录，递归查找所有 _annotations.coco.json（图片与 COCO 同目录，文件名固定）"""
+    """扫描根目录，递归查找所有 _annotations.coco.json（图片与 COCO 同目录，文件名固定）。
+    每个 item 若其目录下有上次加载记录则附带 loader_record，便于前端「加载上次」。"""
     try:
         data = request.get_json() or {}
         root_path = data.get('root_path', '').strip()
         if not root_path:
             return jsonify({'error': '请提供根目录路径 root_path'}), 400
         items = _scan_folder_for_coco(root_path)
+        for it in items:
+            coco_dir = str(Path(it['coco_path']).parent)
+            rec = _read_coco_dir_record(coco_dir)
+            if rec:
+                it['loader_record'] = rec
         return jsonify({'success': True, 'items': items})
     except Exception as e:
         import traceback
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@app.route('/api/get_loader_record', methods=['POST'])
+def get_loader_record():
+    """根据目录路径读取该目录下的上次加载记录（对应 COCO 文件目录下的 _coco_visualizer_last.json），便于下次打开加载。"""
+    try:
+        data = request.get_json() or {}
+        coco_dir = (data.get('coco_dir') or data.get('path') or '').strip()
+        if not coco_dir:
+            return jsonify({'success': False, 'record': None})
+        p = Path(coco_dir).resolve()
+        if p.is_file():
+            coco_dir = str(p.parent)
+        rec = _read_coco_dir_record(coco_dir)
+        return jsonify({'success': True, 'record': rec})
+    except Exception as e:
+        return jsonify({'success': False, 'record': None, 'error': str(e)})
 
 
 @app.route('/api/load_dataset', methods=['POST'])
@@ -409,12 +624,14 @@ def load_dataset():
         if not coco_json_path:
             return jsonify({'error': '缺少COCO JSON路径'}), 400
         
-        # 检查路径是否存在
-        coco_path = Path(coco_json_path)
+        # 检查路径是否存在，并统一为绝对路径，确保保存时写回同一文件
+        coco_path = Path(coco_json_path).resolve()
         if not coco_path.exists():
             return jsonify({'error': f'文件不存在: {coco_json_path}'}), 400
+        if not coco_path.is_file():
+            return jsonify({'error': f'路径不是文件: {coco_path}'}), 400
         
-        # 加载数据集
+        # 加载数据集（使用绝对路径，持久化与保存均基于此路径）
         eda = CocoEDA(
             coco_json_path=str(coco_path),
             name=dataset_name,
@@ -426,6 +643,8 @@ def load_dataset():
         dataset_id = f"{dataset_name}_{len(current_datasets)}"
         current_datasets[dataset_id] = eda
         _persist_dataset(dataset_id, coco_path, dataset_name, image_dir if image_dir else None)
+        # 在对应 COCO 文件目录下写入上次加载记录，下次打开可从该目录加载
+        _write_coco_dir_record(str(coco_path), dataset_name, image_dir or '')
         
         # 计算所有特征并归一化（相对图像尺寸）
         df = eda.compute_bbox_features()
@@ -435,7 +654,8 @@ def load_dataset():
         class_dist = eda.get_class_distribution()
         categories = class_dist['name'].tolist()
         
-        # 准备所有可视化数据
+        # 准备所有可视化数据（含图片元数据筛选能力：c_time / product_id / position）
+        meta_filter_options = _build_meta_filter_options(eda.images_df)
         visualization_data = {
             'dataset_id': dataset_id,
             'dataset_name': dataset_name,
@@ -443,6 +663,7 @@ def load_dataset():
             'num_annotations': len(eda.annotations_df),
             'num_categories': len(eda.categories_df),
             'categories': categories,
+            'meta_filter_options': meta_filter_options,
             'class_distribution': class_dist.to_dict('records'),
             
             # 类别分布数据
@@ -466,6 +687,9 @@ def load_dataset():
         for category in categories:
             cat_df = df[df['name'] == category]
             
+            cat_score = {}
+            if 'score' in cat_df.columns:
+                cat_score['values'] = safe_score_tolist(cat_df['score'])
             visualization_data['category_data'][category] = {
                 'count': len(cat_df),
                 'area': {
@@ -485,10 +709,23 @@ def load_dataset():
                 'spatial': {
                     'center_x': safe_tolist(cat_df['c_x_norm']) if 'c_x_norm' in cat_df.columns else [],
                     'center_y': safe_tolist(cat_df['c_y_norm']) if 'c_y_norm' in cat_df.columns else []
-                }
+                },
+                'score': cat_score
             }
         
-        # 所有类别的汇总统计（归一化值，用于箱线图等）
+        # 所有类别的汇总统计（归一化值，用于箱线图等）；置信度 score 兼容缺失
+        score_cat, score_vals = [], []
+        if 'score' in df.columns:
+            for _, row in df.iterrows():
+                v = safe_float(row.get('score'))
+                if v is not None and not math.isinf(v):
+                    if 0 <= v <= 1:
+                        score_vals.append(v)
+                    elif 0 <= v <= 100:
+                        score_vals.append(v / 100.0)
+                    else:
+                        score_vals.append(v)
+                    score_cat.append(row.get('name', ''))
         visualization_data['all_categories_stats'] = {
             'area': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
@@ -522,9 +759,10 @@ def load_dataset():
                 'category': df['name'].tolist() if 'name' in df.columns else [],
                 'x': safe_tolist(df['c_x_norm']) if 'c_x_norm' in df.columns else [],
                 'y': safe_tolist(df['c_y_norm']) if 'c_y_norm' in df.columns else []
-            }
+            },
+            'score': {'category': score_cat, 'values': score_vals} if score_cat else {'category': [], 'values': []}
         }
-        # 未归一化（像素值）统计，供前端切换
+        # 未归一化（像素值）统计，供前端切换；score 无归一/原始之分，与 all_categories_stats 一致
         visualization_data['all_categories_stats_raw'] = {
             'area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['area']) if 'area' in df.columns else []},
             'sqrt_area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['sqrt_area']) if 'sqrt_area' in df.columns else []},
@@ -533,24 +771,29 @@ def load_dataset():
             'aspect_ratio': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['aspect_ratio']) if 'aspect_ratio' in df.columns else []},
             'width': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['w']) if 'w' in df.columns else []},
             'height': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['h']) if 'h' in df.columns else []},
-            'center': {'category': df['name'].tolist() if 'name' in df.columns else [], 'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [], 'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else []}
+            'center': {'category': df['name'].tolist() if 'name' in df.columns else [], 'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [], 'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else []},
+            'score': {'category': score_cat, 'values': score_vals} if score_cat else {'category': [], 'values': []}
         }
         visualization_data['category_data_raw'] = {}
         for category in categories:
             cat_df = df[df['name'] == category]
+            cat_score_raw = {}
+            if 'score' in cat_df.columns:
+                cat_score_raw['values'] = safe_score_tolist(cat_df['score'])
             visualization_data['category_data_raw'][category] = {
                 'count': len(cat_df),
                 'area': {'values': safe_tolist(cat_df['area']) if 'area' in cat_df.columns else [], 'sqrt_values': safe_tolist(cat_df['sqrt_area']) if 'sqrt_area' in cat_df.columns else []},
                 'dimensions': {'width': safe_tolist(cat_df['w']) if 'w' in cat_df.columns else [], 'height': safe_tolist(cat_df['h']) if 'h' in cat_df.columns else [], 'max_side': safe_tolist(cat_df['max_side']) if 'max_side' in cat_df.columns else [], 'min_side': safe_tolist(cat_df['min_side']) if 'min_side' in cat_df.columns else []},
                 'ratios': {'wh_ratio': safe_tolist(cat_df['wh_ratio']) if 'wh_ratio' in cat_df.columns else [], 'aspect_ratio': safe_tolist(cat_df['aspect_ratio']) if 'aspect_ratio' in cat_df.columns else []},
-                'spatial': {'center_x': safe_tolist(cat_df['c_x']) if 'c_x' in cat_df.columns else [], 'center_y': safe_tolist(cat_df['c_y']) if 'c_y' in cat_df.columns else []}
+                'spatial': {'center_x': safe_tolist(cat_df['c_x']) if 'c_x' in cat_df.columns else [], 'center_y': safe_tolist(cat_df['c_y']) if 'c_y' in cat_df.columns else []},
+                'score': cat_score_raw
             }
         
-        # 首次打开：若该 COCO 尚无任何版本记录，则自动保存为 init 版本（只要打开过就留记录）
+        # 首次加载：若该 COCO 对应目录下尚无 .coco_visualizer 存档，则把当前（原版）COCO 存档为第一条记录
         if not _list_versions(eda.coco_json_path):
             with open(eda.coco_json_path, 'r', encoding='utf-8') as f:
                 coco_data = json.load(f)
-            _save_version(eda.coco_json_path, coco_data, comment='init')
+            _save_version(eda.coco_json_path, coco_data, comment='加载时原版')
         
         return jsonify({
             'success': True,
@@ -561,8 +804,9 @@ def load_dataset():
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 
-def _load_dataset_merged_impl(items, dataset_name='merged'):
-    """合并多个 COCO（每个 item 含 coco_path, image_dir, relative_path），生成一个 CocoEDA 并返回 (eda, visualization_data)。"""
+def _load_dataset_merged_impl(items, dataset_name='merged', output_dir=None):
+    """合并多个 COCO（每个 item 含 coco_path, image_dir, relative_path），生成一个 CocoEDA 并返回 (eda, visualization_data)。
+    output_dir：合并文件写入的目录，必须为加载的数据集对应目录（如扫描根目录），不写入 app 的 data 目录。"""
     from datetime import datetime
     name_to_id = {}
     next_cat_id = 1
@@ -622,9 +866,18 @@ def _load_dataset_merged_impl(items, dataset_name='merged'):
         'categories': categories_list,
         'source_dirs': source_dirs
     }
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    merged_path = DATA_DIR / f'merged_{dataset_name}_{ts}.json'
+    # 合并文件写入「加载的数据集对应目录」（用户传入的 output_dir/root_path），不写入 app 的 data 目录
+    if output_dir:
+        out = Path(output_dir).resolve()
+        if out.is_dir():
+            out.mkdir(parents=True, exist_ok=True)
+            merged_path = out / f'merged_{dataset_name}_{ts}.json'
+        else:
+            merged_path = DATA_DIR / f'merged_{dataset_name}_{ts}.json'
+    else:
+        merged_path = DATA_DIR / f'merged_{dataset_name}_{ts}.json'
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
     with open(merged_path, 'w', encoding='utf-8') as f:
         json.dump(merged_coco, f, indent=2, ensure_ascii=False)
     eda = CocoEDA(coco_json_path=str(merged_path), name=dataset_name, image_dir=list(source_dirs.values())[0] if source_dirs else None)
@@ -634,11 +887,13 @@ def _load_dataset_merged_impl(items, dataset_name='merged'):
     df = _add_normalized_bbox_stats(eda, df)
     class_dist = eda.get_class_distribution()
     categories = class_dist['name'].tolist()
+    meta_filter_options = _build_meta_filter_options(eda.images_df)
     visualization_data = {
         'num_images': len(eda.images_df),
         'num_annotations': len(eda.annotations_df),
         'num_categories': len(eda.categories_df),
         'categories': categories,
+        'meta_filter_options': meta_filter_options,
         'class_distribution': class_dist.to_dict('records'),
         'class_distribution_pie': {
             'labels': class_dist['name'].tolist(),
@@ -661,15 +916,32 @@ def _load_dataset_merged_impl(items, dataset_name='merged'):
             'center': {'category': df['name'].tolist() if 'name' in df.columns else [], 'x': safe_tolist(df['c_x_norm']) if 'c_x_norm' in df.columns else [], 'y': safe_tolist(df['c_y_norm']) if 'c_y_norm' in df.columns else []}
         }
     }
+    score_cat_merged, score_vals_merged = [], []
+    if 'score' in df.columns:
+        for _, row in df.iterrows():
+            v = safe_float(row.get('score'))
+            if v is not None and not math.isinf(v):
+                if 0 <= v <= 1:
+                    score_vals_merged.append(v)
+                elif 0 <= v <= 100:
+                    score_vals_merged.append(v / 100.0)
+                else:
+                    score_vals_merged.append(v)
+                score_cat_merged.append(row.get('name', ''))
     for category in categories:
         cat_df = df[df['name'] == category]
+        cat_score = {}
+        if 'score' in cat_df.columns:
+            cat_score['values'] = safe_score_tolist(cat_df['score'])
         visualization_data['category_data'][category] = {
             'count': len(cat_df),
             'area': {'values': safe_tolist(cat_df['area_norm']) if 'area_norm' in cat_df.columns else [], 'sqrt_values': safe_tolist(cat_df['sqrt_area_norm']) if 'sqrt_area_norm' in cat_df.columns else []},
             'dimensions': {'width': safe_tolist(cat_df['w_norm']) if 'w_norm' in cat_df.columns else [], 'height': safe_tolist(cat_df['h_norm']) if 'h_norm' in cat_df.columns else [], 'max_side': safe_tolist(cat_df['max_side_norm']) if 'max_side_norm' in cat_df.columns else [], 'min_side': safe_tolist(cat_df['min_side_norm']) if 'min_side_norm' in cat_df.columns else []},
             'ratios': {'wh_ratio': safe_tolist(cat_df['wh_ratio']) if 'wh_ratio' in cat_df.columns else [], 'aspect_ratio': safe_tolist(cat_df['aspect_ratio']) if 'aspect_ratio' in cat_df.columns else []},
-            'spatial': {'center_x': safe_tolist(cat_df['c_x_norm']) if 'c_x_norm' in cat_df.columns else [], 'center_y': safe_tolist(cat_df['c_y_norm']) if 'c_y_norm' in cat_df.columns else []}
+            'spatial': {'center_x': safe_tolist(cat_df['c_x_norm']) if 'c_x_norm' in cat_df.columns else [], 'center_y': safe_tolist(cat_df['c_y_norm']) if 'c_y_norm' in cat_df.columns else []},
+            'score': cat_score
         }
+    visualization_data['all_categories_stats']['score'] = {'category': score_cat_merged, 'values': score_vals_merged} if score_cat_merged else {'category': [], 'values': []}
     visualization_data['all_categories_stats_raw'] = {
         'area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['area']) if 'area' in df.columns else []},
         'sqrt_area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['sqrt_area']) if 'sqrt_area' in df.columns else []},
@@ -678,38 +950,46 @@ def _load_dataset_merged_impl(items, dataset_name='merged'):
         'aspect_ratio': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['aspect_ratio']) if 'aspect_ratio' in df.columns else []},
         'width': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['w']) if 'w' in df.columns else []},
         'height': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['h']) if 'h' in df.columns else []},
-        'center': {'category': df['name'].tolist() if 'name' in df.columns else [], 'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [], 'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else []}
+        'center': {'category': df['name'].tolist() if 'name' in df.columns else [], 'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [], 'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else []},
+        'score': {'category': score_cat_merged, 'values': score_vals_merged} if score_cat_merged else {'category': [], 'values': []}
     }
     visualization_data['category_data_raw'] = {}
     for category in categories:
         cat_df = df[df['name'] == category]
+        cat_score_raw = {}
+        if 'score' in cat_df.columns:
+            cat_score_raw['values'] = safe_score_tolist(cat_df['score'])
         visualization_data['category_data_raw'][category] = {
             'count': len(cat_df),
             'area': {'values': safe_tolist(cat_df['area']) if 'area' in cat_df.columns else [], 'sqrt_values': safe_tolist(cat_df['sqrt_area']) if 'sqrt_area' in cat_df.columns else []},
             'dimensions': {'width': safe_tolist(cat_df['w']) if 'w' in cat_df.columns else [], 'height': safe_tolist(cat_df['h']) if 'h' in cat_df.columns else [], 'max_side': safe_tolist(cat_df['max_side']) if 'max_side' in cat_df.columns else [], 'min_side': safe_tolist(cat_df['min_side']) if 'min_side' in cat_df.columns else []},
             'ratios': {'wh_ratio': safe_tolist(cat_df['wh_ratio']) if 'wh_ratio' in cat_df.columns else [], 'aspect_ratio': safe_tolist(cat_df['aspect_ratio']) if 'aspect_ratio' in cat_df.columns else []},
-            'spatial': {'center_x': safe_tolist(cat_df['c_x']) if 'c_x' in cat_df.columns else [], 'center_y': safe_tolist(cat_df['c_y']) if 'c_y' in cat_df.columns else []}
+            'spatial': {'center_x': safe_tolist(cat_df['c_x']) if 'c_x' in cat_df.columns else [], 'center_y': safe_tolist(cat_df['c_y']) if 'c_y' in cat_df.columns else []},
+            'score': cat_score_raw
         }
     return eda, visualization_data
 
 
 @app.route('/api/load_dataset_merged', methods=['POST'])
 def load_dataset_merged():
-    """多选加载：根据扫描结果合并多个 COCO 为一个数据集（图片带 source_path，支持按目录筛选）"""
+    """多选加载：根据扫描结果合并多个 COCO 为一个数据集。合并文件与历史版本写入 root_path（加载的数据集对应目录），不写入 app 的 data 目录。"""
     try:
         data = request.get_json()
         items = data.get('items', [])
         dataset_name = (data.get('dataset_name') or 'merged').strip() or 'merged'
+        root_path = (data.get('root_path') or data.get('merge_output_dir') or '').strip()
         if not items:
             return jsonify({'error': '请至少选择一项（items 不能为空）'}), 400
-        eda, visualization_data = _load_dataset_merged_impl(items, dataset_name)
+        output_dir = root_path if root_path else None
+        eda, visualization_data = _load_dataset_merged_impl(items, dataset_name, output_dir=output_dir)
         dataset_id = f"{dataset_name}_{len(current_datasets)}"
         current_datasets[dataset_id] = eda
         _persist_dataset(dataset_id, eda.coco_json_path, dataset_name, eda.image_dir)
+        _write_coco_dir_record(eda.coco_json_path, dataset_name, eda.image_dir or '')
         if not _list_versions(eda.coco_json_path):
             with open(eda.coco_json_path, 'r', encoding='utf-8') as f:
                 coco_data = json.load(f)
-            _save_version(eda.coco_json_path, coco_data, comment='init')
+            _save_version(eda.coco_json_path, coco_data, comment='加载时原版')
         visualization_data['dataset_id'] = dataset_id
         visualization_data['dataset_name'] = dataset_name
         return jsonify({'success': True, **visualization_data})
@@ -738,6 +1018,18 @@ def get_filtered_data():
             if df.empty:
                 return jsonify({'error': '筛选后无数据'}), 400
         
+        score_f_cat, score_f_vals = [], []
+        if 'score' in df.columns:
+            for _, row in df.iterrows():
+                v = safe_float(row.get('score'))
+                if v is not None and not math.isinf(v):
+                    if 0 <= v <= 1:
+                        score_f_vals.append(v)
+                    elif 0 <= v <= 100:
+                        score_f_vals.append(v / 100.0)
+                    else:
+                        score_f_vals.append(v)
+                    score_f_cat.append(row.get('name', ''))
         # 返回筛选后的数据（归一化值）
         filtered_data = {
             'area': {
@@ -772,7 +1064,8 @@ def get_filtered_data():
                 'category': df['name'].tolist() if 'name' in df.columns else [],
                 'x': safe_tolist(df['c_x_norm']) if 'c_x_norm' in df.columns else [],
                 'y': safe_tolist(df['c_y_norm']) if 'c_y_norm' in df.columns else []
-            }
+            },
+            'score': {'category': score_f_cat, 'values': score_f_vals} if score_f_cat else {'category': [], 'values': []}
         }
         filtered_data_raw = {
             'area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['area']) if 'area' in df.columns else []},
@@ -782,7 +1075,8 @@ def get_filtered_data():
             'aspect_ratio': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['aspect_ratio']) if 'aspect_ratio' in df.columns else []},
             'width': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['w']) if 'w' in df.columns else []},
             'height': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['h']) if 'h' in df.columns else []},
-            'center': {'category': df['name'].tolist() if 'name' in df.columns else [], 'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [], 'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else []}
+            'center': {'category': df['name'].tolist() if 'name' in df.columns else [], 'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [], 'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else []},
+            'score': {'category': score_f_cat, 'values': score_f_vals} if score_f_cat else {'category': [], 'values': []}
         }
         return jsonify({
             'success': True,
@@ -798,18 +1092,23 @@ def get_filtered_data():
 def get_images_by_category():
     """根据类别获取图片列表
     
-    筛选逻辑：返回包含选中类别的图片，但每张图片显示所有标注（不只是选中类别的）
+    筛选逻辑：返回包含选中类别的图片，但每张图片显示所有标注（不只是选中类别的）。
+    支持图片元数据筛选：c_time 时间段、product_id(SN) 模糊查询、position 精确匹配；缺失字段时该条件忽略。
     """
     try:
         data = request.get_json()
         dataset_id = data.get('dataset_id')
         selected_categories = data.get('selected_categories', [])
-        
+        c_time_start = data.get('c_time_start')  # 可选，如 "2026-02-03 00:00:00"
+        c_time_end = data.get('c_time_end')
+        product_id_query = data.get('product_id_query')
+        position = data.get('position')
+
         eda = _ensure_dataset_loaded(dataset_id)
         if eda is None:
             return jsonify({'error': '数据集不存在'}), 400
         df = eda.compute_bbox_features()
-        
+
         # 找出包含选中类别的图片ID
         if selected_categories and len(selected_categories) > 0:
             filtered_df = df[df['name'].isin(selected_categories)]
@@ -818,7 +1117,26 @@ def get_images_by_category():
             target_image_ids = filtered_df['image_id'].unique()
         else:
             target_image_ids = df['image_id'].unique()
-        
+
+        # 图片元数据筛选（c_time / product_id / position），兼容缺失字段
+        meta_allowed = _apply_image_meta_filters(
+            eda.images_df,
+            c_time_start=c_time_start or None,
+            c_time_end=c_time_end or None,
+            product_id_query=product_id_query or None,
+            position=position or None
+        )
+        if meta_allowed is not None and len(meta_allowed) > 0:
+            target_image_ids = [i for i in target_image_ids if int(i) in meta_allowed]
+        elif meta_allowed is not None and len(meta_allowed) == 0:
+            # 元数据筛选结果为空（例如时间范围无匹配）
+            return jsonify({
+                'success': True,
+                'images': [],
+                'image_dir': str(eda.image_dir),
+                'total_images': 0
+            })
+
         # 获取这些图片的所有标注（不只是选中类别的）
         all_df = df[df['image_id'].isin(target_image_ids)]
         
@@ -911,6 +1229,13 @@ def get_images_by_category():
                 img_item['note'] = str(img_info['note'])
             if 'source_path' in img_info and img_info['source_path'] is not None:
                 img_item['source_path'] = str(img_info['source_path'])
+            # 图片元数据扩展字段（兼容缺失）：product_id(即SN)、c_time、position
+            if img_info.get('product_id') is not None and (not isinstance(img_info['product_id'], float) or not math.isnan(img_info['product_id'])):
+                img_item['product_id'] = str(img_info['product_id'])
+            if img_info.get('c_time') is not None and (not isinstance(img_info['c_time'], float) or not math.isnan(img_info['c_time'])):
+                img_item['c_time'] = str(img_info['c_time'])
+            if img_info.get('position') is not None and (not isinstance(img_info['position'], float) or not math.isnan(img_info['position'])):
+                img_item['position'] = str(img_info['position'])
             images_list.append(img_item)
         
         # 按图片ID排序
@@ -1048,7 +1373,7 @@ def save_annotations():
 
 @app.route('/api/save_image_metadata', methods=['POST'])
 def save_image_metadata():
-    """保存图片级分类和备注到原 COCO 文件（直接更新 images 中的 image_category、note）"""
+    """保存图片级分类和备注：最新内容直接覆盖对应的加载 COCO 文件；存档快照写入同目录下的 .coco_visualizer/。"""
     try:
         data = request.get_json()
         dataset_id = data.get('dataset_id')
@@ -1078,14 +1403,20 @@ def save_image_metadata():
                 img['image_category'] = cats[0] if cats else '未分类'
                 img['note'] = meta.get('note', '')
         
-        # 写入前先保存为一条版本记录（支持版本说明 comment）
+        # 先写入历史版本快照（同目录下 coco_versions/<文件名>/），再写回主 COCO 文件 = 最新版本
         version_comment = data.get('version_comment') or data.get('comment') or ''
         version_id = _save_version(eda.coco_json_path, coco_data, comment=version_comment)
-        
-        with open(eda.coco_json_path, 'w', encoding='utf-8') as f:
+        target_path = Path(eda.coco_json_path).resolve()
+        with open(target_path, 'w', encoding='utf-8') as f:
             json.dump(coco_data, f, indent=2, ensure_ascii=False)
         
-        return jsonify({'success': True, 'message': '图片级分类与备注已保存', 'version_id': version_id})
+        return jsonify({
+            'success': True,
+            'message': '图片级分类与备注已保存',
+            'version_id': version_id,
+            'saved_path': str(target_path),
+            'saved_dir': str(target_path.parent)
+        })
     except Exception as e:
         import traceback
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
