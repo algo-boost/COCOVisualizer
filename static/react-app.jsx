@@ -237,8 +237,6 @@ function App() {
     const [images, setImages] = useState([]);
     const [categories, setCategories] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [selectedImage, setSelectedImage] = useState(null);
-    const [viewerOpen, setViewerOpen] = useState(false);
     
     // 图片分类和备注
     const [imageClassifications, setImageClassifications] = useState({}); // {image_id: category}
@@ -290,6 +288,16 @@ function App() {
     const applyDatasetAndFetchImages = async (data, metaFilters) => {
         setDatasetData(data);
         setCategories(data.categories);
+        // 若 COCO 文件含有本软件写入的分类定义，完全按原定义加载（保持顺序、颜色、快捷键绑定）
+        // 否则清空活跃定义，回退到用户自己的 config
+        const catDefs = data.image_category_definitions;
+        if (catDefs && Array.isArray(catDefs.categories) && catDefs.categories.length > 0) {
+            setActiveImageCategories(catDefs.categories);
+            setActiveImageCategoryColors(catDefs.colors || null);
+        } else {
+            setActiveImageCategories(null);
+            setActiveImageCategoryColors(null);
+        }
         const body = { dataset_id: data.dataset_id, selected_categories: data.categories };
         if (metaFilters && typeof metaFilters === 'object') {
             if (metaFilters.c_time_start) body.c_time_start = metaFilters.c_time_start;
@@ -360,18 +368,113 @@ function App() {
         }
     }, [datasetData, categories, config.imageCategories]);
 
+    // ---- 自动保存（防抖 3s）：任何分类/备注变动后静默写回 COCO 文件，下次打开即恢复 ----
+    // 用 ref 持有最新数据，避免 timer 回调读到旧闭包
+    const _autoSaveRef = useRef({ datasetData: null, images: [], imageClassifications: {}, imageNotes: {}, imageCategories: [], imageCategoryColors: {} });
+    const _autoSaveTimer = useRef(null);
+    const [autoSaveStatus, setAutoSaveStatus] = useState('idle'); // 'idle' | 'pending' | 'saved' | 'error'
+
+    // 活跃分类定义：若 COCO 文件中有本软件写入的定义则优先采用，否则回退到 config
+    const [activeImageCategories, setActiveImageCategories] = useState(null);
+    const [activeImageCategoryColors, setActiveImageCategoryColors] = useState(null);
+
+    // 当用户在设置里增删改类别时，同步合并到 activeImageCategories（config 改动优先，保持 COCO 文件定义的顺序）
+    const prevConfigCatsRef = React.useRef(null);
+    useEffect(() => {
+        const configCats = config.imageCategories || DEFAULT_CONFIG.imageCategories;
+        const prev = prevConfigCatsRef.current;
+        prevConfigCatsRef.current = configCats;
+        if (!activeImageCategories) return; // 未从文件加载，无需合并
+        if (prev === null) return;          // 首次初始化，跳过
+        if (prev === configCats) return;    // 没有变化
+        // 计算新增/删除的类别
+        const added = configCats.filter(c => !prev.includes(c));
+        const removed = prev.filter(c => !configCats.includes(c));
+        if (added.length === 0 && removed.length === 0) return;
+        setActiveImageCategories(cur => {
+            let next = (cur || []).filter(c => !removed.includes(c));
+            added.forEach(c => { if (!next.includes(c)) next = [...next, c]; });
+            return next;
+        });
+        if (removed.length > 0 || added.length > 0) {
+            setActiveImageCategoryColors(cur => {
+                const cols = { ...(cur || {}) };
+                removed.forEach(c => delete cols[c]);
+                const configColors = config.imageCategoryColors || DEFAULT_CONFIG.imageCategoryColors;
+                added.forEach(c => { if (configColors[c]) cols[c] = configColors[c]; });
+                return cols;
+            });
+        }
+    }, [config.imageCategories, config.imageCategoryColors]);
+
+    const imageCategories = activeImageCategories || config.imageCategories || DEFAULT_CONFIG.imageCategories;
+    const imageCategoryColors = activeImageCategoryColors || config.imageCategoryColors || DEFAULT_CONFIG.imageCategoryColors;
+
+    useEffect(() => {
+        _autoSaveRef.current = { datasetData, images, imageClassifications, imageNotes, imageCategories, imageCategoryColors };
+    }, [datasetData, images, imageClassifications, imageNotes, imageCategories, imageCategoryColors]);
+
+    const scheduleAutoSave = useCallback(() => {
+        setAutoSaveStatus('pending');
+        if (_autoSaveTimer.current) clearTimeout(_autoSaveTimer.current);
+        // 1 秒防抖：连续快速操作只触发最后一次，每次均生成版本快照
+        _autoSaveTimer.current = setTimeout(async () => {
+            const { datasetData, images, imageClassifications, imageNotes, imageCategories, imageCategoryColors } = _autoSaveRef.current;
+            if (!datasetData || images.length === 0) return;
+            try {
+                const defaultCat = (imageCategories && imageCategories[0]) || '未分类';
+                const images_meta = images.map(img => {
+                    const cats = imageClassifications[img.image_id];
+                    const arr = Array.isArray(cats) && cats.length ? cats : [defaultCat];
+                    return { image_id: img.image_id, image_categories: arr, note: imageNotes[img.image_id] || '' };
+                });
+                const res = await fetch('/api/save_image_metadata', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        dataset_id: datasetData.dataset_id,
+                        images: images_meta,
+                        skip_version: true,
+                        // 同时保存当前分类定义（顺序+颜色），让任何人打开此文件都能精确还原
+                        image_category_definitions: { categories: imageCategories, colors: imageCategoryColors }
+                    })
+                });
+                if (!res.ok) {
+                    const errBody = await res.json().catch(() => ({}));
+                    throw new Error(errBody.error || `HTTP ${res.status}`);
+                }
+                setAutoSaveStatus('saved');
+                setTimeout(() => setAutoSaveStatus('idle'), 2500);
+            } catch (e) {
+                console.warn('auto-save failed:', e);
+                setAutoSaveStatus('error');
+                setTimeout(() => setAutoSaveStatus('idle'), 3000);
+            }
+        }, 1000);
+    }, []);
+
     // 更新图片分类（单类，覆盖）
     const updateImageCategory = (imageId, category) => {
         setImageClassifications(prev => ({ ...prev, [imageId]: [category] }));
+        scheduleAutoSave();
     };
-    // 更新图片多分类（一图多类）
+    // 更新图片多分类（一图多类）：归入任意非「未分类」类别后自动移除「未分类」
     const updateImageCategories = (imageId, categoriesArray) => {
-        setImageClassifications(prev => ({ ...prev, [imageId]: categoriesArray && categoriesArray.length ? categoriesArray : [(imageCategories && imageCategories[0]) || '未分类'] }));
+        const unclassified = (imageCategories && imageCategories[0]) || '未分类';
+        let cats = categoriesArray && categoriesArray.length ? categoriesArray : [unclassified];
+        // 若包含至少一个非「未分类」的类别，则去掉「未分类」
+        if (cats.length > 1 || (cats.length === 1 && cats[0] !== unclassified)) {
+            const filtered = cats.filter(c => c !== unclassified);
+            if (filtered.length > 0) cats = filtered;
+        }
+        setImageClassifications(prev => ({ ...prev, [imageId]: cats }));
+        scheduleAutoSave();
     };
 
     // 更新图片备注
     const updateImageNote = (imageId, note) => {
         setImageNotes(prev => ({ ...prev, [imageId]: note }));
+        scheduleAutoSave();
     };
 
     // 批量更新选中图片的分类（每张图设为单类）
@@ -381,11 +484,12 @@ function App() {
             imageIds.forEach(id => { newState[id] = [category]; });
             return newState;
         });
+        scheduleAutoSave();
     };
 
     // 回滚后重新拉取图片并更新分类/备注（从 COCO 文件读取）
     const refetchImageMetaAfterRollback = useCallback(async () => {
-        if (!datasetData || images.length === 0) return;
+        if (!datasetData) return;
         try {
             const res = await fetch('/api/get_images_by_category', {
                 method: 'POST',
@@ -414,8 +518,6 @@ function App() {
         }
     }, [datasetData, categories]);
 
-    const imageCategories = config.imageCategories || DEFAULT_CONFIG.imageCategories;
-    const imageCategoryColors = config.imageCategoryColors || DEFAULT_CONFIG.imageCategoryColors;
     const [showSettingsModal, setShowSettingsModal] = useState(false);
     const [showHelpModal, setShowHelpModal] = useState(false);
 
@@ -432,32 +534,17 @@ function App() {
                     imageNotes={imageNotes}
                     imageCategories={imageCategories}
                     imageCategoryColors={imageCategoryColors}
-                    onImageClick={(img) => { setSelectedImage(img); setViewerOpen(true); }}
                     onUpdateCategory={updateImageCategory}
                     onUpdateCategories={updateImageCategories}
+                    onUpdateNote={updateImageNote}
                     onBatchUpdateCategory={batchUpdateCategory}
                     onRollback={refetchImageMetaAfterRollback}
                     metaFilterOptions={datasetData.meta_filter_options}
                     onApplyMetaFilters={refetchImagesWithMetaFilters}
+                    autoSaveStatus={autoSaveStatus}
                 />
             )}
             {page === 'eda' && datasetData && <EDAPage datasetData={datasetData} />}
-            {viewerOpen && selectedImage && (
-                <ImageViewer
-                    image={selectedImage}
-                    images={images}
-                    datasetId={datasetData.dataset_id}
-                    categories={categories}
-                    imageClassifications={imageClassifications}
-                    imageNotes={imageNotes}
-                    imageCategories={imageCategories}
-                    onClose={() => setViewerOpen(false)}
-                    onNavigate={(img) => setSelectedImage(img)}
-                    onUpdateCategory={updateImageCategory}
-                    onUpdateCategories={updateImageCategories}
-                    onUpdateNote={updateImageNote}
-                />
-            )}
             {showSettingsModal && (
                 <SettingsModal onClose={() => setShowSettingsModal(false)} />
             )}
@@ -830,8 +917,570 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
     );
 }
 
+// ==================== 预测评估工具函数 ====================
+
+// AUC-PR 方式计算 AP（与 COCO 评估脚本一致）
+function computeAP(precisions, recalls) {
+    if (precisions.length === 0) return 0;
+    const mrec = [0, ...recalls, 1];
+    const mpre = [0, ...precisions, 0];
+    for (let i = mpre.length - 2; i >= 0; i--) mpre[i] = Math.max(mpre[i], mpre[i + 1]);
+    let ap = 0;
+    for (let i = 1; i < mrec.length; i++) {
+        if (mrec[i] !== mrec[i - 1]) ap += (mrec[i] - mrec[i - 1]) * mpre[i];
+    }
+    return ap;
+}
+
+// 在指定 IoU 阈值下计算各类别 AP 及统计指标，同时返回 PR 曲线数据
+function computeMapAtIou(images, model, iouThreshold, scoreThreshold) {
+    const categories = new Set();
+    images.forEach(img => (img.annotations || []).forEach(a => { if (a.category && a.bbox) categories.add(a.category); }));
+    const perClass = {};
+    const prCurves = {};
+    categories.forEach(cat => {
+        const gtByImg = {};
+        images.forEach(img => {
+            const gts = (img.annotations || []).filter(a => a.category === cat && a.bbox && a.bbox.length >= 4);
+            if (gts.length > 0) gtByImg[img.image_id] = gts.map(g => ({ bbox: g.bbox, matched: false }));
+        });
+        const numGT = Object.values(gtByImg).reduce((s, gts) => s + gts.length, 0);
+        const preds = [];
+        images.forEach(img => {
+            (img.pred_annotations || [])
+                .filter(a => a._pred_source === model && a.category === cat && a.bbox && a.bbox.length >= 4)
+                .filter(a => a.score == null || Number(a.score) >= scoreThreshold)
+                .forEach(a => preds.push({ bbox: a.bbox, score: Number(a.score) || 0, image_id: img.image_id }));
+        });
+        preds.sort((a, b) => b.score - a.score);
+        const tpArr = [], fpArr = [];
+        preds.forEach(pred => {
+            const gts = gtByImg[pred.image_id] || [];
+            let bestIoU = iouThreshold - 1e-9, bestIdx = -1;
+            gts.forEach((gt, i) => {
+                if (gt.matched) return;
+                const iou = computeIoU(pred.bbox, gt.bbox);
+                if (iou > bestIoU) { bestIoU = iou; bestIdx = i; }
+            });
+            if (bestIdx >= 0) { gts[bestIdx].matched = true; tpArr.push(1); fpArr.push(0); }
+            else { tpArr.push(0); fpArr.push(1); }
+        });
+        let cumTP = 0, cumFP = 0;
+        const precs = [], recalls = [];
+        tpArr.forEach((t, i) => {
+            cumTP += t; cumFP += fpArr[i];
+            recalls.push(numGT > 0 ? cumTP / numGT : 0);
+            precs.push(cumTP + cumFP > 0 ? cumTP / (cumTP + cumFP) : 0);
+        });
+        const ap = computeAP(precs, recalls);
+        const precision = (cumTP + cumFP) > 0 ? cumTP / (cumTP + cumFP) : 0;
+        const recall = numGT > 0 ? cumTP / numGT : 0;
+        const f1 = (precision + recall) > 0 ? 2 * precision * recall / (precision + recall) : 0;
+        perClass[cat] = { ap, precision, recall, f1, tp: cumTP, fp: cumFP, fn: numGT - cumTP, numGT, numPred: preds.length };
+        prCurves[cat] = { precs, recalls };
+    });
+    const cats = Object.keys(perClass);
+    const mAP = cats.length > 0 ? cats.reduce((s, c) => s + perClass[c].ap, 0) / cats.length : 0;
+    return { mAP, perClass, prCurves };
+}
+
+// 类别无关指标：忽略缺陷类型，只看有没有检出框与GT框重叠
+function computeClassAgnosticAtIou(images, model, iouThreshold, scoreThreshold) {
+    const gtByImg = {};
+    images.forEach(img => {
+        const gts = (img.annotations || []).filter(a => a.bbox && a.bbox.length >= 4);
+        if (gts.length > 0) gtByImg[img.image_id] = gts.map(g => ({ bbox: g.bbox, matched: false }));
+    });
+    const numGT = Object.values(gtByImg).reduce((s, gts) => s + gts.length, 0);
+    const preds = [];
+    images.forEach(img => {
+        (img.pred_annotations || [])
+            .filter(a => a._pred_source === model && a.bbox && a.bbox.length >= 4)
+            .filter(a => a.score == null || Number(a.score) >= scoreThreshold)
+            .forEach(a => preds.push({ bbox: a.bbox, score: Number(a.score) || 0, image_id: img.image_id }));
+    });
+    preds.sort((a, b) => b.score - a.score);
+    const tpArr = [], fpArr = [];
+    preds.forEach(pred => {
+        const gts = gtByImg[pred.image_id] || [];
+        let bestIoU = iouThreshold - 1e-9, bestIdx = -1;
+        gts.forEach((gt, i) => {
+            if (gt.matched) return;
+            const iou = computeIoU(pred.bbox, gt.bbox);
+            if (iou > bestIoU) { bestIoU = iou; bestIdx = i; }
+        });
+        if (bestIdx >= 0) { gts[bestIdx].matched = true; tpArr.push(1); fpArr.push(0); }
+        else { tpArr.push(0); fpArr.push(1); }
+    });
+    let cumTP = 0, cumFP = 0;
+    const precs = [], recalls = [];
+    tpArr.forEach((t, i) => {
+        cumTP += t; cumFP += fpArr[i];
+        recalls.push(numGT > 0 ? cumTP / numGT : 0);
+        precs.push(cumTP + cumFP > 0 ? cumTP / (cumTP + cumFP) : 0);
+    });
+    const ap = computeAP(precs, recalls);
+    const precision = (cumTP + cumFP) > 0 ? cumTP / (cumTP + cumFP) : 0;
+    const recall = numGT > 0 ? cumTP / numGT : 0;
+    const f1 = (precision + recall) > 0 ? 2 * precision * recall / (precision + recall) : 0;
+    return { ap, precision, recall, f1, tp: cumTP, fp: cumFP, fn: numGT - cumTP, numGT, numPred: preds.length, prCurve: { precs, recalls } };
+}
+
+// 计算完整报告：mAP@50/75/50:95 + 类别无关 + PR 曲线数据
+function computeFullMapReport(images, model, scoreThreshold) {
+    const iouThresholds = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
+    const at50 = computeMapAtIou(images, model, 0.5, scoreThreshold);
+    const at75 = computeMapAtIou(images, model, 0.75, scoreThreshold);
+    const allIou = iouThresholds.map(iou => computeMapAtIou(images, model, iou, scoreThreshold));
+    const mAP50_95 = allIou.reduce((s, r) => s + r.mAP, 0) / iouThresholds.length;
+    const perClassAP75 = Object.fromEntries(Object.keys(at75.perClass).map(c => [c, at75.perClass[c].ap]));
+    const perClassAP50_95 = {};
+    Object.keys(at50.perClass).forEach(cat => {
+        perClassAP50_95[cat] = allIou.reduce((s, r) => s + (r.perClass[cat]?.ap || 0), 0) / iouThresholds.length;
+    });
+    // 类别无关
+    const agn50 = computeClassAgnosticAtIou(images, model, 0.5, scoreThreshold);
+    const agn75 = computeClassAgnosticAtIou(images, model, 0.75, scoreThreshold);
+    const allIouAgn = iouThresholds.map(iou => computeClassAgnosticAtIou(images, model, iou, scoreThreshold));
+    const agnAP50_95 = allIouAgn.reduce((s, r) => s + r.ap, 0) / iouThresholds.length;
+    return {
+        mAP50: at50.mAP, mAP75: at75.mAP, mAP50_95,
+        perClass: at50.perClass, perClassAP75, perClassAP50_95,
+        prCurves: at50.prCurves,
+        agnostic: { ...agn50, ap75: agn75.ap, ap50_95: agnAP50_95 },
+    };
+}
+
+// PR 曲线画布
+const PR_CURVE_COLORS = ['#52c41a','#1890ff','#faad14','#f5222d','#722ed1','#13c2c2','#fa8c16','#eb2f96','#a0d911','#36cfc9'];
+function PRCurveCanvas({ prCurves, agnosticCurve }) {
+    const containerRef = React.useRef(null);
+    const canvasRef = React.useRef(null);
+
+    React.useEffect(() => {
+        const container = containerRef.current;
+        const canvas = canvasRef.current;
+        if (!container || !canvas) return;
+        const W_total = container.clientWidth || 700;
+        const H_total = 320;
+        canvas.width = W_total;
+        canvas.height = H_total;
+        const ctx = canvas.getContext('2d');
+        const padL = 46, padR = 18, padT = 18, padB = 36;
+        const W = W_total - padL - padR;
+        const H = H_total - padT - padB;
+
+        ctx.fillStyle = '#111122';
+        ctx.fillRect(0, 0, W_total, H_total);
+
+        // 格线
+        ctx.strokeStyle = '#1e1e3a';
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= 10; i++) {
+            ctx.beginPath(); ctx.moveTo(padL + W * i / 10, padT); ctx.lineTo(padL + W * i / 10, padT + H); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(padL, padT + H * i / 10); ctx.lineTo(padL + W, padT + H * i / 10); ctx.stroke();
+        }
+        ctx.strokeStyle = '#334'; ctx.lineWidth = 1;
+        ctx.strokeRect(padL, padT, W, H);
+
+        // 坐标刻度
+        ctx.font = '10px sans-serif'; ctx.fillStyle = '#556';
+        for (let i = 0; i <= 5; i++) {
+            ctx.textAlign = 'center';
+            ctx.fillText((i / 5).toFixed(1), padL + W * i / 5, padT + H + 14);
+            ctx.textAlign = 'right';
+            ctx.fillText((1 - i / 5).toFixed(1), padL - 5, padT + H * i / 5 + 3);
+        }
+        ctx.fillStyle = '#778'; ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Recall →', padL + W / 2, H_total - 4);
+        ctx.save(); ctx.translate(11, padT + H / 2); ctx.rotate(-Math.PI / 2);
+        ctx.fillText('↑ Precision', 0, 0); ctx.restore();
+
+        // 曲线数据：按类别 + 类别无关
+        const sortedCats = Object.keys(prCurves).sort();
+        const curves = [
+            ...sortedCats.map((cat, i) => ({ label: cat, color: PR_CURVE_COLORS[i % PR_CURVE_COLORS.length], ap: 0, ...prCurves[cat] })),
+            { label: '全部缺陷(类别无关)', color: '#ffffff', dash: [7, 3], ap: agnosticCurve.ap || 0, ...agnosticCurve.prCurve },
+        ];
+
+        curves.forEach(({ recalls, precs, color, dash }) => {
+            if (!recalls || recalls.length < 1) return;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = dash ? 2.5 : 1.8;
+            ctx.setLineDash(dash || []);
+            ctx.beginPath();
+            ctx.moveTo(padL, padT + H); // 起始点 (0,0) 底部
+            // 插入起点
+            const pts = [[0, 1], ...recalls.map((r, i) => [r, precs[i]])];
+            pts.forEach(([r, p]) => ctx.lineTo(padL + r * W, padT + (1 - p) * H));
+            ctx.stroke();
+            ctx.setLineDash([]);
+        });
+
+        // 图例（右上角）
+        const legX = padL + W - 10, legStartY = padT + 8;
+        curves.forEach(({ label, color, ap }, i) => {
+            const ly = legStartY + i * 15;
+            ctx.fillStyle = color; ctx.fillRect(legX - 120, ly - 4, 16, 2.5);
+            ctx.fillStyle = color === '#ffffff' ? '#ddd' : color;
+            ctx.font = '9.5px sans-serif'; ctx.textAlign = 'left';
+            ctx.fillText(`${label}  AP=${(ap * 100).toFixed(1)}%`, legX - 100, ly);
+        });
+    }, [prCurves, agnosticCurve]);
+
+    return (
+        <div ref={containerRef} style={{ width: '100%' }}>
+            <canvas ref={canvasRef} style={{ display: 'block', width: '100%', borderRadius: '6px' }} />
+        </div>
+    );
+}
+
+// ==================== mAP 报告弹窗 ====================
+function MapReportModal({ images, model, scoreThresh, onClose }) {
+    const [computing, setComputing] = React.useState(true);
+    const [report, setReport] = React.useState(null);
+    const [activeTab, setActiveTab] = React.useState('table'); // 'table' | 'agnostic' | 'pr'
+
+    React.useEffect(() => {
+        const t = setTimeout(() => {
+            try { setReport(computeFullMapReport(images, model, scoreThresh)); }
+            catch (e) { console.error(e); }
+            setComputing(false);
+        }, 30);
+        return () => clearTimeout(t);
+    }, []);
+
+    const fmt = v => (v * 100).toFixed(1) + '%';
+    const cs = (a = 'center') => ({ padding: '7px 10px', textAlign: a, whiteSpace: 'nowrap' });
+
+    const copyTable = () => {
+        if (!report) return;
+        const cats = Object.keys(report.perClass).sort();
+        const header = ['类别','GT','预测','TP','FP','FN','Precision','Recall','F1','AP@50','AP@75','AP@50:95'].join('\t');
+        const rows = cats.map(cat => {
+            const r = report.perClass[cat];
+            return [cat, r.numGT, r.numPred, r.tp, r.fp, r.fn,
+                fmt(r.precision), fmt(r.recall), fmt(r.f1),
+                fmt(r.ap), fmt(report.perClassAP75[cat]||0), fmt(report.perClassAP50_95[cat]||0)].join('\t');
+        });
+        const a = report.agnostic;
+        const agnRow = ['[类别无关]', a.numGT, a.numPred, a.tp, a.fp, a.fn,
+            fmt(a.precision), fmt(a.recall), fmt(a.f1),
+            fmt(a.ap), fmt(a.ap75||0), fmt(a.ap50_95||0)].join('\t');
+        const overall = ['mAP','','','','','','','','', fmt(report.mAP50), fmt(report.mAP75), fmt(report.mAP50_95)].join('\t');
+        navigator.clipboard.writeText([header, ...rows, agnRow, overall].join('\n'))
+            .then(() => alert('已复制到剪贴板')).catch(() => {});
+    };
+
+    const TAB_STYLE = (key) => ({
+        padding: '6px 16px', fontSize: '13px', cursor: 'pointer', border: 'none',
+        background: activeTab === key ? '#2a3a5a' : 'transparent',
+        color: activeTab === key ? '#7af' : '#888',
+        borderBottom: activeTab === key ? '2px solid #4a7af0' : '2px solid transparent',
+        fontWeight: activeTab === key ? 'bold' : 'normal',
+    });
+
+    return (
+        <div style={{
+            position: 'fixed', inset: 0, zIndex: 3000,
+            background: 'rgba(0,0,0,0.72)',
+            display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+            overflowY: 'auto', padding: '24px 12px',
+        }} onClick={e => e.target === e.currentTarget && onClose()}>
+            <div style={{
+                background: '#16162e',
+                borderRadius: '12px',
+                border: '1px solid #2d2d50',
+                boxShadow: '0 24px 60px rgba(0,0,0,0.85)',
+                maxWidth: '1000px', width: '100%',
+                display: 'flex', flexDirection: 'column',
+            }}>
+                {/* 标题栏 */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid #2d2d50' }}>
+                    <span style={{ fontWeight: 'bold', fontSize: '15px', color: '#ddd' }}>📊 检测指标报告 · <span style={{ color: '#7af' }}>{model}</span></span>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <button className="btn btn-sm btn-secondary" onClick={copyTable} disabled={!report}>📋 复制表格</button>
+                        <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: '#888', fontSize: '18px', cursor: 'pointer', lineHeight: 1 }}>✕</button>
+                    </div>
+                </div>
+
+                <div style={{ padding: '16px 20px 0', overflow: 'hidden' }}>
+                    {computing ? (
+                        <div style={{ textAlign: 'center', padding: '60px', color: '#666', fontSize: '16px' }}>⏳ 计算中…</div>
+                    ) : !report ? (
+                        <div style={{ textAlign: 'center', padding: '40px', color: '#f5222d' }}>计算失败，请检查数据</div>
+                    ) : (
+                        <>
+                            {/* 指标卡片：按类 mAP + 类别无关 AP */}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '10px', marginBottom: '16px' }}>
+                                {[
+                                    { label: 'mAP@50', value: report.mAP50, color: '#52c41a', sub: '按类别' },
+                                    { label: 'mAP@75', value: report.mAP75, color: '#1890ff', sub: '按类别' },
+                                    { label: 'mAP@50:95', value: report.mAP50_95, color: '#722ed1', sub: 'COCO 标准' },
+                                    { label: 'AP@50', value: report.agnostic.ap, color: '#fa8c16', sub: '类别无关' },
+                                    { label: 'AP@75', value: report.agnostic.ap75, color: '#eb2f96', sub: '类别无关' },
+                                    { label: 'AP@50:95', value: report.agnostic.ap50_95, color: '#13c2c2', sub: '类别无关' },
+                                ].map(({ label, value, color, sub }) => (
+                                    <div key={label} style={{ background: '#1a1a2e', borderRadius: '8px', padding: '12px 8px', textAlign: 'center', border: `1px solid ${color}44` }}>
+                                        <div style={{ fontSize: '10px', color: '#666', marginBottom: '1px' }}>{sub}</div>
+                                        <div style={{ fontSize: '22px', fontWeight: 'bold', color, lineHeight: 1.2 }}>{fmt(value)}</div>
+                                        <div style={{ fontSize: '11px', color: '#888', marginTop: '2px' }}>{label}</div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* 元信息 */}
+                            <div style={{ fontSize: '12px', color: '#666', marginBottom: '12px', display: 'flex', gap: '18px', flexWrap: 'wrap' }}>
+                                <span>模型：<strong style={{ color: '#aaa' }}>{model}</strong></span>
+                                <span>置信度阈值：<strong style={{ color: '#aaa' }}>{scoreThresh.toFixed(2)}</strong></span>
+                                <span>图片数：<strong style={{ color: '#aaa' }}>{images.length}</strong></span>
+                                <span>类别数：<strong style={{ color: '#aaa' }}>{Object.keys(report.perClass).length}</strong></span>
+                                <span style={{ color: '#555' }}>AP = AUC-PR（单调包络）</span>
+                            </div>
+
+                            {/* 标签页切换 */}
+                            <div style={{ display: 'flex', borderBottom: '1px solid #2d2d50', marginBottom: '0' }}>
+                                {[['table','按类别指标'], ['agnostic','类别无关指标'], ['pr','PR 曲线']].map(([k, label]) => (
+                                    <button key={k} style={TAB_STYLE(k)} onClick={() => setActiveTab(k)}>{label}</button>
+                                ))}
+                            </div>
+                        </>
+                    )}
+                </div>
+
+                {/* 标签页内容 */}
+                {report && (
+                    <div style={{ padding: '16px 20px', overflowY: 'auto', maxHeight: '55vh' }}>
+                        {activeTab === 'table' && (
+                            <div style={{ overflowX: 'auto' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', tableLayout: 'fixed' }}>
+                                    <colgroup>
+                                        <col style={{ width: '80px' }} />
+                                        {['GT','预测','TP','FP','FN','Precision','Recall','F1','AP@50','AP@75','AP@50:95'].map((_, i) => (
+                                            <col key={i} style={{ width: i < 5 ? '52px' : i < 8 ? '72px' : '78px' }} />
+                                        ))}
+                                    </colgroup>
+                                    <thead>
+                                        <tr style={{ background: '#1e1e3a', position: 'sticky', top: 0, zIndex: 1 }}>
+                                            {[['类别','left'],['GT','center'],['预测','center'],['TP','center'],['FP','center'],['FN','center'],['Precision','center'],['Recall','center'],['F1','center'],['AP@50','center'],['AP@75','center'],['AP@50:95','center']].map(([h, a]) => (
+                                                <th key={h} style={{ ...cs(a), fontWeight: 'bold', color: '#bbb', background: '#1e1e3a', borderBottom: '2px solid #3d3d60', fontSize: '12px' }}>{h}</th>
+                                            ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {Object.keys(report.perClass).sort().map((cat, i) => {
+                                            const r = report.perClass[cat];
+                                            const catColor = PR_CURVE_COLORS[i % PR_CURVE_COLORS.length];
+                                            return (
+                                                <tr key={cat} style={{ background: i % 2 === 0 ? '#14142a' : '#18183a', borderBottom: '1px solid #252545' }}>
+                                                    <td style={{ ...cs('left'), color: catColor, fontWeight: 'bold', fontSize: '12px' }}>{cat}</td>
+                                                    <td style={{ ...cs(), color: '#aaa', fontSize: '12px' }}>{r.numGT}</td>
+                                                    <td style={{ ...cs(), color: '#aaa', fontSize: '12px' }}>{r.numPred}</td>
+                                                    <td style={{ ...cs(), color: '#52c41a', fontWeight: 'bold', fontSize: '12px' }}>{r.tp}</td>
+                                                    <td style={{ ...cs(), color: '#f5222d', fontSize: '12px' }}>{r.fp}</td>
+                                                    <td style={{ ...cs(), color: '#faad14', fontSize: '12px' }}>{r.fn}</td>
+                                                    <td style={{ ...cs(), fontSize: '12px' }}>{fmt(r.precision)}</td>
+                                                    <td style={{ ...cs(), fontSize: '12px' }}>{fmt(r.recall)}</td>
+                                                    <td style={{ ...cs(), fontSize: '12px' }}>{fmt(r.f1)}</td>
+                                                    <td style={{ ...cs(), color: '#52c41a', fontWeight: 'bold', fontSize: '12px' }}>{fmt(r.ap)}</td>
+                                                    <td style={{ ...cs(), color: '#1890ff', fontSize: '12px' }}>{fmt(report.perClassAP75[cat]||0)}</td>
+                                                    <td style={{ ...cs(), color: '#722ed1', fontSize: '12px' }}>{fmt(report.perClassAP50_95[cat]||0)}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                        {/* mAP 汇总行 */}
+                                        <tr style={{ background: '#1e1e3a', borderTop: '2px solid #3d3d60' }}>
+                                            <td style={{ ...cs('left'), color: '#fff', fontWeight: 'bold', fontSize: '12px' }}>mAP</td>
+                                            <td colSpan={8} style={{ borderBottom: 'none' }} />
+                                            <td style={{ ...cs(), color: '#52c41a', fontWeight: 'bold', fontSize: '13px' }}>{fmt(report.mAP50)}</td>
+                                            <td style={{ ...cs(), color: '#1890ff', fontWeight: 'bold', fontSize: '13px' }}>{fmt(report.mAP75)}</td>
+                                            <td style={{ ...cs(), color: '#722ed1', fontWeight: 'bold', fontSize: '13px' }}>{fmt(report.mAP50_95)}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+
+                        {activeTab === 'agnostic' && (() => {
+                            const a = report.agnostic;
+                            return (
+                                <div>
+                                    <div style={{ fontSize: '13px', color: '#888', marginBottom: '16px', background: '#1a1a30', padding: '10px 14px', borderRadius: '6px' }}>
+                                        <strong style={{ color: '#ccc' }}>类别无关指标</strong>：忽略缺陷类型，只要预测框与任意GT框 IoU 达到阈值，即视为检出。评估模型对缺陷的整体感知能力。
+                                    </div>
+                                    <div style={{ overflowX: 'auto' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                            <thead>
+                                                <tr style={{ background: '#1e1e3a', borderBottom: '2px solid #3d3d60' }}>
+                                                    {['指标','GT总数','预测总数','TP','FP','FN','Precision','Recall','F1','AP@50','AP@75','AP@50:95'].map(h => (
+                                                        <th key={h} style={{ ...cs(h==='指标'?'left':'center'), color: '#bbb', fontWeight: 'bold', fontSize: '12px' }}>{h}</th>
+                                                    ))}
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr style={{ background: '#14142a', borderBottom: '1px solid #252545' }}>
+                                                    <td style={{ ...cs('left'), color: '#fa8c16', fontWeight: 'bold' }}>缺陷检出</td>
+                                                    <td style={{ ...cs(), color: '#aaa' }}>{a.numGT}</td>
+                                                    <td style={{ ...cs(), color: '#aaa' }}>{a.numPred}</td>
+                                                    <td style={{ ...cs(), color: '#52c41a', fontWeight: 'bold' }}>{a.tp}</td>
+                                                    <td style={{ ...cs(), color: '#f5222d' }}>{a.fp}</td>
+                                                    <td style={{ ...cs(), color: '#faad14' }}>{a.fn}</td>
+                                                    <td style={{ ...cs() }}>{fmt(a.precision)}</td>
+                                                    <td style={{ ...cs() }}>{fmt(a.recall)}</td>
+                                                    <td style={{ ...cs() }}>{fmt(a.f1)}</td>
+                                                    <td style={{ ...cs(), color: '#fa8c16', fontWeight: 'bold' }}>{fmt(a.ap)}</td>
+                                                    <td style={{ ...cs(), color: '#eb2f96' }}>{fmt(a.ap75||0)}</td>
+                                                    <td style={{ ...cs(), color: '#13c2c2' }}>{fmt(a.ap50_95||0)}</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div style={{ marginTop: '20px', fontSize: '13px', color: '#666', background: '#111128', borderRadius: '6px', padding: '12px 16px', lineHeight: '1.8' }}>
+                                        <div><span style={{color:'#888'}}>漏检数 (FN)：</span><strong style={{color:'#faad14'}}>{a.fn}</strong> 个GT未被任何预测框覆盖</div>
+                                        <div><span style={{color:'#888'}}>误检数 (FP)：</span><strong style={{color:'#f5222d'}}>{a.fp}</strong> 个预测框未与任何GT匹配</div>
+                                        <div><span style={{color:'#888'}}>漏检率：</span><strong style={{color:'#faad14'}}>{a.numGT > 0 ? fmt(a.fn/a.numGT) : '—'}</strong></div>
+                                        <div><span style={{color:'#888'}}>误检率：</span><strong style={{color:'#f5222d'}}>{a.numPred > 0 ? fmt(a.fp/a.numPred) : '—'}</strong></div>
+                                    </div>
+                                </div>
+                            );
+                        })()}
+
+                        {activeTab === 'pr' && (
+                            <div>
+                                <div style={{ fontSize: '12px', color: '#666', marginBottom: '10px' }}>PR 曲线基于 IoU@50 计算，曲线下面积即为 AP@50。</div>
+                                <PRCurveCanvas prCurves={report.prCurves} agnosticCurve={report.agnostic} />
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* 底部 */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '12px 20px', borderTop: '1px solid #2d2d50' }}>
+                    <button className="btn btn-secondary" onClick={onClose}>关闭</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function computeIoU(bbox1, bbox2) {
+    const [x1, y1, w1, h1] = bbox1;
+    const [x2, y2, w2, h2] = bbox2;
+    const xi1 = Math.max(x1, x2), yi1 = Math.max(y1, y2);
+    const xi2 = Math.min(x1 + w1, x2 + w2), yi2 = Math.min(y1 + h1, y2 + h2);
+    const inter = Math.max(0, xi2 - xi1) * Math.max(0, yi2 - yi1);
+    const union = w1 * h1 + w2 * h2 - inter;
+    return union > 0 ? inter / union : 0;
+}
+
+// 返回 { hasFP, hasFN, tp, fp, fn }
+// hasFP: 存在误检（预测框无法匹配任何GT框）
+// hasFN: 存在漏检（GT框无法被任何预测框匹配）
+function evalImagePred(image, model, iouThresh, scoreThresh) {
+    const gtAnns = (image.annotations || []).filter(a => a.bbox && a.bbox.length >= 4);
+    const predAnns = (image.pred_annotations || [])
+        .filter(a => a._pred_source === model && a.bbox && a.bbox.length >= 4)
+        .filter(a => a.score == null || Number(a.score) >= scoreThresh)
+        .sort((a, b) => (b.score || 0) - (a.score || 0));
+
+    const gtMatched = new Array(gtAnns.length).fill(false);
+    let tp = 0, fp = 0;
+
+    predAnns.forEach(pred => {
+        let bestIdx = -1, bestIoU = iouThresh - 1e-9;
+        gtAnns.forEach((gt, i) => {
+            if (gtMatched[i]) return;
+            const iou = computeIoU(pred.bbox, gt.bbox);
+            if (iou > bestIoU) { bestIoU = iou; bestIdx = i; }
+        });
+        if (bestIdx >= 0) { gtMatched[bestIdx] = true; tp++; }
+        else { fp++; }
+    });
+
+    const fn = gtAnns.length - tp;
+    return {
+        hasFP: fp > 0,
+        hasFN: fn > 0,
+        tp, fp, fn,
+    };
+}
+
+// ==================== 预测评估设置弹窗 ====================
+function PredEvalModal({ predModelNames, initModel, initIou, initScore, onApply, onClose }) {
+    const [localModel, setLocalModel] = React.useState(initModel || (predModelNames.length === 1 ? predModelNames[0] : null));
+    const [localIou, setLocalIou] = React.useState(initIou ?? 0.5);
+    const [localScore, setLocalScore] = React.useState(initScore ?? 0.0);
+
+    const handleIouSlider = e => setLocalIou(Number(Number(e.target.value).toFixed(2)));
+    const handleScoreSlider = e => setLocalScore(Number(Number(e.target.value).toFixed(2)));
+    const handleIouInput = e => { const v = parseFloat(e.target.value); if (!isNaN(v)) setLocalIou(Math.min(1, Math.max(0, v))); };
+    const handleScoreInput = e => { const v = parseFloat(e.target.value); if (!isNaN(v)) setLocalScore(Math.min(1, Math.max(0, v))); };
+
+    return (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+            <div className="modal-dialog" style={{ maxWidth: '420px' }}>
+                <div className="modal-header">
+                    <span className="modal-title">🔬 预测评估设置</span>
+                    <button className="modal-close" onClick={onClose}>✕</button>
+                </div>
+                <div className="modal-body">
+                    <div style={{ marginBottom: '18px' }}>
+                        <div style={{ fontWeight: 'bold', marginBottom: '8px', fontSize: '13px', color: '#ccc' }}>选择预测模型（单选）</div>
+                        {predModelNames.map(model => (
+                            <label key={model} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px', cursor: 'pointer', padding: '6px 10px', background: localModel === model ? '#2a3a5a' : '#1e1e38', borderRadius: '6px', border: localModel === model ? '1px solid #4a7af0' : '1px solid transparent' }}>
+                                <input type="radio" name="pred_eval_model" value={model} checked={localModel === model} onChange={() => setLocalModel(model)} />
+                                <span style={{ fontFamily: 'monospace', fontSize: '13px' }}>{model}</span>
+                            </label>
+                        ))}
+                    </div>
+
+                    <div style={{ marginBottom: '16px' }}>
+                        <div style={{ fontSize: '13px', color: '#ccc', marginBottom: '6px' }}>
+                            IoU 阈值：<strong style={{ color: '#7af' }}>{localIou.toFixed(2)}</strong>
+                            <span style={{ fontSize: '11px', color: '#888', marginLeft: '8px' }}>（预测框与GT框的重叠度 ≥ 此值才算正确）</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <input type="range" min="0" max="1" step="0.05" value={localIou} onChange={handleIouSlider} style={{ flex: 1 }} />
+                            <input type="number" min="0" max="1" step="0.01" value={localIou} onChange={handleIouInput} className="filter-input" style={{ width: '70px' }} />
+                        </div>
+                    </div>
+
+                    <div style={{ marginBottom: '8px' }}>
+                        <div style={{ fontSize: '13px', color: '#ccc', marginBottom: '6px' }}>
+                            置信度阈值：<strong style={{ color: '#7af' }}>{localScore.toFixed(2)}</strong>
+                            <span style={{ fontSize: '11px', color: '#888', marginLeft: '8px' }}>（低于此值的预测框不参与评估）</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <input type="range" min="0" max="1" step="0.05" value={localScore} onChange={handleScoreSlider} style={{ flex: 1 }} />
+                            <input type="number" min="0" max="1" step="0.01" value={localScore} onChange={handleScoreInput} className="filter-input" style={{ width: '70px' }} />
+                        </div>
+                    </div>
+
+                    <div style={{ fontSize: '12px', color: '#888', marginTop: '14px', background: '#181830', padding: '10px', borderRadius: '6px', lineHeight: '1.7' }}>
+                        <div>✓ <strong style={{color:'#52c41a'}}>预测正确</strong>：无误检且无漏检（TP全匹配）</div>
+                        <div>⚡ <strong style={{color:'#faad14'}}>误检</strong>：存在未命中GT的预测框（FP &gt; 0）</div>
+                        <div>◎ <strong style={{color:'#f5222d'}}>漏检</strong>：存在未被预测框命中的GT框（FN &gt; 0）</div>
+                        <div style={{color:'#666', fontSize:'11px', marginTop:'4px'}}>注：一张图可同时属于误检和漏检</div>
+                    </div>
+                </div>
+                <div className="modal-footer">
+                    <button className="btn btn-secondary" onClick={onClose}>取消</button>
+                    <button
+                        className="btn btn-primary"
+                        disabled={!localModel}
+                        onClick={() => localModel && onApply({ model: localModel, iouThresh: localIou, scoreThresh: localScore })}
+                    >
+                        应用评估
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // ==================== 图片宫格页面 ====================
-function GalleryPage({ datasetData, images, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, onImageClick, onUpdateCategory, onUpdateCategories, onBatchUpdateCategory, onRollback, metaFilterOptions, onApplyMetaFilters }) {
+function GalleryPage({ datasetData, images, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, onUpdateCategory, onUpdateCategories, onUpdateNote, onBatchUpdateCategory, onRollback, metaFilterOptions, onApplyMetaFilters, autoSaveStatus }) {
     const config = useConfig();
     const gallery = config.gallery || DEFAULT_CONFIG.gallery;
     const [currentPage, setCurrentPage] = useState(1);
@@ -846,11 +1495,26 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     const [metaProductIdQuery, setMetaProductIdQuery] = useState('');
     const [metaPosition, setMetaPosition] = useState('');
     const [metaFilterApplying, setMetaFilterApplying] = useState(false);
+    const [scoreMin, setScoreMin] = useState('');
+    const [scoreMax, setScoreMax] = useState('');
     const [selectedImages, setSelectedImages] = useState(new Set());
     const [showExportModal, setShowExportModal] = useState(false);
     const [showVersionModal, setShowVersionModal] = useState(false);
     const [showSaveModal, setShowSaveModal] = useState(false);
     const [saving, setSaving] = useState(false);
+    // 大图查看器状态：直接存在 GalleryPage，filteredImages 可直接传入
+    const [viewerOpen, setViewerOpen] = useState(false);
+    const [selectedImage, setSelectedImage] = useState(null);
+    // 预测评估状态
+    const [predEvalOpen, setPredEvalOpen] = useState(false);
+    const [predEvalEnabled, setPredEvalEnabled] = useState(false);
+    const [predEvalModel, setPredEvalModel] = useState(null);
+    const [predEvalIouThresh, setPredEvalIouThresh] = useState(0.5);
+    const [predEvalScoreThresh, setPredEvalScoreThresh] = useState(0.0);
+    const [predEvalFilter, setPredEvalFilter] = useState(null); // null | 'correct' | 'fp' | 'fn'
+    const [showMapModal, setShowMapModal] = useState(false);
+    // 控制哪些预测模型可见（null 表示全显示，Set 表示白名单）
+    const [visiblePredModels, setVisiblePredModels] = useState(null);
 
     // 标注类别统计
     const labelCategoryStats = {};
@@ -879,22 +1543,83 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
         return ['all', ...Array.from(set).sort()];
     }, [images]);
 
-    // 筛选图片
-    const filteredImages = images.filter(img => {
-        // 目录筛选
+    // 是否存在置信度分数字段（决定是否显示分数筛选器）
+    const hasScoreData = React.useMemo(() =>
+        images.some(img => img.annotations.some(a => typeof a.score === 'number' && !isNaN(a.score)))
+    , [images]);
+
+    // 预测模型列表（只有同时存在GT和预测时才有）
+    const predModelNames = React.useMemo(() => {
+        const models = new Set();
+        images.forEach(img => (img.pred_annotations || []).forEach(a => { if (a._pred_source) models.add(a._pred_source); }));
+        return [...models].sort();
+    }, [images]);
+    const hasPredData = predModelNames.length > 0 && images.some(img => (img.annotations || []).length > 0);
+
+    // 数据集切换时重置可见模型（全部默认可见）
+    useEffect(() => {
+        setVisiblePredModels(new Set(predModelNames));
+    }, [predModelNames.join(',')]); // eslint-disable-line
+
+    // 预测评估结果（各图片 image_id → { hasFP, hasFN, tp, fp, fn }）
+    const imageEvalResults = React.useMemo(() => {
+        if (!predEvalEnabled || !predEvalModel) return {};
+        const res = {};
+        images.forEach(img => { res[img.image_id] = evalImagePred(img, predEvalModel, predEvalIouThresh, predEvalScoreThresh); });
+        return res;
+    }, [images, predEvalEnabled, predEvalModel, predEvalIouThresh, predEvalScoreThresh]);
+
+    // 各类别计数（图片可同时属于误检和漏检）
+    const evalStats = React.useMemo(() => {
+        if (!predEvalEnabled) return null;
+        const c = { correct: 0, fp: 0, fn: 0 };
+        Object.values(imageEvalResults).forEach(r => {
+            if (!r.hasFP && !r.hasFN) c.correct++;
+            if (r.hasFP) c.fp++;
+            if (r.hasFN) c.fn++;
+        });
+        return c;
+    }, [imageEvalResults, predEvalEnabled]);
+
+    // 筛选图片（与宫格一致；大图查看器用同一份列表翻页，filteredImages 直接传入 ImageViewer）
+    const filteredImages = React.useMemo(() => images.filter(img => {
         if (selectedDirectory !== 'all' && (img.source_path != null ? img.source_path : '') !== selectedDirectory) return false;
-        // 标注类别筛选
         if (selectedLabelCategory !== 'all' && !img.annotations.some(a => a.category === selectedLabelCategory)) return false;
-        // 图片分类筛选（归属该分类即显示）
         if (selectedImageCategory !== 'all') {
             const arr = imageClassifications[img.image_id];
             const imgCats = Array.isArray(arr) && arr.length ? arr : [defaultImageCat];
             if (!imgCats.includes(selectedImageCategory)) return false;
         }
-        // 文件名搜索
         if (searchText && !img.file_name.toLowerCase().includes(searchText.toLowerCase())) return false;
+        // 置信度范围筛选：只要图片中任意框的分数在范围内即通过
+        if (scoreMin !== '' || scoreMax !== '') {
+            const sMin = scoreMin !== '' ? parseFloat(scoreMin) : -Infinity;
+            const sMax = scoreMax !== '' ? parseFloat(scoreMax) : Infinity;
+            const hit = img.annotations.some(a => {
+                const s = typeof a.score === 'number' ? a.score : parseFloat(a.score);
+                return !isNaN(s) && s >= sMin && s <= sMax;
+            });
+            if (!hit) return false;
+        }
+        // 预测评估筛选
+        if (predEvalEnabled && predEvalFilter !== null) {
+            const r = imageEvalResults[img.image_id];
+            if (!r) return false;
+            if (predEvalFilter === 'correct' && (r.hasFP || r.hasFN)) return false;
+            if (predEvalFilter === 'fp' && !r.hasFP) return false;
+            if (predEvalFilter === 'fn' && !r.hasFN) return false;
+        }
         return true;
-    });
+    }), [images, selectedDirectory, selectedLabelCategory, selectedImageCategory, searchText, imageClassifications, defaultImageCat, scoreMin, scoreMax, predEvalEnabled, predEvalFilter, imageEvalResults]);
+
+    // 筛选条件变化时：当前大图若不在新列表里，跳到第一张；列表为空则关闭
+    const selectedImageId = selectedImage && selectedImage.image_id;
+    useEffect(() => {
+        if (!viewerOpen || selectedImageId == null) return;
+        if (filteredImages.length === 0) { setViewerOpen(false); return; }
+        const stillIn = filteredImages.some(i => i.image_id === selectedImageId);
+        if (!stillIn) setSelectedImage(filteredImages[0]);
+    }, [viewerOpen, filteredImages, selectedImageId]);
 
     const totalPages = Math.ceil(filteredImages.length / pageSize);
     const startIdx = (currentPage - 1) * pageSize;
@@ -1048,7 +1773,132 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                             <option value="all">全部标注类别</option>
                             {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                         </select>
+                        {/* 预测模型可见性切换（有预测数据时显示） */}
+                        {predModelNames.length > 0 && visiblePredModels && (
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
+                                <span style={{ fontSize: '12px', color: '#888' }}>预测模型:</span>
+                                {predModelNames.map(model => {
+                                    const isOn = visiblePredModels.has(model);
+                                    return (
+                                        <button
+                                            key={model}
+                                            className="btn btn-sm"
+                                            title={isOn ? `隐藏 ${model} 的预测结果` : `显示 ${model} 的预测结果`}
+                                            style={{
+                                                fontSize: '11px', padding: '2px 8px',
+                                                background: isOn ? '#2a4a7a' : 'transparent',
+                                                color: isOn ? '#7af' : '#555',
+                                                border: `1px solid ${isOn ? '#4a7af0' : '#444'}`,
+                                                fontWeight: isOn ? 'bold' : 'normal',
+                                                maxWidth: '120px',
+                                                overflow: 'hidden',
+                                                textOverflow: 'ellipsis',
+                                                whiteSpace: 'nowrap',
+                                            }}
+                                            onClick={() => {
+                                                setVisiblePredModels(prev => {
+                                                    const next = new Set(prev);
+                                                    if (next.has(model)) next.delete(model);
+                                                    else next.add(model);
+                                                    return next;
+                                                });
+                                            }}
+                                        >
+                                            {isOn ? '◉' : '○'} {model}
+                                        </button>
+                                    );
+                                })}
+                            </span>
+                        )}
+                        {/* 预测评估入口（仅同时有GT和预测时显示） */}
+                        {hasPredData && (
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
+                                <button
+                                    className={`btn btn-sm ${predEvalEnabled ? 'btn-primary' : 'btn-secondary'}`}
+                                    style={{ fontSize: '12px', padding: '3px 8px' }}
+                                    title={predEvalEnabled ? `当前模型: ${predEvalModel}，点击重新配置` : '开启预测评估筛选'}
+                                    onClick={() => setPredEvalOpen(true)}
+                                >
+                                    🔬 {predEvalEnabled ? predEvalModel : '预测评估'}
+                                </button>
+                                {predEvalEnabled && evalStats && (
+                                    <>
+                                        {[
+                                            { key: 'correct', label: '✓ 预测正确', color: '#52c41a' },
+                                            { key: 'fp', label: '⚡ 误检', color: '#faad14' },
+                                            { key: 'fn', label: '◎ 漏检', color: '#f5222d' },
+                                        ].map(({ key, label, color }) => (
+                                            <button
+                                                key={key}
+                                                className="btn btn-sm"
+                                                style={{
+                                                    fontSize: '12px', padding: '3px 8px',
+                                                    background: predEvalFilter === key ? color : 'transparent',
+                                                    color: predEvalFilter === key ? '#fff' : color,
+                                                    border: `1px solid ${color}`,
+                                                    fontWeight: predEvalFilter === key ? 'bold' : 'normal',
+                                                }}
+                                                onClick={() => { setPredEvalFilter(predEvalFilter === key ? null : key); setCurrentPage(1); }}
+                                            >
+                                                {label} <span style={{ opacity: 0.8 }}>({evalStats[key]})</span>
+                                            </button>
+                                        ))}
+                                        <button
+                                            className="btn btn-sm"
+                                            style={{ fontSize: '12px', padding: '3px 8px', background: '#1a2a4a', color: '#7af', border: '1px solid #4a7af0' }}
+                                            title="计算 mAP 等检测指标"
+                                            onClick={() => setShowMapModal(true)}
+                                        >📊 指标</button>
+                                        <button
+                                            className="btn btn-sm btn-secondary"
+                                            style={{ fontSize: '12px', padding: '3px 6px' }}
+                                            title="关闭预测评估"
+                                            onClick={() => { setPredEvalEnabled(false); setPredEvalFilter(null); setPredEvalModel(null); setCurrentPage(1); }}
+                                        >✕</button>
+                                    </>
+                                )}
+                            </span>
+                        )}
+                        {hasScoreData && (
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
+                                <span style={{ fontSize: '12px', color: '#555' }}>置信度</span>
+                                <input
+                                    type="number" min="0" max="1" step="0.01"
+                                    className="filter-input"
+                                    style={{ width: '62px', padding: '4px 6px' }}
+                                    placeholder="下限"
+                                    value={scoreMin}
+                                    onChange={e => { setScoreMin(e.target.value); setCurrentPage(1); }}
+                                />
+                                <span style={{ fontSize: '12px', color: '#888' }}>~</span>
+                                <input
+                                    type="number" min="0" max="1" step="0.01"
+                                    className="filter-input"
+                                    style={{ width: '62px', padding: '4px 6px' }}
+                                    placeholder="上限"
+                                    value={scoreMax}
+                                    onChange={e => { setScoreMax(e.target.value); setCurrentPage(1); }}
+                                />
+                                {(scoreMin !== '' || scoreMax !== '') && (
+                                    <button
+                                        className="btn btn-sm"
+                                        style={{ padding: '2px 6px', fontSize: '11px', background: '#f0f0f0', color: '#666' }}
+                                        onClick={() => { setScoreMin(''); setScoreMax(''); setCurrentPage(1); }}
+                                        title="清除置信度筛选"
+                                    >✕</button>
+                                )}
+                            </span>
+                        )}
                         <input className="filter-input" placeholder="搜索文件名..." value={searchText} onChange={(e) => { setSearchText(e.target.value); setCurrentPage(1); }} />
+                        {autoSaveStatus === 'pending' && (
+                            <span style={{ fontSize: '12px', color: '#aaa', whiteSpace: 'nowrap' }}>⏳ 备份中…</span>
+                        )}
+                        {autoSaveStatus === 'saved' && (
+                            <span style={{ fontSize: '12px', color: '#52c41a', whiteSpace: 'nowrap' }}>✓ 已备份</span>
+                        )}
+                        {autoSaveStatus === 'error' && (
+                            <span style={{ fontSize: '12px', color: '#f5222d', whiteSpace: 'nowrap' }}>⚠ 备份失败</span>
+                        )}
                         <button className="btn btn-success btn-sm" onClick={() => setShowSaveModal(true)} disabled={saving}>
                             {saving ? '保存中...' : `💾 ${gallery.saveButtonText}`}
                         </button>
@@ -1098,7 +1948,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                         sel ? newSet.add(img.image_id) : newSet.delete(img.image_id);
                                         setSelectedImages(newSet);
                                     }}
-                                    onClick={() => onImageClick(img)}
+                                    onClick={() => { setSelectedImage(img); setViewerOpen(true); }}
                                 />
                             ))}
                         </div>
@@ -1160,6 +2010,52 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                     saving={saving}
                 />
             )}
+
+            {showMapModal && predEvalModel && (
+                <MapReportModal
+                    images={images}
+                    model={predEvalModel}
+                    scoreThresh={predEvalScoreThresh}
+                    onClose={() => setShowMapModal(false)}
+                />
+            )}
+
+            {predEvalOpen && (
+                <PredEvalModal
+                    predModelNames={predModelNames}
+                    initModel={predEvalModel}
+                    initIou={predEvalIouThresh}
+                    initScore={predEvalScoreThresh}
+                    onApply={({ model, iouThresh, scoreThresh }) => {
+                        setPredEvalModel(model);
+                        setPredEvalIouThresh(iouThresh);
+                        setPredEvalScoreThresh(scoreThresh);
+                        setPredEvalEnabled(true);
+                        setPredEvalFilter(null);
+                        setCurrentPage(1);
+                        setPredEvalOpen(false);
+                    }}
+                    onClose={() => setPredEvalOpen(false)}
+                />
+            )}
+
+            {viewerOpen && selectedImage && (
+                <ImageViewer
+                    image={selectedImage}
+                    images={filteredImages}
+                    datasetId={datasetData.dataset_id}
+                    categories={categories}
+                    imageClassifications={imageClassifications}
+                    imageNotes={imageNotes}
+                    imageCategories={imageCategories}
+                    visiblePredModels={visiblePredModels}
+                    onClose={() => setViewerOpen(false)}
+                    onNavigate={(img) => setSelectedImage(img)}
+                    onUpdateCategory={onUpdateCategory}
+                    onUpdateCategories={onUpdateCategories}
+                    onUpdateNote={onUpdateNote}
+                />
+            )}
         </>
     );
 }
@@ -1181,8 +2077,8 @@ function SettingsModal({ onClose }) {
 
     const updateCategoryName = (index, newName) => {
         if (index === 0) return; // 首项「未分类」不可改
-        const name = (newName || '').trim() || imageCategories[index];
-        if (name === imageCategories[index]) return;
+        const name = (newName || '').trim();
+        if (!name || name === imageCategories[index]) return; // 空值或未变则不更新
         setSettings(prev => {
             const cats = [...(prev.imageCategories ?? imageCategories)];
             const cols = { ...(prev.imageCategoryColors ?? imageCategoryColors) };
@@ -1285,11 +2181,12 @@ function SettingsModal({ onClose }) {
                                         <span className="form-input" style={{ flex: 1, minWidth: 0, background: '#f0f0f0', color: '#666', cursor: 'not-allowed' }} title="固定，不可修改">未分类</span>
                                     ) : (
                                         <input
+                                            key={name}
                                             type="text"
                                             className="form-input"
-                                            value={name}
-                                            onChange={(e) => updateCategoryName(i, e.target.value)}
+                                            defaultValue={name}
                                             onBlur={(e) => updateCategoryName(i, e.target.value)}
+                                            onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
                                             placeholder={st.categoryNamePlaceholder || '分类名称'}
                                             style={{ flex: 1, minWidth: 0 }}
                                         />
@@ -1733,14 +2630,18 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
                         description: `${datasetData.dataset_name} - ${cat}`,
                         date_created: new Date().toISOString()
                     },
-                    images: catImages.map(img => ({
-                        id: img.image_id,
-                        file_name: img.file_name.split('/').pop() || img.file_name,
-                        width: img.width,
-                        height: img.height,
-                        image_category: cat,
-                        note: img.note || ''
-                    })),
+                    images: catImages.map(img => {
+                        // 解构出前端专用字段，其余全部保留
+                        const { annotations: _a, num_annotations: _n, image_id, image_categories: _ic, ...imgRest } = img;
+                        return {
+                            ...imgRest,
+                            id: image_id,
+                            file_name: (imgRest.file_name || '').split('/').pop() || imgRest.file_name,
+                            image_category: cat,
+                            image_categories: imageClassifications[image_id] || [cat],
+                            note: imageNotes[image_id] || imgRest.note || '',
+                        };
+                    }),
                     annotations: [],
                     categories: datasetData.categories.map((c, idx) => ({ id: idx + 1, name: c }))
                 };
@@ -1749,13 +2650,13 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
                 catImages.forEach(img => {
                     img.annotations.forEach(ann => {
                         const catIdx = datasetData.categories.indexOf(ann.category);
+                        // 解构出需要重映射或前端专用的字段，其余（score、iscrowd 等）全部原样保留
+                        const { category: _c, has_segmentation: _hs, id: _id, image_id: _iid, category_id: _cid, ...annRest } = ann;
                         cocoData.annotations.push({
+                            ...annRest,
                             id: annId++,
                             image_id: img.image_id,
                             category_id: catIdx >= 0 ? catIdx + 1 : 1,
-                            bbox: ann.bbox,
-                            area: ann.area || (ann.bbox ? ann.bbox[2] * ann.bbox[3] : 0),
-                            iscrowd: ann.iscrowd || 0
                         });
                     });
                 });
@@ -1898,7 +2799,7 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
 }
 
 // ==================== 图片查看器（仅查看，支持图片分类与备注） ====================
-function ImageViewer({ image, images, datasetId, categories, imageClassifications, imageNotes, imageCategories, onClose, onNavigate, onUpdateCategory, onUpdateCategories, onUpdateNote }) {
+function ImageViewer({ image, images, datasetId, categories, imageClassifications, imageNotes, imageCategories, visiblePredModels, onClose, onNavigate, onUpdateCategory, onUpdateCategories, onUpdateNote }) {
     const config = useConfig();
     const viewer = config.viewer || DEFAULT_CONFIG.viewer;
     const catList = imageCategories || DEFAULT_CONFIG.imageCategories;
@@ -1916,6 +2817,8 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     useEffect(() => { zoomPanRef.current = { zoom, panX, panY }; }, [zoom, panX, panY]);
     const [hiddenAnns, setHiddenAnns] = useState(new Set());
     const [hoveredAnnIdx, setHoveredAnnIdx] = useState(null);
+    const [hiddenPredAnns, setHiddenPredAnns] = useState(new Set());
+    const [hoveredPredAnnIdx, setHoveredPredAnnIdx] = useState(null);
     const lineWidthOpts = viewer.lineWidthOptions || [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
     const [lineWidth, setLineWidth] = useState(() => {
         const d = viewer.lineWidthDefault;
@@ -1924,6 +2827,14 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     const [currentImage, setCurrentImage] = useState(image);
     const [noteInput, setNoteInput] = useState('');
     const noteInputRef = useRef(null);
+
+    // 父级因筛选变化等原因更新当前图时，与内部状态同步
+    useEffect(() => {
+        setCurrentImage(image);
+        setHiddenAnns(new Set());
+        setHiddenPredAnns(new Set());
+        setHoveredPredAnnIdx(null);
+    }, [image.image_id]);
 
     const imageIdx = images.findIndex(i => i.image_id === currentImage.image_id);
     let imageUrl = `/api/get_image?dataset_id=${datasetId}&file_name=${encodeURIComponent(currentImage.file_name)}`;
@@ -2008,7 +2919,61 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                 });
             }
         });
-    }, [currentImage, zoom, hiddenAnns, hoveredAnnIdx, lineWidth, palette]);
+
+        // 绘制预测标注（虚线区分，其余交互与 GT 完全一致）
+        const PRED_DASH_PATTERNS = [[8,4],[4,4],[2,4],[10,4,2,4],[14,4]];
+        const predAnns = currentImage.pred_annotations || [];
+        const predModels = [...new Set(predAnns.map(a => a._pred_source))];
+        predAnns.forEach((ann, idx) => {
+            if (!ann.bbox || ann.bbox.length < 4) return;
+            if (hiddenPredAnns.has(idx)) return;
+            // 全局模型可见性过滤
+            if (visiblePredModels && !visiblePredModels.has(ann._pred_source)) return;
+            const [x, y, bw, bh] = ann.bbox;
+            const rx = x * sx, ry = y * sy, rw = bw * sx, rh = bh * sy;
+            const isHovered = hoveredPredAnnIdx === idx;
+            const modelIdx = predModels.indexOf(ann._pred_source);
+            const dash = PRED_DASH_PATTERNS[modelIdx % PRED_DASH_PATTERNS.length];
+            const color = getCategoryColor(palette, ann.category);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = isHovered ? Math.max(lineWidth + 0.2, 0.3) : lineWidth;
+            ctx.setLineDash(dash);
+            ctx.strokeRect(rx, ry, rw, rh);
+            ctx.setLineDash([]);
+            if (isHovered) {
+                const area = bw * bh;
+                const lines = [
+                    `[预测] ${ann._pred_source}`,
+                    ann.category,
+                    ann.score !== undefined && ann.score !== null
+                        ? `置信度: ${(Number(ann.score) * 100).toFixed(1)}%`
+                        : null,
+                    `[${Math.round(x)},${Math.round(y)},${Math.round(bw)}×${Math.round(bh)}]`,
+                    `面积: ${area.toLocaleString()}`
+                ].filter(Boolean);
+                ctx.font = '12px sans-serif';
+                const lineH = 14;
+                const pad = 6;
+                const boxW = Math.max(...lines.map(l => ctx.measureText(l).width)) + pad * 2;
+                const boxH = lines.length * lineH + pad * 2;
+                let tx = rx, ty = ry - boxH - 4;
+                if (ty < 0) ty = ry + rh + 4;
+                if (tx + boxW > w) tx = w - boxW;
+                if (tx < 0) tx = 4;
+                ctx.fillStyle = 'rgba(0,0,0,0.85)';
+                ctx.fillRect(tx, ty, boxW, boxH);
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1;
+                ctx.setLineDash(dash);
+                ctx.strokeRect(tx, ty, boxW, boxH);
+                ctx.setLineDash([]);
+                ctx.fillStyle = '#fff';
+                lines.forEach((line, i) => {
+                    ctx.fillText(line, tx + pad, ty + pad + (i + 1) * lineH - 2);
+                });
+            }
+        });
+    }, [currentImage, zoom, hiddenAnns, hoveredAnnIdx, lineWidth, palette, hiddenPredAnns, hoveredPredAnnIdx, visiblePredModels]);
 
     useEffect(() => {
         setPanX(0);
@@ -2030,7 +2995,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         setTimeout(drawAnnotations, 50);
     };
 
-    useEffect(() => { drawAnnotations(); }, [zoom, hiddenAnns, hoveredAnnIdx, lineWidth, drawAnnotations]);
+    useEffect(() => { drawAnnotations(); }, [zoom, hiddenAnns, hoveredAnnIdx, hiddenPredAnns, hoveredPredAnnIdx, lineWidth, drawAnnotations]);
 
     const navigate = (dir) => {
         if (onUpdateNote && noteInput !== currentNote) onUpdateNote(currentImage.image_id, noteInput);
@@ -2098,7 +3063,8 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         };
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
-    }, [imageIdx, currentImage.image_id, noteInput, currentNote, catList, currentCategories, onUpdateCategories, onUpdateCategory]);
+    // images 必须参与依赖：否则筛选后列表变短但 imageIdx/当前图 id 未变时，键盘仍沿用旧的「全量」images 闭包
+    }, [imageIdx, currentImage.image_id, noteInput, currentNote, catList, currentCategories, onUpdateCategories, onUpdateCategory, images]);
 
     // 跟踪 Ctrl/Cmd 按下状态（部分浏览器/系统在 wheel 事件中不设置 ctrlKey/metaKey）
     useEffect(() => {
@@ -2308,6 +3274,104 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                         <button className="tool-btn" style={{flex: 1}} onClick={() => setHiddenAnns(new Set())}>全部显示</button>
                         <button className="tool-btn" style={{flex: 1}} onClick={() => setHiddenAnns(new Set(currentImage.annotations.map((_, i) => i)))}>全部隐藏</button>
                     </div>
+
+                    {/* 预测标注列表（交互与 GT 完全一致，按模型分组） */}
+                    {(() => {
+                        const allPredAnns = currentImage.pred_annotations || [];
+                        if (allPredAnns.length === 0) return null;
+                        const PRED_DASH_DESCS = ['— — —', '-- --', '· · ·', '—·—·', '——— '];
+                        const allPredModels = [...new Set(allPredAnns.map(a => a._pred_source))];
+                        // 保留全部模型的原始索引，但在渲染时区分可见/隐藏
+                        const predAnns = allPredAnns;
+                        const predModels = allPredModels;
+                        const togglePredAnn = (globalIdx) => {
+                            setHiddenPredAnns(prev => {
+                                const next = new Set(prev);
+                                if (next.has(globalIdx)) next.delete(globalIdx); else next.add(globalIdx);
+                                return next;
+                            });
+                        };
+                        const toggleModelAll = (model) => {
+                            const idxs = predAnns.map((a, i) => a._pred_source === model ? i : -1).filter(i => i >= 0);
+                            const allHidden = idxs.every(i => hiddenPredAnns.has(i));
+                            setHiddenPredAnns(prev => {
+                                const next = new Set(prev);
+                                if (allHidden) idxs.forEach(i => next.delete(i));
+                                else idxs.forEach(i => next.add(i));
+                                return next;
+                            });
+                        };
+                        return (
+                            <>
+                                <div className="viewer-sidebar-header" style={{marginTop: '10px', background: '#2a2a4a'}}>
+                                    <span>预测标注</span>
+                                    <span>{predAnns.length}</span>
+                                </div>
+                                {predModels.map((model, modelIdx) => {
+                                    const modelIdxs = predAnns.map((a, i) => a._pred_source === model ? i : -1).filter(i => i >= 0);
+                                    const dashDesc = PRED_DASH_DESCS[modelIdx % PRED_DASH_DESCS.length];
+                                    const allHidden = modelIdxs.every(i => hiddenPredAnns.has(i));
+                                    const globallyHidden = visiblePredModels && !visiblePredModels.has(model);
+                                    return (
+                                        <div key={model}>
+                                            {/* 模型标题行：点击整体切换该模型所有框 */}
+                                            <div
+                                                onClick={() => !globallyHidden && toggleModelAll(model)}
+                                                title={globallyHidden ? '该模型已在工具栏中关闭，点击可在工具栏重新开启' : undefined}
+                                                style={{
+                                                    padding: '5px 12px',
+                                                    background: globallyHidden ? '#1a1a2a' : '#252545',
+                                                    fontSize: '11px',
+                                                    color: (allHidden || globallyHidden) ? '#444' : '#bbb',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '6px',
+                                                    cursor: globallyHidden ? 'default' : 'pointer',
+                                                    userSelect: 'none',
+                                                    borderBottom: '1px solid #333355',
+                                                    opacity: globallyHidden ? 0.5 : 1,
+                                                }}
+                                            >
+                                                <span style={{fontFamily: 'monospace', fontSize: '13px', letterSpacing: '1px', color: globallyHidden ? '#444' : '#7af'}}>{dashDesc}</span>
+                                                <span style={{fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{model}</span>
+                                                {globallyHidden && <span style={{fontSize:'10px', color:'#f55', marginLeft:'2px'}}>[已关闭]</span>}
+                                                <span style={{marginLeft: 'auto', color: '#666'}}>{modelIdxs.length}</span>
+                                                <span style={{color: '#666'}}>{globallyHidden ? '✕' : (allHidden ? '○' : '●')}</span>
+                                            </div>
+                                            {/* 逐条标注列表（全局隐藏时折叠） */}
+                                            {!globallyHidden && modelIdxs.map(globalIdx => {
+                                                const ann = predAnns[globalIdx];
+                                                const isHidden = hiddenPredAnns.has(globalIdx);
+                                                const isHovered = hoveredPredAnnIdx === globalIdx;
+                                                return (
+                                                    <div
+                                                        key={globalIdx}
+                                                        className={`viewer-ann-item ${isHidden ? 'hidden' : ''} ${isHovered ? 'viewer-ann-item-hovered' : ''}`}
+                                                        style={{ borderLeftColor: getCategoryColor(palette, ann.category) }}
+                                                        onClick={() => togglePredAnn(globalIdx)}
+                                                        onMouseEnter={() => setHoveredPredAnnIdx(globalIdx)}
+                                                        onMouseLeave={() => setHoveredPredAnnIdx(null)}
+                                                    >
+                                                        <div className="viewer-ann-color" style={{ background: getCategoryColor(palette, ann.category) }}></div>
+                                                        <span className="viewer-ann-text">{ann.category}</span>
+                                                        {ann.score !== undefined && ann.score !== null && (
+                                                            <span className="viewer-ann-score">{(Number(ann.score) * 100).toFixed(1)}%</span>
+                                                        )}
+                                                        <span style={{marginLeft: 'auto', color: '#666'}}>{isHidden ? '○' : '●'}</span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    );
+                                })}
+                                {/* 底部全显/全隐按钮 */}
+                                <div style={{padding: '10px', background: '#2a2a44', display: 'flex', gap: '8px'}}>
+                                    <button className="tool-btn" style={{flex: 1}} onClick={() => setHiddenPredAnns(new Set())}>全部显示</button>
+                                    <button className="tool-btn" style={{flex: 1}} onClick={() => setHiddenPredAnns(new Set(predAnns.map((_, i) => i)))}>全部隐藏</button>
+                                </div>
+                            </>
+                        );
+                    })()}
                 </div>
             </div>
         </div>

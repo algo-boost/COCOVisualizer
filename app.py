@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import re
 import sys
 import json
 import math
@@ -77,7 +78,9 @@ def _persist_dataset(dataset_id, coco_json_path, dataset_name='dataset', image_d
     if path.exists():
         try:
             with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    data = loaded
         except Exception:
             pass
     data[dataset_id] = {
@@ -97,6 +100,8 @@ def _get_dataset_info(dataset_id):
     try:
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
+        if not isinstance(data, dict):
+            return None
         return data.get(dataset_id)
     except Exception:
         return None
@@ -121,12 +126,14 @@ def _ensure_dataset_loaded(dataset_id):
         coco_data = json.load(f)
     if isinstance(coco_data.get('source_dirs'), dict):
         eda.source_dirs = coco_data['source_dirs']
+    if isinstance(coco_data.get('source_coco_paths'), dict):
+        eda.source_coco_paths = coco_data['source_coco_paths']
     _fill_image_dimensions(eda)
     current_datasets[dataset_id] = eda
     return eda
 
 
-MAX_VERSIONS = 30
+MAX_VERSIONS = 50
 # 存档目录：与 COCO 文件同目录下的 .coco_visualizer，所有版本快照与 manifest 均在此目录
 # 最新内容 = 直接覆盖主 COCO 文件；首次加载时把原版 COCO 存档到 .coco_visualizer 作为首条记录
 VERSIONS_DIR_NAME = '.coco_visualizer'
@@ -363,6 +370,52 @@ def upload_file():
 
 
 COCO_ANNOTATION_FILENAME = '_annotations.coco.json'
+PRED_ANNOTATION_PATTERN = re.compile(r'^_annotations\.(.+)\.pred\.coco\.json$')
+
+
+def _find_pred_files(coco_dir):
+    """扫描目录下所有预测结果 COCO 文件（_annotations.{model}.pred.coco.json）"""
+    pred_files = []
+    d = Path(coco_dir)
+    if not d.is_dir():
+        return pred_files
+    try:
+        for p in d.iterdir():
+            if p.is_file():
+                m = PRED_ANNOTATION_PATTERN.match(p.name)
+                if m:
+                    pred_files.append({'path': str(p), 'model_name': m.group(1)})
+    except Exception:
+        pass
+    return pred_files
+
+
+def _load_pred_anns_from_file(pred_path, model_name):
+    """从预测 COCO 文件中加载标注，返回 {file_name: [ann_dict]}，每条 ann 包含 _pred_source"""
+    try:
+        with open(pred_path, 'r', encoding='utf-8') as f:
+            pred_coco = json.load(f)
+        cats = {c['id']: c['name'] for c in pred_coco.get('categories', [])}
+        img_id_to_fname = {img['id']: img['file_name'] for img in pred_coco.get('images', [])}
+        fname_to_anns = {}
+        for ann in pred_coco.get('annotations', []):
+            fname = img_id_to_fname.get(ann.get('image_id'))
+            if not fname:
+                continue
+            bbox = extract_bbox(ann.get('bbox'))
+            if not bbox or len(bbox) < 4:
+                continue
+            pred_ann = {
+                'category': cats.get(ann.get('category_id'), 'unknown'),
+                'bbox': bbox,
+                '_pred_source': model_name,
+            }
+            if ann.get('score') is not None:
+                pred_ann['score'] = float(ann['score'])
+            fname_to_anns.setdefault(fname, []).append(pred_ann)
+        return fname_to_anns
+    except Exception:
+        return {}
 
 
 def _add_normalized_bbox_stats(eda, df):
@@ -616,7 +669,9 @@ def get_loader_record():
 def load_dataset():
     """加载COCO数据集并返回所有可视化数据"""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
+        if not isinstance(data, dict):
+            data = {}
         coco_json_path = data.get('coco_json_path')
         image_dir = data.get('image_dir', '')
         dataset_name = data.get('dataset_name', 'dataset')
@@ -790,11 +845,15 @@ def load_dataset():
             }
         
         # 首次加载：若该 COCO 对应目录下尚无 .coco_visualizer 存档，则把当前（原版）COCO 存档为第一条记录
+        with open(eda.coco_json_path, 'r', encoding='utf-8') as f:
+            coco_data = json.load(f)
         if not _list_versions(eda.coco_json_path):
-            with open(eda.coco_json_path, 'r', encoding='utf-8') as f:
-                coco_data = json.load(f)
             _save_version(eda.coco_json_path, coco_data, comment='加载时原版')
-        
+        # 若 COCO 文件含有本软件写入的图片分类定义，原样返回给前端（保持分类顺序/颜色完全一致）
+        _cat_defs = coco_data.get('image_category_definitions')
+        if _cat_defs:
+            visualization_data['image_category_definitions'] = _cat_defs
+
         return jsonify({
             'success': True,
             **visualization_data
@@ -804,9 +863,17 @@ def load_dataset():
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 
+def _source_fingerprint(items):
+    """根据源 COCO 路径排序后计算 MD5 指纹，用于生成稳定的合并文件名。"""
+    import hashlib
+    paths = sorted(str(Path(item['coco_path']).resolve()) for item in items)
+    return hashlib.md5('\n'.join(paths).encode('utf-8')).hexdigest()[:16]
+
+
 def _load_dataset_merged_impl(items, dataset_name='merged', output_dir=None):
     """合并多个 COCO（每个 item 含 coco_path, image_dir, relative_path），生成一个 CocoEDA 并返回 (eda, visualization_data)。
-    output_dir：合并文件写入的目录，必须为加载的数据集对应目录（如扫描根目录），不写入 app 的 data 目录。"""
+    output_dir：合并文件写入的目录，必须为加载的数据集对应目录（如扫描根目录），不写入 app 的 data 目录。
+    同一组源文件始终复用同一个 merged 文件（基于路径指纹），并保留用户已设置的分类和备注。"""
     from datetime import datetime
     name_to_id = {}
     next_cat_id = 1
@@ -860,28 +927,65 @@ def _load_dataset_merged_impl(items, dataset_name='merged', output_dir=None):
             new_ann['category_id'] = new_cat
             merged_annotations.append(new_ann)
     categories_list = [{'id': iid, 'name': name} for name, iid in sorted(name_to_id.items(), key=lambda x: x[1])]
+
+    # ---- 基于源文件路径指纹生成稳定文件名，同一组源文件始终复用同一个 merged 文件 ----
+    fp = _source_fingerprint(items)
+    if output_dir:
+        out = Path(output_dir).resolve()
+        out.mkdir(parents=True, exist_ok=True)
+        merged_path = out / f'merged_{dataset_name}_{fp}.json'
+    else:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        merged_path = DATA_DIR / f'merged_{dataset_name}_{fp}.json'
+
+    # 若该指纹文件已存在，则把之前保存的 image_categories / note 迁移到新合并数据中
+    if merged_path.exists():
+        try:
+            with open(merged_path, 'r', encoding='utf-8') as _f:
+                _old = json.load(_f)
+            # 以 (source_path, file_name) 为键建立旧分类索引
+            _old_meta = {}
+            for _img in _old.get('images', []):
+                _key = (_img.get('source_path', ''), _img.get('file_name', ''))
+                if _key[1]:
+                    _old_meta[_key] = {
+                        'image_categories': _img.get('image_categories'),
+                        'image_category': _img.get('image_category'),
+                        'note': _img.get('note'),
+                    }
+            # 将旧分类写入重新合并后的图片记录
+            for _img in merged_images:
+                _key = (_img.get('source_path', ''), _img.get('file_name', ''))
+                if _key in _old_meta:
+                    _m = _old_meta[_key]
+                    if _m.get('image_categories') is not None:
+                        _img['image_categories'] = _m['image_categories']
+                        _img['image_category'] = _m.get('image_category') or (_m['image_categories'][0] if _m['image_categories'] else '未分类')
+                    if _m.get('note') is not None:
+                        _img['note'] = _m['note']
+            # 迁移图片分类定义（保持顺序与颜色）
+            _old_cat_defs = _old.get('image_category_definitions')
+        except Exception:
+            _old_cat_defs = None  # 迁移失败时静默降级，使用全新合并数据
+    else:
+        _old_cat_defs = None
+
+    # 记录每个相对路径对应的源 COCO 文件路径，供 save_image_metadata 写回
+    source_coco_paths = {item.get('relative_path') or '': str(Path(item['coco_path']).resolve()) for item in items}
     merged_coco = {
         'images': merged_images,
         'annotations': merged_annotations,
         'categories': categories_list,
-        'source_dirs': source_dirs
+        'source_dirs': source_dirs,
+        'source_coco_paths': source_coco_paths
     }
-    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    # 合并文件写入「加载的数据集对应目录」（用户传入的 output_dir/root_path），不写入 app 的 data 目录
-    if output_dir:
-        out = Path(output_dir).resolve()
-        if out.is_dir():
-            out.mkdir(parents=True, exist_ok=True)
-            merged_path = out / f'merged_{dataset_name}_{ts}.json'
-        else:
-            merged_path = DATA_DIR / f'merged_{dataset_name}_{ts}.json'
-    else:
-        merged_path = DATA_DIR / f'merged_{dataset_name}_{ts}.json'
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if _old_cat_defs:
+        merged_coco['image_category_definitions'] = _old_cat_defs
     with open(merged_path, 'w', encoding='utf-8') as f:
         json.dump(merged_coco, f, indent=2, ensure_ascii=False)
     eda = CocoEDA(coco_json_path=str(merged_path), name=dataset_name, image_dir=list(source_dirs.values())[0] if source_dirs else None)
     eda.source_dirs = source_dirs
+    eda.source_coco_paths = source_coco_paths
     _fill_image_dimensions(eda)
     df = eda.compute_bbox_features()
     df = _add_normalized_bbox_stats(eda, df)
@@ -942,6 +1046,9 @@ def _load_dataset_merged_impl(items, dataset_name='merged', output_dir=None):
             'score': cat_score
         }
     visualization_data['all_categories_stats']['score'] = {'category': score_cat_merged, 'values': score_vals_merged} if score_cat_merged else {'category': [], 'values': []}
+    # 若合并文件中含有图片分类定义，原样返回前端
+    if merged_coco.get('image_category_definitions'):
+        visualization_data['image_category_definitions'] = merged_coco['image_category_definitions']
     visualization_data['all_categories_stats_raw'] = {
         'area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['area']) if 'area' in df.columns else []},
         'sqrt_area': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['sqrt_area']) if 'sqrt_area' in df.columns else []},
@@ -974,7 +1081,9 @@ def _load_dataset_merged_impl(items, dataset_name='merged', output_dir=None):
 def load_dataset_merged():
     """多选加载：根据扫描结果合并多个 COCO 为一个数据集。合并文件与历史版本写入 root_path（加载的数据集对应目录），不写入 app 的 data 目录。"""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
+        if not isinstance(data, dict):
+            data = {}
         items = data.get('items', [])
         dataset_name = (data.get('dataset_name') or 'merged').strip() or 'merged'
         root_path = (data.get('root_path') or data.get('merge_output_dir') or '').strip()
@@ -1002,7 +1111,9 @@ def load_dataset_merged():
 def get_filtered_data():
     """根据筛选条件返回过滤后的数据"""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
+        if not isinstance(data, dict):
+            data = {}
         dataset_id = data.get('dataset_id')
         selected_categories = data.get('selected_categories', [])
         
@@ -1096,7 +1207,9 @@ def get_images_by_category():
     支持图片元数据筛选：c_time 时间段、product_id(SN) 模糊查询、position 精确匹配；缺失字段时该条件忽略。
     """
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
+        if not isinstance(data, dict):
+            data = {}
         dataset_id = data.get('dataset_id')
         selected_categories = data.get('selected_categories', [])
         c_time_start = data.get('c_time_start')  # 可选，如 "2026-02-03 00:00:00"
@@ -1143,6 +1256,9 @@ def get_images_by_category():
         # 按图片ID分组
         image_groups = all_df.groupby('image_id')
         
+        def _is_nan(v):
+            return isinstance(v, float) and math.isnan(v)
+
         images_list = []
         for image_id, group_df in image_groups:
             # 获取图片信息
@@ -1212,21 +1328,25 @@ def get_images_by_category():
             }
             # 图片级别扩展字段（COCO 扩展）；支持一图多类 image_categories（数组）
             img_cats = img_info.get('image_categories')
-            if img_cats is not None:
-                if isinstance(img_cats, str):
-                    try:
-                        img_cats = json.loads(img_cats) if img_cats.strip() else ['未分类']
-                    except (json.JSONDecodeError, AttributeError):
-                        img_cats = [img_info.get('image_category', '未分类')]
-                else:
-                    img_cats = list(img_cats) if img_cats else ['未分类']
-            else:
+            if img_cats is None or _is_nan(img_cats):
                 single = img_info.get('image_category')
-                img_cats = [single] if single is not None and str(single).strip() else ['未分类']
+                img_cats = [str(single)] if single is not None and not _is_nan(single) and str(single).strip() else ['未分类']
+            elif isinstance(img_cats, str):
+                try:
+                    img_cats = json.loads(img_cats) if img_cats.strip() else ['未分类']
+                except (json.JSONDecodeError, AttributeError):
+                    single = img_info.get('image_category')
+                    img_cats = [str(single)] if single is not None and not _is_nan(single) and str(single).strip() else ['未分类']
+            else:
+                try:
+                    img_cats = [str(c) for c in img_cats] if img_cats else ['未分类']
+                except TypeError:
+                    img_cats = ['未分类']
             img_item['image_category'] = img_cats[0] if img_cats else '未分类'
             img_item['image_categories'] = img_cats
-            if 'note' in img_info and img_info['note'] is not None:
-                img_item['note'] = str(img_info['note'])
+            note_val = img_info.get('note')
+            if note_val is not None and not _is_nan(note_val):
+                img_item['note'] = str(note_val)
             if 'source_path' in img_info and img_info['source_path'] is not None:
                 img_item['source_path'] = str(img_info['source_path'])
             # 图片元数据扩展字段（兼容缺失）：product_id(即SN)、c_time、position
@@ -1240,12 +1360,44 @@ def get_images_by_category():
         
         # 按图片ID排序
         images_list.sort(key=lambda x: x['image_id'])
-        
+
+        # ---- 扫描同目录下的预测结果 COCO 文件 ----
+        search_dirs = set()
+        if hasattr(eda, 'coco_json_path') and eda.coco_json_path:
+            search_dirs.add(str(Path(eda.coco_json_path).parent))
+        if hasattr(eda, 'source_coco_paths') and eda.source_coco_paths:
+            for src_path in eda.source_coco_paths.values():
+                search_dirs.add(str(Path(src_path).parent))
+
+        all_pred = {}       # model_name -> {file_name -> [pred_ann]}
+        pred_model_names = []
+        for d in search_dirs:
+            for pf in _find_pred_files(d):
+                mname = pf['model_name']
+                if mname not in pred_model_names:
+                    pred_model_names.append(mname)
+                loaded = _load_pred_anns_from_file(pf['path'], mname)
+                if mname not in all_pred:
+                    all_pred[mname] = {}
+                all_pred[mname].update(loaded)
+
+        if all_pred:
+            for img_item in images_list:
+                fname = img_item['file_name']
+                fname_base = fname.replace('\\', '/').split('/')[-1]
+                pred_anns = []
+                for mname, fname_map in all_pred.items():
+                    model_anns = fname_map.get(fname) or fname_map.get(fname_base) or []
+                    pred_anns.extend(model_anns)
+                if pred_anns:
+                    img_item['pred_annotations'] = pred_anns
+
         return jsonify({
             'success': True,
             'images': images_list,
             'image_dir': str(eda.image_dir),
-            'total_images': len(images_list)
+            'total_images': len(images_list),
+            'pred_model_names': pred_model_names,
         })
     except Exception as e:
         import traceback
@@ -1301,7 +1453,9 @@ def get_image():
 def save_annotations():
     """保存标注到COCO JSON文件"""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
+        if not isinstance(data, dict):
+            data = {}
         dataset_id = data.get('dataset_id')
         images_data = data.get('images', [])
         
@@ -1375,7 +1529,9 @@ def save_annotations():
 def save_image_metadata():
     """保存图片级分类和备注：最新内容直接覆盖对应的加载 COCO 文件；存档快照写入同目录下的 .coco_visualizer/。"""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
+        if not isinstance(data, dict):
+            data = {}
         dataset_id = data.get('dataset_id')
         images_meta = data.get('images', [])  # [{ image_id, image_category, note }, ...]
         
@@ -1403,13 +1559,91 @@ def save_image_metadata():
                 img['image_category'] = cats[0] if cats else '未分类'
                 img['note'] = meta.get('note', '')
         
-        # 先写入历史版本快照（同目录下 coco_versions/<文件名>/），再写回主 COCO 文件 = 最新版本
-        version_comment = data.get('version_comment') or data.get('comment') or ''
-        version_id = _save_version(eda.coco_json_path, coco_data, comment=version_comment)
+        # 保存图片分类定义（类别顺序+颜色），供下次加载时精确还原
+        cat_defs = data.get('image_category_definitions')
+        if cat_defs and isinstance(cat_defs, dict) and cat_defs.get('categories'):
+            coco_data['image_category_definitions'] = cat_defs
+
+        # skip_version=True 时仅写回主文件（自动保存），不生成历史快照
+        skip_version = data.get('skip_version', False)
+        if not skip_version:
+            version_comment = data.get('version_comment') or data.get('comment') or ''
+            version_id = _save_version(eda.coco_json_path, coco_data, comment=version_comment)
+        else:
+            version_id = None
+
         target_path = Path(eda.coco_json_path).resolve()
         with open(target_path, 'w', encoding='utf-8') as f:
             json.dump(coco_data, f, indent=2, ensure_ascii=False)
-        
+
+        # 同步更新内存中的 eda.images_df，使同一 session 内的后续接口调用也能读到最新分类
+        if 'image_categories' not in eda.images_df.columns:
+            eda.images_df['image_categories'] = None
+        if 'image_category' not in eda.images_df.columns:
+            eda.images_df['image_category'] = None
+        if 'note' not in eda.images_df.columns:
+            eda.images_df['note'] = ''
+        for item in images_meta:
+            iid = item.get('image_id')
+            if iid is None:
+                continue
+            cats = item.get('image_categories') or ['未分类']
+            note = item.get('note', '')
+            idx_list = eda.images_df.index[eda.images_df['id'] == iid].tolist()
+            if idx_list:
+                idx = idx_list[0]
+                eda.images_df.at[idx, 'image_categories'] = list(cats)
+                eda.images_df.at[idx, 'image_category'] = cats[0] if cats else '未分类'
+                eda.images_df.at[idx, 'note'] = note
+
+        # ---- 合并数据集：同步将分类写回各源 COCO 文件，下次合并时自动继承 ----
+        source_coco_paths = coco_data.get('source_coco_paths') or getattr(eda, 'source_coco_paths', None) or {}
+        if source_coco_paths:
+            # 建立 merged image_id → (source_path_key, file_name) 索引
+            id_to_src = {}
+            for _, row in eda.images_df.iterrows():
+                rid = int(row['id'])
+                id_to_src[rid] = (str(row.get('source_path') or ''), str(row.get('file_name') or ''))
+            # 按源 COCO 文件分组
+            src_file_updates = {}  # coco_abs_path -> {file_name -> {cats, note}}
+            for item in images_meta:
+                iid = item.get('image_id')
+                if iid not in id_to_src:
+                    continue
+                sp_key, fn = id_to_src[iid]
+                src_coco_path = source_coco_paths.get(sp_key)
+                if not src_coco_path or not fn:
+                    continue
+                if src_coco_path not in src_file_updates:
+                    src_file_updates[src_coco_path] = {}
+                cats = item.get('image_categories') or ['未分类']
+                src_file_updates[src_coco_path][fn] = {
+                    'image_categories': list(cats),
+                    'image_category': cats[0] if cats else '未分类',
+                    'note': item.get('note', '')
+                }
+            for src_path_str, file_upd in src_file_updates.items():
+                try:
+                    src_p = Path(src_path_str)
+                    if not src_p.exists():
+                        continue
+                    with open(src_p, 'r', encoding='utf-8') as sf:
+                        src_coco = json.load(sf)
+                    changed = False
+                    for simg in src_coco.get('images', []):
+                        fn = simg.get('file_name', '')
+                        if fn in file_upd:
+                            u = file_upd[fn]
+                            simg['image_categories'] = u['image_categories']
+                            simg['image_category'] = u['image_category']
+                            simg['note'] = u['note']
+                            changed = True
+                    if changed:
+                        with open(src_p, 'w', encoding='utf-8') as sf:
+                            json.dump(src_coco, sf, indent=2, ensure_ascii=False)
+                except Exception:
+                    pass  # 写源文件失败不阻断主流程
+
         return jsonify({
             'success': True,
             'message': '图片级分类与备注已保存',
@@ -1426,7 +1660,9 @@ def save_image_metadata():
 def list_versions():
     """列出当前数据集的 COCO 版本记录"""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
+        if not isinstance(data, dict):
+            data = {}
         dataset_id = data.get('dataset_id')
         eda = _ensure_dataset_loaded(dataset_id)
         if eda is None:
@@ -1442,7 +1678,9 @@ def list_versions():
 def rollback_version():
     """回滚到指定版本（恢复 COCO 文件为该版本内容）"""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
+        if not isinstance(data, dict):
+            data = {}
         dataset_id = data.get('dataset_id')
         version_id = data.get('version_id')
         eda = _ensure_dataset_loaded(dataset_id)
@@ -1463,7 +1701,9 @@ def rollback_version():
 def list_server_paths():
     """列出服务器上的路径"""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
+        if not isinstance(data, dict):
+            data = {}
         base_path = data.get('base_path', '/')
         
         path = Path(base_path)
@@ -1496,7 +1736,6 @@ def list_server_paths():
 
 
 if __name__ == '__main__':
-    # 使用 6010 避免与 Cursor IDE 等对 6009 的占用冲突
     port = 6010
     url = f'http://127.0.0.1:{port}'
     # 启动时打印可访问地址，避免用户误用 0.0.0.0

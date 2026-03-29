@@ -1,0 +1,127 @@
+{
+  "dataset_3": {
+    "coco_json_path": "/Users/rookie/Desktop/误检统计/new_sampled_images/merged_dataset_8d965679a5a462d8.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/误检统计/new_sampled_images"
+  },
+  "dataset_0": {
+    "coco_json_path": "/Users/rookie/Downloads/miss_20260329_2026-03-28/merged_dataset_cde24bdce97dd757.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Downloads/miss_20260329_2026-03-28"
+  },
+  "dataset_1": {
+    "coco_json_path": "/Users/rookie/Downloads/miss_20260329_2026-03-28/merged_dataset_cde24bdce97dd757.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Downloads/miss_20260329_2026-03-28"
+  },
+  "dataset_2": {
+    "coco_json_path": "/Users/rookie/Desktop/误检统计/new_sampled_images/merged_dataset_8d965679a5a462d8.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/误检统计/new_sampled_images"
+  },
+  "dataset_4": {
+    "coco_json_path": "/Users/rookie/Desktop/误检统计/new_sampled_images/merged_dataset_8d965679a5a462d8.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/误检统计/new_sampled_images"
+  },
+  "dataset_5": {
+    "coco_json_path": "/Users/rookie/Desktop/误检统计/new_sampled_images/merged_dataset_8d965679a5a462d8.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/误检统计/new_sampled_images"
+  },
+  "dataset_6": {
+    "coco_json_path": "/Users/rookie/Desktop/误检统计/new_sampled_images/merged_dataset_8d965679a5a462d8.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/误检统计/new_sampled_images"
+  },
+  "dataset_7": {
+    "coco_json_path": "/Users/rookie/Desktop/误检统计/new_sampled_images/merged_dataset_8d965679a5a462d8.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/误检统计/new_sampled_images"
+  },
+  "dataset_8": {
+    "coco_json_path": "/Users/rookie/Downloads/miss_20260329_2026-03-28/merged_dataset_cde24bdce97dd757.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Downloads/miss_20260329_2026-03-28"
+  },
+  "dataset_9": {
+    "coco_json_path": "/Users/rookie/Downloads/miss_20260329_2026-03-28/merged_dataset_cde24bdce97dd757.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Downloads/miss_20260329_2026-03-28"
+  },
+  "dataset_10": {
+    "coco_json_path": "/Users/rookie/Downloads/miss_20260329_2026-03-28/merged_dataset_cde24bdce97dd757.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Downloads/miss_20260329_2026-03-28"
+  },
+  "dataset_11": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/dataset_export/线上训练样本溯源信息_数据表_表格F2A左后-划伤/merged_dataset_20260326_163905.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/AI/dataset_export/线上训练样本溯源信息_数据表_表格F2A左后-划伤"
+  },
+  "dataset_12": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/dataset_export/线上训练样本溯源信息_数据表_表格F2A左后-划伤/merged_dataset_20260326_163923.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/AI/dataset_export/线上训练样本溯源信息_数据表_表格F2A左后-划伤"
+  },
+  "dataset_13": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/dataset_export/线上训练样本溯源信息_数据表_表格F2A左后-划伤/merged_dataset_20260326_164127.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/AI/dataset_export/线上训练样本溯源信息_数据表_表格F2A左后-划伤"
+  },
+  "dataset_14": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/dataset_export/线上训练样本溯源信息_数据表_表格F2A左后-划伤/merged_dataset_20260326_164226.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/AI/dataset_export/线上训练样本溯源信息_数据表_表格F2A左后-划伤"
+  },
+  "dataset_15": {
+    "coco_json_path": "/Users/rookie/Downloads/coco_train5590_20260326_202846/merged_dataset_20260326_211625.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Downloads/coco_train5590_20260326_202846"
+  },
+  "dataset_16": {
+    "coco_json_path": "/Users/rookie/Desktop/历史漏检图片/merged_dataset_20260326_221443.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/历史漏检图片"
+  },
+  "dataset_17": {
+    "coco_json_path": "/Users/rookie/Desktop/历史漏检图片/merged_dataset_20260326_221959.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/历史漏检图片"
+  },
+  "dataset_18": {
+    "coco_json_path": "/Users/rookie/Desktop/历史漏检图片/merged_dataset_20260326_230719.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/历史漏检图片"
+  },
+  "dataset_19": {
+    "coco_json_path": "/Users/rookie/Downloads/coco_train5602_20260327_131038/merged_dataset_20260327_131119.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Downloads/coco_train5602_20260327_131038"
+  },
+  "dataset_20": {
+    "coco_json_path": "/Users/rookie/Downloads/coco_train5623_20260328_095636/merged_dataset_20260328_095726.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Downloads/coco_train5623_20260328_095636"
+  },
+  "dataset_21": {
+    "coco_json_path": "/Users/rookie/Downloads/coco_train5619_20260328_095737/merged_dataset_20260328_100202.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Downloads/coco_train5619_20260328_095737"
+  },
+  "dataset_22": {
+    "coco_json_path": "/Users/rookie/Desktop/huisuan/exports/magic_fox_chunk_run/merged_dataset_20260329_130223.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/huisuan/exports/magic_fox_chunk_run"
+  },
+  "dataset_23": {
+    "coco_json_path": "/Users/rookie/Desktop/误检统计/0320_sampled_images/merged_dataset_20260329_132143.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/误检统计/0320_sampled_images"
+  },
+  "dataset_24": {
+    "coco_json_path": "/Users/rookie/Desktop/误检统计/0320_sampled_images/merged_dataset_20260329_132435.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/误检统计/0320_sampled_images"
+  }
+}
