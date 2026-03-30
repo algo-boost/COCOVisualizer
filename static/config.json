@@ -1,5 +1,6 @@
 {
   "appName": "COCO Data Visualizer",
+  "uiTheme": "light",
   "loadPage": {
     "title": "加载数据集",
     "cocoPathLabel": "COCO JSON 文件路径 *",
@@ -36,8 +37,8 @@
   "viewer": {
     "wheelZoomFactorOut": 0.9,
     "wheelZoomFactorIn": 1.1,
-    "zoomMin": 0.02,
-    "zoomMax": 100,
+    "zoomMin": 0.01,
+    "zoomMax": 9999,
     "wheelZoomWithoutModifier": true,
     "lineWidthOptions": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1],
     "lineWidthDefault": 0.5,
@@ -49,6 +50,11 @@
   },
   "settings": {
     "modalTitle": "设置",
+    "themeLabel": "界面主题",
+    "themeHint": "支持深色、浅色与柔和暗色，可随时切换。",
+    "themeDarkLabel": "深色",
+    "themeLightLabel": "浅色",
+    "themeDimLabel": "柔和暗色",
     "viewerBackgroundLabel": "查看器背景",
     "backgroundStyleCheckerboard": "马赛克",
     "backgroundStyleSolid": "纯色",

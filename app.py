@@ -371,6 +371,91 @@ def upload_file():
 
 COCO_ANNOTATION_FILENAME = '_annotations.coco.json'
 PRED_ANNOTATION_PATTERN = re.compile(r'^_annotations\.(.+)\.pred\.coco\.json$')
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tiff', '.tif', '.gif'}
+
+
+def _scan_dir_for_images(img_dir):
+    """列出目录中所有图片文件名（仅当前层，不递归，已排序）。"""
+    img_dir = Path(img_dir)
+    if not img_dir.is_dir():
+        return []
+    result = []
+    try:
+        for p in sorted(img_dir.iterdir()):
+            if p.is_file() and not p.name.startswith('.') and p.suffix.lower() in IMAGE_EXTENSIONS:
+                result.append(p.name)
+    except Exception:
+        pass
+    return result
+
+
+def _ensure_coco_file(coco_path):
+    """若 COCO 文件不存在，则创建最小空白 COCO JSON 结构。已存在返回 False，新建返回 True。"""
+    p = Path(coco_path)
+    if p.exists():
+        return False
+    empty = {
+        'info': {'description': 'Auto-created by COCOVisualizer'},
+        'images': [],
+        'annotations': [],
+        'categories': []
+    }
+    try:
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(empty, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print(f'[warn] _ensure_coco_file {p}: {e}', file=sys.stderr)
+        return False
+
+
+def _sync_images_from_dir(coco_path, image_dir=None):
+    """将目录中所有图片文件补充到 COCO JSON 的 images 列表（跳过已存在条目）。
+    自动使用 Pillow 读取宽高并写回文件。
+    Returns: (新增数量, 当前总图片数)
+    """
+    coco_path = Path(coco_path).resolve()
+    img_dir = Path(image_dir).resolve() if image_dir else coco_path.parent
+    if not img_dir.is_dir():
+        return 0, 0
+    try:
+        with open(coco_path, 'r', encoding='utf-8') as f:
+            coco_data = json.load(f)
+    except Exception:
+        coco_data = {'images': [], 'annotations': [], 'categories': []}
+
+    existing_fnames = {img['file_name'] for img in coco_data.get('images', [])}
+    max_img_id = max((img.get('id', 0) for img in coco_data.get('images', [])), default=0)
+    image_files = _scan_dir_for_images(img_dir)
+
+    added = []
+    for fname in image_files:
+        if fname in existing_fnames:
+            continue
+        w, h = 0, 0
+        try:
+            with Image.open(img_dir / fname) as im:
+                w, h = im.size
+        except Exception:
+            pass
+        max_img_id += 1
+        added.append({'id': max_img_id, 'file_name': fname, 'width': int(w), 'height': int(h)})
+
+    if not added:
+        return 0, len(coco_data.get('images', []))
+
+    coco_data.setdefault('images', []).extend(added)
+    coco_data.setdefault('annotations', [])
+    coco_data.setdefault('categories', [])
+    try:
+        with open(coco_path, 'w', encoding='utf-8') as f:
+            json.dump(coco_data, f, ensure_ascii=False, indent=2)
+        print(f'[info] _sync_images_from_dir: +{len(added)} images → {coco_path}', file=sys.stderr)
+    except Exception as e:
+        print(f'[warn] _sync_images_from_dir write {coco_path}: {e}', file=sys.stderr)
+        return 0, len(coco_data.get('images', []))
+
+    return len(added), len(coco_data['images'])
 
 
 def _find_pred_files(coco_dir):
@@ -424,7 +509,10 @@ def _add_normalized_bbox_stats(eda, df):
         return df
     if 'width' not in eda.images_df.columns or 'height' not in eda.images_df.columns:
         return df
-    imgs = eda.images_df[['id', 'width', 'height']].rename(
+    img_cols = ['id', 'width', 'height']
+    if 'file_name' in eda.images_df.columns:
+        img_cols.append('file_name')
+    imgs = eda.images_df[img_cols].rename(
         columns={'id': 'image_id', 'width': 'img_w', 'height': 'img_h'}
     )
     df = df.merge(imgs, on='image_id', how='left')
@@ -602,11 +690,16 @@ def _build_meta_filter_options(images_df):
 
 
 def _scan_folder_for_coco(root_path):
-    """递归扫描目录下所有 _annotations.coco.json，返回 [{coco_path, image_dir, relative_path}, ...]"""
+    """递归扫描目录下所有 _annotations.coco.json，返回 [{coco_path, image_dir, relative_path}, ...]。
+    同时发现有图片文件但无 COCO 文件的子目录，自动创建 _annotations.coco.json 并同步图片。
+    自动创建的条目带有 auto_created=True 标记。
+    """
     root = Path(root_path).resolve()
     if not root.exists() or not root.is_dir():
         return []
     items = []
+
+    # 第一遍：查找已有 COCO 文件
     try:
         for p in root.rglob(COCO_ANNOTATION_FILENAME):
             if p.is_file():
@@ -624,6 +717,41 @@ def _scan_folder_for_coco(root_path):
                 })
     except Exception:
         pass
+
+    # 第二遍：查找有图片但无 COCO 文件的目录，自动创建并同步
+    found_dirs = {str(Path(it['image_dir']).resolve()) for it in items}
+    try:
+        for dirpath, dirnames, filenames in os.walk(str(root)):
+            # 跳过隐藏目录
+            dirnames[:] = [d for d in sorted(dirnames) if not d.startswith('.')]
+            dir_p = Path(dirpath).resolve()
+            if str(dir_p) in found_dirs:
+                continue
+            # 检查是否含图片文件
+            img_files = [f for f in filenames
+                         if not f.startswith('.') and Path(f).suffix.lower() in IMAGE_EXTENSIONS]
+            if not img_files:
+                continue
+            # 有图片，但无 COCO 文件 → 自动创建并同步图片列表
+            coco_p = dir_p / COCO_ANNOTATION_FILENAME
+            is_new = _ensure_coco_file(str(coco_p))
+            _sync_images_from_dir(str(coco_p))
+            try:
+                rel = dir_p.relative_to(root)
+                relative_path = str(rel) if rel != Path('.') else ''
+            except ValueError:
+                relative_path = dir_p.name
+            items.append({
+                'coco_path': str(coco_p),
+                'image_dir': str(dir_p),
+                'relative_path': relative_path or dir_p.name,
+                'auto_created': True,
+                'num_images': len(img_files),
+            })
+            found_dirs.add(str(dir_p))
+    except Exception as e:
+        print(f'[warn] scan image-only dirs: {e}', file=sys.stderr)
+
     return items
 
 
@@ -681,11 +809,29 @@ def load_dataset():
         
         # 检查路径是否存在，并统一为绝对路径，确保保存时写回同一文件
         coco_path = Path(coco_json_path).resolve()
+
+        # 若给的是目录，自动定位到其中的 _annotations.coco.json（不存在则创建）
+        if coco_path.is_dir():
+            auto_coco = coco_path / COCO_ANNOTATION_FILENAME
+            _ensure_coco_file(str(auto_coco))
+            coco_path = auto_coco.resolve()
+
         if not coco_path.exists():
             return jsonify({'error': f'文件不存在: {coco_json_path}'}), 400
         if not coco_path.is_file():
             return jsonify({'error': f'路径不是文件: {coco_path}'}), 400
-        
+
+        # 若 images 列表为空，自动从同目录（或指定 image_dir）扫描图片并补全
+        try:
+            with open(coco_path, 'r', encoding='utf-8') as _f:
+                _check = json.load(_f)
+            if not _check.get('images'):
+                _added, _total = _sync_images_from_dir(str(coco_path), image_dir or None)
+                if _added > 0:
+                    print(f'[info] load_dataset: auto-synced {_added} images into {coco_path}', file=sys.stderr)
+        except Exception as _e:
+            print(f'[warn] load_dataset pre-sync: {_e}', file=sys.stderr)
+
         # 加载数据集（使用绝对路径，持久化与保存均基于此路径）
         eda = CocoEDA(
             coco_json_path=str(coco_path),
@@ -802,18 +948,24 @@ def load_dataset():
                 'category': df['name'].tolist() if 'name' in df.columns else [],
                 'values': safe_tolist(df['aspect_ratio']) if 'aspect_ratio' in df.columns else []
             },
-            'width': {
-                'category': df['name'].tolist() if 'name' in df.columns else [],
-                'values': safe_tolist(df['w_norm']) if 'w_norm' in df.columns else []
-            },
-            'height': {
-                'category': df['name'].tolist() if 'name' in df.columns else [],
-                'values': safe_tolist(df['h_norm']) if 'h_norm' in df.columns else []
-            },
             'center': {
                 'category': df['name'].tolist() if 'name' in df.columns else [],
                 'x': safe_tolist(df['c_x_norm']) if 'c_x_norm' in df.columns else [],
-                'y': safe_tolist(df['c_y_norm']) if 'c_y_norm' in df.columns else []
+                'y': safe_tolist(df['c_y_norm']) if 'c_y_norm' in df.columns else [],
+                'image_id': df['image_id'].astype(int).tolist() if 'image_id' in df.columns else [],
+                'file_name': df['file_name'].tolist() if 'file_name' in df.columns else [],
+            },
+            'width': {
+                'category': df['name'].tolist() if 'name' in df.columns else [],
+                'values': safe_tolist(df['w_norm']) if 'w_norm' in df.columns else [],
+                'image_id': df['image_id'].astype(int).tolist() if 'image_id' in df.columns else [],
+                'file_name': df['file_name'].tolist() if 'file_name' in df.columns else [],
+            },
+            'height': {
+                'category': df['name'].tolist() if 'name' in df.columns else [],
+                'values': safe_tolist(df['h_norm']) if 'h_norm' in df.columns else [],
+                'image_id': df['image_id'].astype(int).tolist() if 'image_id' in df.columns else [],
+                'file_name': df['file_name'].tolist() if 'file_name' in df.columns else [],
             },
             'score': {'category': score_cat, 'values': score_vals} if score_cat else {'category': [], 'values': []}
         }
@@ -824,9 +976,25 @@ def load_dataset():
             'max_side': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['max_side']) if 'max_side' in df.columns else []},
             'wh_ratio': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['wh_ratio']) if 'wh_ratio' in df.columns else []},
             'aspect_ratio': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['aspect_ratio']) if 'aspect_ratio' in df.columns else []},
-            'width': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['w']) if 'w' in df.columns else []},
-            'height': {'category': df['name'].tolist() if 'name' in df.columns else [], 'values': safe_tolist(df['h']) if 'h' in df.columns else []},
-            'center': {'category': df['name'].tolist() if 'name' in df.columns else [], 'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [], 'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else []},
+            'width': {
+                'category': df['name'].tolist() if 'name' in df.columns else [],
+                'values': safe_tolist(df['w']) if 'w' in df.columns else [],
+                'image_id': df['image_id'].astype(int).tolist() if 'image_id' in df.columns else [],
+                'file_name': df['file_name'].tolist() if 'file_name' in df.columns else [],
+            },
+            'height': {
+                'category': df['name'].tolist() if 'name' in df.columns else [],
+                'values': safe_tolist(df['h']) if 'h' in df.columns else [],
+                'image_id': df['image_id'].astype(int).tolist() if 'image_id' in df.columns else [],
+                'file_name': df['file_name'].tolist() if 'file_name' in df.columns else [],
+            },
+            'center': {
+                'category': df['name'].tolist() if 'name' in df.columns else [],
+                'x': safe_tolist(df['c_x']) if 'c_x' in df.columns else [],
+                'y': safe_tolist(df['c_y']) if 'c_y' in df.columns else [],
+                'image_id': df['image_id'].astype(int).tolist() if 'image_id' in df.columns else [],
+                'file_name': df['file_name'].tolist() if 'file_name' in df.columns else [],
+            },
             'score': {'category': score_cat, 'values': score_vals} if score_cat else {'category': [], 'values': []}
         }
         visualization_data['category_data_raw'] = {}
@@ -1229,7 +1397,8 @@ def get_images_by_category():
                 return jsonify({'error': '筛选后无图片'}), 400
             target_image_ids = filtered_df['image_id'].unique()
         else:
-            target_image_ids = df['image_id'].unique()
+            # 无类别筛选时，以 images_df 为基准，保证无标注的图片也能显示
+            target_image_ids = eda.images_df['id'].unique()
 
         # 图片元数据筛选（c_time / product_id / position），兼容缺失字段
         meta_allowed = _apply_image_meta_filters(
@@ -1251,44 +1420,37 @@ def get_images_by_category():
             })
 
         # 获取这些图片的所有标注（不只是选中类别的）
-        all_df = df[df['image_id'].isin(target_image_ids)]
-        
-        # 按图片ID分组
-        image_groups = all_df.groupby('image_id')
-        
+        all_df = df[df['image_id'].isin(target_image_ids)] if not df.empty else pd.DataFrame()
+
+        # 按图片ID分组，构建快速查找字典（无标注图片不在此 dict 中）
+        ann_groups = {}
+        if not all_df.empty:
+            for _img_id, _grp in all_df.groupby('image_id'):
+                ann_groups[_img_id] = _grp
+
         def _is_nan(v):
             return isinstance(v, float) and math.isnan(v)
 
-        images_list = []
-        for image_id, group_df in image_groups:
-            # 获取图片信息
-            img_info = eda.images_df[eda.images_df['id'] == image_id].iloc[0]
-            
-            # 获取该图片的所有标注 - 动态返回所有原始字段
+        def _build_annotations(group_df):
+            """将标注 DataFrame 行转换为标注字典列表。"""
             annotations = []
+            if group_df is None or group_df.empty:
+                return annotations
             for _, row in group_df.iterrows():
-                ann = {'category': row['name']}  # 类别名称必须有
-                
-                # 遍历所有列，动态添加
+                ann = {'category': row['name']}
                 for col in row.index:
-                    if col == 'name':  # 已添加为category
+                    if col == 'name':
                         continue
-                    
                     val = row[col]
-                    
-                    # 跳过空值
                     if val is None:
                         continue
                     if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
                         continue
-                    
-                    # 处理不同类型
                     if col == 'bbox':
                         bbox = extract_bbox(val)
                         if bbox:
                             ann['bbox'] = bbox
                     elif col == 'segmentation':
-                        # segmentation可能很大，只标记有无
                         if val is not None and (isinstance(val, (list, dict)) and len(val) > 0 if hasattr(val, '__len__') else True):
                             ann['has_segmentation'] = True
                     elif isinstance(val, np.ndarray):
@@ -1300,20 +1462,32 @@ def get_images_by_category():
                         ann[col] = val
                     elif isinstance(val, (list, tuple)):
                         ann[col] = list(val)
-                
                 annotations.append(ann)
-            
+            return annotations
+
+        images_list = []
+        # 遍历所有目标图片（包括无标注的），确保 GT 为空的图片也能显示
+        for image_id in target_image_ids:
+            img_rows = eda.images_df[eda.images_df['id'] == image_id]
+            if img_rows.empty:
+                continue
+            img_info = img_rows.iloc[0]
+
+            group_df = ann_groups.get(image_id)
+            annotations = _build_annotations(group_df)
+
             # width/height 可能不在 COCO images 中，从 bbox 推断
             if 'width' in img_info.index and 'height' in img_info.index and pd.notna(img_info.get('width')) and pd.notna(img_info.get('height')):
                 img_w, img_h = int(img_info['width']), int(img_info['height'])
             else:
                 img_w, img_h = 0, 0
-                for _, row in group_df.iterrows():
-                    bbox = extract_bbox(row.get('bbox'))
-                    if bbox and len(bbox) >= 4:
-                        x, y, bw, bh = bbox[0], bbox[1], bbox[2], bbox[3]
-                        img_w = max(img_w, int(x + bw))
-                        img_h = max(img_h, int(y + bh))
+                if group_df is not None:
+                    for _, row in group_df.iterrows():
+                        bbox = extract_bbox(row.get('bbox'))
+                        if bbox and len(bbox) >= 4:
+                            x, y, bw, bh = bbox[0], bbox[1], bbox[2], bbox[3]
+                            img_w = max(img_w, int(x + bw))
+                            img_h = max(img_h, int(y + bh))
                 if img_w <= 0:
                     img_w = 1
                 if img_h <= 0:
@@ -1356,6 +1530,42 @@ def get_images_by_category():
                 img_item['c_time'] = str(img_info['c_time'])
             if img_info.get('position') is not None and (not isinstance(img_info['position'], float) or not math.isnan(img_info['position'])):
                 img_item['position'] = str(img_info['position'])
+
+            # 尝试获取文件大小和修改时间（若在磁盘上存在）
+            file_name = img_info.get('file_name', '')
+            image_dir = eda.image_dir
+            source_path = img_info.get('source_path')
+            if source_path and getattr(eda, 'source_dirs', None):
+                image_dir = eda.source_dirs.get(source_path) or image_dir
+            if not image_dir and hasattr(eda, 'coco_json_path'):
+                image_dir = str(Path(eda.coco_json_path).parent)
+            
+            if file_name and image_dir:
+                try:
+                    file_path = Path(file_name)
+                    if file_path.is_absolute():
+                        image_path = file_path
+                    else:
+                        image_path = Path(image_dir) / file_name
+                    
+                    if not image_path.exists() and hasattr(eda, 'coco_json_path'):
+                        # 兜底路径
+                        alt_paths = [
+                            Path(eda.coco_json_path).parent / file_name,
+                            Path(image_dir) / Path(file_name).name
+                        ]
+                        for alt in alt_paths:
+                            if alt.exists():
+                                image_path = alt
+                                break
+                                
+                    if image_path.exists():
+                        stat = image_path.stat()
+                        img_item['file_size'] = stat.st_size
+                        img_item['modified_time'] = stat.st_mtime
+                except Exception:
+                    pass
+
             images_list.append(img_item)
         
         # 按图片ID排序
@@ -1470,7 +1680,11 @@ def save_annotations():
         # 更新标注
         existing_ann_ids = set(ann['id'] for ann in coco_data.get('annotations', []))
         max_ann_id = max(existing_ann_ids) if existing_ann_ids else 0
-        
+
+        # 构建 image_id → (width, height) 映射，用于 bbox 边界校正
+        img_size_map = {img['id']: (img.get('width', 0), img.get('height', 0))
+                        for img in coco_data.get('images', [])}
+
         for img_data in images_data:
             image_id = img_data['image_id']
             new_annotations = img_data['annotations']
@@ -1495,31 +1709,114 @@ def save_annotations():
                             break
                     if cat_id is None:
                         # 新增类别
-                        cat_id = max(c['id'] for c in coco_data.get('categories', [{'id': 0}])) + 1
+                        cat_id = max((c['id'] for c in coco_data.get('categories', [])), default=0) + 1
                         coco_data.setdefault('categories', []).append({
                             'id': cat_id,
                             'name': cat_name
                         })
                 
+                raw_bbox = ann.get('bbox')
+                # clamp bbox 到图片边界，防止越界坐标
+                if raw_bbox and len(raw_bbox) == 4:
+                    img_w, img_h = img_size_map.get(image_id, (0, 0))
+                    bx, by, bw, bh = float(raw_bbox[0]), float(raw_bbox[1]), float(raw_bbox[2]), float(raw_bbox[3])
+                    if img_w > 0 and img_h > 0:
+                        bx = max(0.0, min(bx, img_w))
+                        by = max(0.0, min(by, img_h))
+                        bw = max(1.0, min(bw, img_w - bx))
+                        bh = max(1.0, min(bh, img_h - by))
+                    raw_bbox = [bx, by, bw, bh]
                 coco_ann = {
                     'id': max_ann_id,
                     'image_id': image_id,
                     'category_id': cat_id,
-                    'bbox': ann.get('bbox'),
-                    'area': ann.get('area') or (ann['bbox'][2] * ann['bbox'][3] if ann.get('bbox') else 0),
+                    'bbox': raw_bbox,
+                    'area': raw_bbox[2] * raw_bbox[3] if raw_bbox else (ann.get('area') or 0),
                     'iscrowd': ann.get('iscrowd', 0)
                 }
+                if ann.get('_from_pred'):
+                    coco_ann['_from_pred'] = ann['_from_pred']
                 coco_data['annotations'].append(coco_ann)
         
-        # 保存文件
-        backup_path = str(eda.coco_json_path) + '.backup'
-        import shutil
-        shutil.copy(eda.coco_json_path, backup_path)
-        
+        # 保存文件（通过版本系统存档，不再生成 .backup 文件）
+        _save_version(eda.coco_json_path, coco_data)
         with open(eda.coco_json_path, 'w', encoding='utf-8') as f:
             json.dump(coco_data, f, indent=2, ensure_ascii=False)
-        
+
+        # 清理同目录下遗留的旧 .backup 文件
+        backup_path = Path(eda.coco_json_path).with_suffix('.json.backup')
+        if not backup_path.exists():
+            backup_path = Path(str(eda.coco_json_path) + '.backup')
+        try:
+            if backup_path.exists():
+                backup_path.unlink()
+        except Exception:
+            pass
+
         return jsonify({'success': True, 'message': '保存成功'})
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@app.route('/api/rename_category', methods=['POST'])
+def rename_category():
+    """跨图批量重命名标注类别：将 COCO 文件中所有 old_name 类别改为 new_name。
+    支持合并（new_name 已存在时自动合并 category_id）。"""
+    try:
+        data = request.get_json() or {}
+        dataset_id = data.get('dataset_id')
+        old_name = (data.get('old_name') or '').strip()
+        new_name = (data.get('new_name') or '').strip()
+        if not old_name or not new_name:
+            return jsonify({'error': '请提供 old_name 和 new_name'}), 400
+
+        eda = _ensure_dataset_loaded(dataset_id)
+        if eda is None:
+            return jsonify({'error': '数据集不存在'}), 400
+
+        with open(eda.coco_json_path, 'r', encoding='utf-8') as f:
+            coco_data = json.load(f)
+
+        categories = coco_data.get('categories', [])
+        # 找到 old category
+        old_cat = next((c for c in categories if c['name'] == old_name), None)
+        if old_cat is None:
+            return jsonify({'error': f'类别 "{old_name}" 不存在'}), 400
+
+        # 找到/创建 new category
+        new_cat = next((c for c in categories if c['name'] == new_name), None)
+        if new_cat is None:
+            # 创建新类别，继承 old_cat 的 id 并改名（保持 id 连续性）
+            old_cat['name'] = new_name
+            new_cat_id = old_cat['id']
+        else:
+            # new_name 已存在：把 old 的 annotations 合并到 new，然后删除 old category
+            new_cat_id = new_cat['id']
+            old_cat_id = old_cat['id']
+            # 更新 annotations：把 old_cat_id → new_cat_id
+            for ann in coco_data.get('annotations', []):
+                if ann.get('category_id') == old_cat_id:
+                    ann['category_id'] = new_cat_id
+            # 删除 old category
+            coco_data['categories'] = [c for c in categories if c['id'] != old_cat_id]
+            # 写回并保存
+            _save_version(eda.coco_json_path, coco_data, comment=f'合并类别 {old_name} → {new_name}')
+            with open(eda.coco_json_path, 'w', encoding='utf-8') as f:
+                json.dump(coco_data, f, indent=2, ensure_ascii=False)
+            # 重新加载 eda
+            current_datasets.pop(dataset_id, None)
+            affected = sum(1 for ann in coco_data.get('annotations', []) if ann.get('category_id') == new_cat_id)
+            return jsonify({'success': True, 'message': f'已将 {old_name} 合并到 {new_name}', 'affected': affected})
+
+        # 简单改名：更新 categories 中 old_cat 的 name（已在上面 old_cat['name'] = new_name 完成）
+        # annotations 的 category_id 不变，无需更新
+        _save_version(eda.coco_json_path, coco_data, comment=f'重命名类别 {old_name} → {new_name}')
+        with open(eda.coco_json_path, 'w', encoding='utf-8') as f:
+            json.dump(coco_data, f, indent=2, ensure_ascii=False)
+        current_datasets.pop(dataset_id, None)
+        affected = sum(1 for ann in coco_data.get('annotations', []) if ann.get('category_id') == new_cat_id)
+        return jsonify({'success': True, 'message': f'已将类别 {old_name} 重命名为 {new_name}', 'affected': affected})
     except Exception as e:
         import traceback
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500

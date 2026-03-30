@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>COCO数据集可视化工具</title>
     <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600&display=swap" rel="stylesheet">
     <script src="/static/vendor/react.production.min.js"></script>
     <script src="/static/vendor/react-dom.production.min.js"></script>
     <script src="/static/vendor/babel.min.js"></script>
@@ -14,7 +17,7 @@
 </head>
 <body>
     <div id="root"></div>
-    <div id="load-fail" style="display:none; padding: 2rem; text-align: center; color: #888; max-width: 480px; margin: 2rem auto;">
+    <div id="load-fail" class="load-fail-banner" style="display:none;">
         <p><strong>脚本加载失败</strong></p>
         <p>若为离线环境，请先运行 <code>python3 packaging/fetch_vendor_js.py</code> 下载前端依赖到 static/vendor/。</p>
         <p>或检查浏览器控制台报错。</p>

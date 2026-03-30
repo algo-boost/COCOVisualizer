@@ -4,6 +4,7 @@ const { useState, useEffect, useRef, useCallback, createContext, useContext } = 
 // 默认配置
 const DEFAULT_CONFIG = {
     appName: 'COCO Dataset Visualizer',
+    uiTheme: 'light', // dark | light | dim
     loadPage: {
         title: '加载数据集',
         cocoPathLabel: 'COCO JSON 文件路径 *',
@@ -28,6 +29,7 @@ const DEFAULT_CONFIG = {
         selectedSuffix: '已选'
     },
     imageCategories: ['未分类', '低置信度', '误检', '漏检', '少数类', '背景'],
+    imageCategoryMultiSelect: false,
     imageCategoryColors: {
         '未分类': '#888888',
         '低置信度': '#FF6B6B',
@@ -40,8 +42,8 @@ const DEFAULT_CONFIG = {
     viewer: {
         wheelZoomFactorOut: 0.9,
         wheelZoomFactorIn: 1.1,
-        zoomMin: 0.02,
-        zoomMax: 100,
+        zoomMin: 0.01,
+        zoomMax: 9999,
         wheelZoomWithoutModifier: false,
         lineWidthOptions: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1],
         lineWidthDefault: 0.5,
@@ -53,6 +55,11 @@ const DEFAULT_CONFIG = {
     },
     settings: {
         modalTitle: '设置',
+        themeLabel: '界面主题',
+        themeHint: '支持深色、浅色与柔和暗色，可随时切换。',
+        themeDarkLabel: '深色',
+        themeLightLabel: '浅色',
+        themeDimLabel: '柔和暗色',
         viewerBackgroundLabel: '查看器背景',
         backgroundStyleCheckerboard: '马赛克',
         backgroundStyleSolid: '纯色',
@@ -101,32 +108,6 @@ const DEFAULT_CONFIG = {
         rollbackButtonText: '回滚到此版本',
         rollingText: '回滚中...',
         emptyMessage: '暂无版本记录，保存一次后会出现。',
-        closeButtonText: '关闭'
-    },
-    settings: {
-        modalTitle: '设置',
-        viewerBackgroundLabel: '查看器背景',
-        backgroundStyleCheckerboard: '马赛克',
-        backgroundStyleSolid: '纯色',
-        lineWidthDefaultLabel: '默认线宽',
-        imageCategoriesLabel: '图片分类',
-        imageCategoriesHint: '用于标注图片级分类（如未分类、误检等），可增删改名称与颜色。',
-        addCategoryButton: '添加分类',
-        categoryNamePlaceholder: '分类名称',
-        resetCategoriesButton: '恢复默认',
-        closeButtonText: '关闭'
-    },
-    help: {
-        title: '快捷键说明',
-        viewerShortcutsTitle: '图片查看器',
-        navKeys: 'A / ← · D / →',
-        navKeysDesc: '上一张 / 下一张（光标在输入框时不生效，按 Esc 退出聚焦）',
-        noteKey: 'N',
-        noteKeyDesc: '聚焦备注输入框',
-        catKeys: '1 – 9',
-        catKeysDesc: '将当前图片设为第 1–9 个分类',
-        escDesc: '在输入框内：仅退出聚焦；否则：关闭查看器',
-        zoomDesc: '滚轮缩放（或 Ctrl/Cmd+滚轮，见设置）· 左键拖动平移',
         closeButtonText: '关闭'
     },
     nav: {
@@ -200,6 +181,11 @@ function getCategoryColor(palette, category) {
     return categoryColors[category];
 }
 
+/** 置信度过滤：阈值为 0 表示不过滤；无 score 的框始终显示（GT 与预测共用） */
+function passesConfThreshold(ann, confThreshold) {
+    return confThreshold <= 0 || ann.score == null || Number(ann.score) >= confThreshold;
+}
+
 // ==================== 配置提供者（config.json + 本地设置） ====================
 function ConfigProvider({ children }) {
     const [config, setConfig] = useState(DEFAULT_CONFIG);
@@ -215,6 +201,11 @@ function ConfigProvider({ children }) {
     useEffect(() => {
         if (mergedConfig.appName) document.title = mergedConfig.appName;
     }, [mergedConfig.appName]);
+    useEffect(() => {
+        const root = document.documentElement;
+        const theme = ['dark', 'light', 'dim'].includes(mergedConfig.uiTheme) ? mergedConfig.uiTheme : 'dark';
+        root.setAttribute('data-theme', theme);
+    }, [mergedConfig.uiTheme]);
 
     const setSettings = useCallback((next) => {
         setLocalSettings(prev => {
@@ -242,6 +233,20 @@ function App() {
     const [imageClassifications, setImageClassifications] = useState({}); // {image_id: category}
     const [imageNotes, setImageNotes] = useState({}); // {image_id: note}
 
+    // 最近加载历史工具函数（localStorage）
+    const RECENT_LOADS_KEY = 'coco_viz_recent_loads';
+    const saveRecentLoad = (entry) => {
+        try {
+            const raw = localStorage.getItem(RECENT_LOADS_KEY);
+            let list = raw ? JSON.parse(raw) : [];
+            // 去重（同路径的移到最前）
+            list = list.filter(r => r.cocoPath !== entry.cocoPath);
+            list.unshift({ ...entry, loadedAt: new Date().toISOString() });
+            list = list.slice(0, 6);
+            localStorage.setItem(RECENT_LOADS_KEY, JSON.stringify(list));
+        } catch (e) {}
+    };
+
     // 加载数据集（单文件）
     const loadDataset = async (cocoPath, imageDir, name) => {
         setLoading(true);
@@ -253,6 +258,7 @@ function App() {
             });
             const data = await res.json();
             if (data.success) {
+                saveRecentLoad({ cocoPath, imageDir: imageDir || '', name: name || 'dataset', type: 'single' });
                 await applyDatasetAndFetchImages(data);
             } else {
                 alert('加载失败: ' + data.error);
@@ -275,6 +281,7 @@ function App() {
             });
             const data = await res.json();
             if (data.success) {
+                saveRecentLoad({ cocoPath: rootPath || items[0]?.coco_path || '', imageDir: '', name: datasetName || 'merged', type: 'merged', items });
                 await applyDatasetAndFetchImages(data);
             } else {
                 alert('加载失败: ' + data.error);
@@ -367,6 +374,35 @@ function App() {
             console.warn('refetch with meta filters failed', err);
         }
     }, [datasetData, categories, config.imageCategories]);
+
+    // 类别改名后重新从服务器拉取 images（让 categories 字段也同步更新）
+    const reloadImagesFromServer = useCallback(async () => {
+        if (!datasetData) return;
+        try {
+            const res = await fetch('/api/get_images_by_category', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dataset_id: datasetData.dataset_id, selected_categories: categories })
+            });
+            const data = await res.json();
+            if (data.success && data.images) {
+                setImages(data.images);
+                const defaultCat = (config.imageCategories && config.imageCategories[0]) || '未分类';
+                const newClass = {}, newNotes = {};
+                data.images.forEach(img => {
+                    const cats = img.image_categories;
+                    newClass[img.image_id] = Array.isArray(cats) && cats.length ? cats : (img.image_category ? [img.image_category] : [defaultCat]);
+                    newNotes[img.image_id] = img.note || '';
+                });
+                setImageClassifications(newClass);
+                setImageNotes(newNotes);
+                // 同步更新 categories 列表
+                const allCats = new Set();
+                data.images.forEach(img => (img.annotations || []).forEach(a => { if (a.category) allCats.add(a.category); }));
+                if (allCats.size > 0) setCategories(prev => [...new Set([...prev.filter(c => allCats.has(c)), ...allCats])]);
+            }
+        } catch (e) { console.warn('reloadImagesFromServer failed', e); }
+    }, [datasetData, categories, config.imageCategories]); // eslint-disable-line
 
     // ---- 自动保存（防抖 3s）：任何分类/备注变动后静默写回 COCO 文件，下次打开即恢复 ----
     // 用 ref 持有最新数据，避免 timer 回调读到旧闭包
@@ -477,6 +513,30 @@ function App() {
         scheduleAutoSave();
     };
 
+    // 批量清空选中图片的标注
+    const batchClearAnnotations = async (imageIds) => {
+        if (!datasetData || imageIds.length === 0) return;
+        if (!window.confirm(`确定清空选中的 ${imageIds.length} 张图片的全部 GT 标注？此操作不可撤销。`)) return;
+        const imagesPayload = imageIds.map(id => ({ image_id: id, annotations: [] }));
+        try {
+            const res = await fetch('/api/save_annotations', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dataset_id: datasetData.dataset_id, images: imagesPayload })
+            });
+            const data = await res.json();
+            if (data.success) {
+                setImages(prev => prev.map(img =>
+                    imageIds.includes(img.image_id) ? { ...img, annotations: [] } : img
+                ));
+            } else {
+                alert('清空失败: ' + (data.error || '未知错误'));
+            }
+        } catch (e) {
+            alert('清空失败: ' + e.message);
+        }
+    };
+
     // 批量更新选中图片的分类（每张图设为单类）
     const batchUpdateCategory = (imageIds, category) => {
         setImageClassifications(prev => {
@@ -520,6 +580,17 @@ function App() {
 
     const [showSettingsModal, setShowSettingsModal] = useState(false);
     const [showHelpModal, setShowHelpModal] = useState(false);
+    // EDA → 宫格联动：点击图表类别后跳转宫格并过滤
+    const [galleryJumpCategory, setGalleryJumpCategory] = useState(null);
+    // EDA → 宫格联动：点击散点后跳转并打开对应图片
+    const [galleryJumpImageId, setGalleryJumpImageId] = useState(null);
+
+    // 标注保存后同步更新内存中的 annotations（避免重新拉取整个列表）
+    const updateAnnotationsLocal = useCallback((imageId, newAnns) => {
+        setImages(prev => prev.map(img =>
+            img.image_id === imageId ? { ...img, annotations: newAnns.map(a => ({ ...a })) } : img
+        ));
+    }, []);
 
     return (
         <div className="app-container">
@@ -538,13 +609,27 @@ function App() {
                     onUpdateCategories={updateImageCategories}
                     onUpdateNote={updateImageNote}
                     onBatchUpdateCategory={batchUpdateCategory}
+                    onBatchClearAnnotations={batchClearAnnotations}
                     onRollback={refetchImageMetaAfterRollback}
                     metaFilterOptions={datasetData.meta_filter_options}
                     onApplyMetaFilters={refetchImagesWithMetaFilters}
                     autoSaveStatus={autoSaveStatus}
+                    onAnnotationsSaved={updateAnnotationsLocal}
+                    onReloadImages={reloadImagesFromServer}
+                    jumpToCategory={galleryJumpCategory}
+                    onJumpHandled={() => setGalleryJumpCategory(null)}
+                    jumpToImageId={galleryJumpImageId}
+                    onJumpImageHandled={() => setGalleryJumpImageId(null)}
                 />
             )}
-            {page === 'eda' && datasetData && <EDAPage datasetData={datasetData} />}
+            {page === 'eda' && datasetData && (
+                <EDAPage
+                    datasetData={datasetData}
+                    images={images}
+                    onJumpToGallery={(cat) => { setGalleryJumpCategory(cat); setPage('gallery'); }}
+                    onJumpToImage={(imageId) => { setGalleryJumpImageId(imageId); setPage('gallery'); }}
+                />
+            )}
             {showSettingsModal && (
                 <SettingsModal onClose={() => setShowSettingsModal(false)} />
             )}
@@ -571,49 +656,123 @@ function SidebarNav({ page, setPage, datasetLoaded, onOpenSettings, onOpenHelp }
             )}
             <div className="nav-divider"></div>
             <div className="nav-item" onClick={() => onOpenSettings && onOpenSettings()} title="设置">⚙️</div>
-            <div className="nav-item" onClick={() => onOpenHelp && onOpenHelp()} title="快捷键帮助">❓</div>
+            <div className="nav-item" onClick={() => onOpenHelp && onOpenHelp()} title="使用文档">📖</div>
         </div>
     );
 }
 
-// ==================== 帮助模态框（快捷键说明） ====================
+// ==================== 完整使用文档 (User Guide) ====================
 function HelpModal({ onClose }) {
-    const config = useConfig();
-    const help = config.help || {};
-    const title = help.title || '快捷键说明';
-    const viewerTitle = help.viewerShortcutsTitle || '图片查看器';
-    const navKeys = help.navKeys || 'A / ← · D / →';
-    const navDesc = help.navKeysDesc || '上一张 / 下一张（光标在输入框时不生效，按 Esc 退出聚焦）';
-    const noteKey = help.noteKey || 'N';
-    const noteDesc = help.noteKeyDesc || '聚焦备注输入框';
-    const catKeys = help.catKeys || '1 – 9';
-    const catDesc = help.catKeysDesc || '将当前图片设为第 1–9 个分类';
-    const escDesc = help.escDesc || '在输入框内：仅退出聚焦；否则：关闭查看器';
-    const zoomDesc = help.zoomDesc || '滚轮缩放（或 Ctrl/Cmd+滚轮，见设置）· 左键拖动平移';
-    const closeBtn = help.closeButtonText || '关闭';
+    const [activeTab, setActiveTab] = useState('overview');
 
     return (
         <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-content help-modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+            <div className="modal-content help-modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', width: '90vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
                 <div className="modal-header">
-                    <h3>{title}</h3>
+                    <h3>📖 COCOVisualizer 完整使用文档</h3>
                     <button className="modal-close" onClick={onClose}>✕</button>
                 </div>
-                <div className="modal-body help-modal-body">
-                    <h4 className="help-section-title">{viewerTitle}</h4>
-                    <table className="help-shortcut-table">
-                        <tbody>
-                            <tr><td className="help-key">{navKeys}</td><td>{navDesc}</td></tr>
-                            <tr><td className="help-key">{noteKey}</td><td>{noteDesc}</td></tr>
-                            <tr><td className="help-key">{catKeys}</td><td>{catDesc}</td></tr>
-                            <tr><td className="help-key">Esc</td><td>{escDesc}</td></tr>
-                            <tr><td className="help-key">滚轮 / 左键拖动</td><td>{zoomDesc}</td></tr>
-                        </tbody>
-                    </table>
-                    <p className="help-tip">线宽可在查看器顶部选择 0.1～1；背景样式与默认线宽可在「设置」中修改。</p>
+                <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--bg-raised)' }}>
+                    {[
+                        { id: 'overview', label: '基础工作流' },
+                        { id: 'gallery', label: '图库与筛选' },
+                        { id: 'viewer', label: '看图与对比' },
+                        { id: 'annotate', label: '画框与打标' },
+                        { id: 'shortcuts', label: '快捷键清单' }
+                    ].map(tab => (
+                        <button
+                            key={tab.id}
+                            style={{
+                                flex: 1, padding: '12px 0', border: 'none', background: activeTab === tab.id ? 'var(--bg-surface)' : 'transparent',
+                                color: activeTab === tab.id ? 'var(--accent)' : 'var(--text-secondary)',
+                                borderBottom: activeTab === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
+                                cursor: 'pointer', fontWeight: activeTab === tab.id ? 'bold' : 'normal', fontSize: '14px'
+                            }}
+                            onClick={() => setActiveTab(tab.id)}
+                        >{tab.label}</button>
+                    ))}
                 </div>
-                <div className="modal-footer">
-                    <button type="button" className="btn btn-primary" onClick={onClose}>{closeBtn}</button>
+                <div className="modal-body help-modal-body" style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', lineHeight: '1.6', fontSize: '14px', color: 'var(--text-primary)' }}>
+                    {activeTab === 'overview' && (
+                        <div>
+                            <h4>🚀 基础工作流 (Workflow)</h4>
+                            <p>COCOVisualizer 是一个专为计算机视觉工程师设计的 <b>目标检测数据查看、修正与评估工具</b>。</p>
+                            <ol style={{ paddingLeft: '20px', marginTop: '10px' }}>
+                                <li><b>加载数据：</b>在首页输入包含 COCO 格式 JSON 的路径，系统会自动扫描同目录下的图片。</li>
+                                <li><b>自动发现预测结果：</b>如果图片目录下存在 <code>_annotations.*.pred.coco.json</code> 格式的文件，系统会自动将其识别为模型的预测结果并叠加显示。</li>
+                                <li><b>图库浏览：</b>在 Gallery 页面可以宏观查看所有数据，支持按照各种维度（标签数量、文件大小、置信度等）排序和高级筛选。</li>
+                                <li><b>修正打标：</b>双击任意图片进入大图/标注模式，可以直接增删改查 GT 框，甚至一键将预测框采纳为 GT。</li>
+                                <li><b>保存与导出：</b>修改完毕后，点击右上角的 <b>保存</b> 按钮将更新写回磁盘；或使用 <b>导出ZIP</b> 按照类别将数据切分为独立的数据集。</li>
+                            </ol>
+                        </div>
+                    )}
+                    {activeTab === 'gallery' && (
+                        <div>
+                            <h4>🖼 图库与高级筛选 (Gallery & Filters)</h4>
+                            <ul style={{ paddingLeft: '20px' }}>
+                                <li><b>快速筛选：</b>顶部下拉框支持按照 GT 类别、图片级分类、所属目录进行快速过滤。</li>
+                                <li><b>高级筛选面板：</b>点击 <b>高级筛选 ▾</b> 展开，支持按 <b>GT框数量区间</b>、<b>预测框数量区间</b> 以及 <b>极小目标面积过滤</b>（找出包含极小目标的图片）。</li>
+                                <li><b>全局置信度筛选：</b>在上方填入置信度 <code>Min ~ Max</code>，系统会过滤出包含符合该分数区间框（GT或预测）的所有图片。常用于定位处于“模棱两可”区间的 Hard Cases。</li>
+                                <li><b>丰富排序：</b>支持按 文件名、GT 框数量、预测框数量、文件大小、修改时间 进行正序/倒序排列。</li>
+                                <li><b>批量操作：</b>勾选图片或“全选当页”，可以一键将所选图片归入某个“图片级别分类”（如：未分类、低置信度、类别误检等）。</li>
+                            </ul>
+                        </div>
+                    )}
+                    {activeTab === 'viewer' && (
+                        <div>
+                            <h4>🔍 看图与对比模式 (Viewer & Compare)</h4>
+                            <ul style={{ paddingLeft: '20px' }}>
+                                <li><b>基本操作：</b>支持鼠标滚轮（或 Ctrl+滚轮，可在设置切换）缩放，按住鼠标左键（或空格）拖拽平移。缩放以鼠标光标为中心。</li>
+                                <li><b>右键菜单：</b>在框内右键，可以一键复制框的坐标、类别和分数，或居中该框，亦可直接隐藏该类别的所有框。</li>
+                                <li><b>侧边栏交互：</b>右侧面板列出了当前图片所有的 GT 框与预测框。点击列表项可以直接居中并高亮该框；点击列表项右侧的 <code>●</code> 可单独隐藏某个框。</li>
+                                <li><b>预测框过滤：</b>侧边栏预测区域提供了一个 <b>置信度 ≥</b> 的滑块，可实时过滤低于阈值的预测框，画面会同步刷新。</li>
+                                <li><b>双栏对比模式 (C键)：</b>点击工具栏的 <b>⊞ 对比</b> 按钮，画面将一分为二，左侧显示纯 GT 标注，右侧显示纯模型预测，二者缩放和平移完全同步，极度适合做模型效果 Review。</li>
+                                <li><b>图像调整：</b>底部提供亮度和对比度滑块，方便在过暗/过曝的图片中看清目标。</li>
+                                <li><b>一图切：</b>使用底部 <b>缩略图导航带</b> 或按 <code>A</code> / <code>D</code> 键实现无缝秒切前后图片。</li>
+                            </ul>
+                        </div>
+                    )}
+                    {activeTab === 'annotate' && (
+                        <div>
+                            <h4>✏️ 画框与打标 (Annotation)</h4>
+                            <p>在看图模式下 <b>双击图片</b> 或点击 <b>✏️ 标注</b> 按钮进入编辑模式。</p>
+                            <ul style={{ paddingLeft: '20px' }}>
+                                <li><b>画框工具 (B)：</b>拖拽鼠标绘制新框。松开后会弹出类别选择器。按住 <code>Shift</code> 画框可锁定为正方形。</li>
+                                <li><b>选择工具 (V)：</b>点击选中框，拖拽边缘或控制点调整大小。支持按住 <code>Ctrl</code> 多选，或在空白处框选。</li>
+                                <li><b>精确微调：</b>选中框后，可使用 <code>方向键</code> 每次移动 1 像素，<code>Shift + 方向键</code> 每次移动 10 像素。或在右侧精确坐标面板中直接修改数值。</li>
+                                <li><b>快速分类：</b>按下数字键 <code>1-9</code> 可快速将当前图片设为对应分类。</li>
+                                <li><b>复制粘贴：</b>支持 <code>Ctrl+C</code> 与 <code>Ctrl+V</code>，甚至支持在不同图片间跨图粘贴标注框。</li>
+                                <li><b>预测辅助：</b>右侧会显示“预测参考框”列表，点击 <b>+GT</b> 或 <b>全部接受</b>，可将模型的检测结果一键转为真值 GT 进行微调，极大提升打标效率。</li>
+                                <li><b>Undo / Redo：</b>完整的 <code>Ctrl+Z</code> / <code>Ctrl+Y</code> 撤销重做链。退出该图片前会自动暂存修改。</li>
+                            </ul>
+                        </div>
+                    )}
+                    {activeTab === 'shortcuts' && (
+                        <div>
+                            <h4>⌨ 快捷键清单 (Shortcuts)</h4>
+                            <table className="help-shortcut-table" style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px' }}>
+                                <tbody>
+                                    <tr style={{borderBottom:'1px solid var(--border)'}}><td style={{padding:'8px', fontWeight:'bold'}}>通用 & 导航</td><td></td></tr>
+                                    <tr><td className="help-key">← / A 或 → / D</td><td>上一张 / 下一张图片（自带预加载，零延迟秒切）</td></tr>
+                                    <tr><td className="help-key">Tab / Shift+Tab</td><td>在当前图的不同标注框之间循环切换并居中高亮</td></tr>
+                                    <tr><td className="help-key">N</td><td>快速聚焦到备注输入框</td></tr>
+                                    <tr><td className="help-key">0</td><td>图片缩放比例复位（适应窗口大小）</td></tr>
+                                    <tr><td className="help-key">F</td><td>全屏 / 退出全屏模式</td></tr>
+                                    
+                                    <tr style={{borderBottom:'1px solid var(--border)'}}><td style={{padding:'8px', fontWeight:'bold', paddingTop:'16px'}}>标注模式专属</td><td></td></tr>
+                                    <tr><td className="help-key">B / V</td><td>切换 画框工具(B) / 选中工具(V)</td></tr>
+                                    <tr><td className="help-key">Del / Backspace</td><td>删除选中的标注框</td></tr>
+                                    <tr><td className="help-key">Ctrl+C / Ctrl+V</td><td>复制 / 粘贴选中的标注框（支持跨图片粘贴）</td></tr>
+                                    <tr><td className="help-key">Ctrl+Z / Ctrl+Y</td><td>撤销 (Undo) / 重做 (Redo)</td></tr>
+                                    <tr><td className="help-key">方向键</td><td>微调选中框位置（加按 Shift 每次移动 10px）</td></tr>
+                                    <tr><td className="help-key">Space + 拖拽</td><td>画框模式下临时切换为手形工具平移画布</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+                <div className="modal-footer" style={{ borderTop: '1px solid var(--border)' }}>
+                    <button type="button" className="btn btn-primary" onClick={onClose}>了解，关闭</button>
                 </div>
             </div>
         </div>
@@ -702,9 +861,12 @@ function PathPickerModal({ initialPath, onSelect, onClose }) {
 }
 
 // ==================== 加载页面 ====================
+const RECENT_LOADS_KEY = 'coco_viz_recent_loads';
+
 function LoadPage({ onLoad, onLoadMerged, loading }) {
     const config = useConfig();
     const lp = config.loadPage || DEFAULT_CONFIG.loadPage;
+    const [loadTab, setLoadTab] = useState('scan'); // 'scan' | 'single'
     const [cocoPath, setCocoPath] = useState('');
     const [imageDir, setImageDir] = useState('');
     const [datasetName, setDatasetName] = useState('dataset');
@@ -713,6 +875,17 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
     const [scanning, setScanning] = useState(false);
     const [selectedIndices, setSelectedIndices] = useState(new Set());
     const [showPathPicker, setShowPathPicker] = useState(false);
+    const [recentLoads, setRecentLoads] = useState(() => {
+        try { return JSON.parse(localStorage.getItem(RECENT_LOADS_KEY) || '[]'); } catch { return []; }
+    });
+
+    const removeRecent = (cocoPath) => {
+        try {
+            const next = recentLoads.filter(r => r.cocoPath !== cocoPath);
+            setRecentLoads(next);
+            localStorage.setItem(RECENT_LOADS_KEY, JSON.stringify(next));
+        } catch {}
+    };
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -807,110 +980,173 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
     return (
         <div className="load-page">
             <div className="load-card load-card-wide">
-                <div className="load-title-row">
-                    <img src="/static/logo.png" alt="" className="load-logo" />
-                    <h1 className="load-title">{config.appName || lp.title}</h1>
-                </div>
-
-                {/* 方式一：根目录扫描（递归 _annotations.coco.json，多选加载） */}
-                <div className="load-section">
-                    <h2 className="load-section-title">从根目录扫描（多选加载）</h2>
-                    <p className="load-section-desc">约定：COCO 文件名为 _annotations.coco.json，与图片同目录。支持拖入或粘贴路径。</p>
-                    <div className="load-field">
-                        <label className="load-label">根目录路径</label>
-                        <div className="load-path-row">
-                            <div
-                                className="load-input load-drop-zone"
-                                onDrop={handleDrop}
-                                onDragOver={(e) => e.preventDefault()}
-                                onPaste={handlePaste}
-                                style={{ flex: 1 }}
+                <div className="load-header-area">
+                    {recentLoads.length > 0 && (
+                        <div className="load-recent-quick">
+                            <select 
+                                className="load-recent-select" 
+                                onChange={(e) => {
+                                    if (!e.target.value) return;
+                                    const idx = parseInt(e.target.value, 10);
+                                    const r = recentLoads[idx];
+                                    if (r) {
+                                        if (r.type === 'merged' && r.items) onLoadMerged(r.items, r.name, r.cocoPath);
+                                        else onLoad(r.cocoPath, r.imageDir || '', r.name);
+                                    }
+                                    e.target.value = "";
+                                }}
+                                defaultValue=""
                             >
-                                <input
-                                    type="text"
-                                    value={rootPath}
-                                    onChange={(e) => setRootPath(e.target.value)}
-                                    placeholder="例如 D:\data\coco_root 或 /path/to/root"
-                                    style={{ border: 'none', background: 'transparent', width: '100%', outline: 'none' }}
-                                />
-                            </div>
-                            <button type="button" className="load-btn load-btn-secondary" onClick={() => setShowPathPicker(true)} title="弹窗选择路径">浏览</button>
-                        </div>
-                    </div>
-                    {showPathPicker && (
-                        <PathPickerModal
-                            initialPath={rootPath}
-                            onSelect={(p) => { setRootPath(p); setShowPathPicker(false); }}
-                            onClose={() => setShowPathPicker(false)}
-                        />
-                    )}
-                    <div className="load-actions">
-                        <button type="button" className="load-btn load-btn-secondary" onClick={handleScan} disabled={scanning}>
-                            {scanning ? '扫描中...' : '扫描'}
-                        </button>
-                        {scanItems.length > 0 && (
-                            <>
-                                <button type="button" className="load-btn load-btn-secondary" onClick={toggleSelectAll}>
-                                    {selectedIndices.size === scanItems.length ? '取消全选' : '全选'}
-                                </button>
-                                <span className="load-merged-name">
-                                    <label className="load-label">合并名称</label>
-                                    <input type="text" value={datasetName} onChange={(e) => setDatasetName(e.target.value)} placeholder="merged" className="load-input load-input-inline" />
-                                </span>
-                                <button type="button" className="load-btn" onClick={handleLoadMerged} disabled={loading || selectedIndices.size === 0}>
-                                    {loading ? '加载中...' : `加载选中 (${selectedIndices.size})`}
-                                </button>
-                            </>
-                        )}
-                    </div>
-                    {scanItems.length > 0 && (
-                        <div className="load-scan-list">
-                            <div className="load-scan-list-header">已发现 {scanItems.length} 个目录（含 _annotations.coco.json）。用「单文件加载」保存会写入该目录下的 COCO 文件，打包该目录即可把记录发给他人。</div>
-                            {scanItems.map((item, i) => (
-                                <div key={i} className="load-scan-item" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                                    <label style={{ display: 'flex', alignItems: 'center', flex: '1 1 auto', minWidth: 0 }}>
-                                        <input type="checkbox" checked={selectedIndices.has(i)} onChange={() => toggleItem(i)} />
-                                        <span className="load-scan-rel">{item.relative_path || '(根)'}</span>
-                                        <span className="load-scan-path" title={item.coco_path}>{item.coco_path}</span>
-                                    </label>
-                                    <button type="button" className="load-btn load-btn-secondary" style={{ flexShrink: 0 }} onClick={() => handleLoadSingleFromScanItem(item)} disabled={loading} title="仅加载此目录的 COCO 文件，保存时写入该目录，便于打包发给他人">
-                                        单文件加载
-                                    </button>
-                                    {item.loader_record && (
-                                        <button type="button" className="load-btn load-btn-secondary" style={{ flexShrink: 0 }} onClick={() => handleLoadLastFromScanItem(item)} disabled={loading}>
-                                            加载上次
-                                        </button>
-                                    )}
-                                </div>
-                            ))}
+                                <option value="" disabled>⏱️ 快速选择最近数据集...</option>
+                                {recentLoads.map((r, i) => (
+                                    <option key={i} value={i} title={r.cocoPath}>
+                                        {r.name} ({r.type === 'merged' ? '多' : '单'}) - {r.cocoPath.split(/[/\\]/).pop()}
+                                    </option>
+                                ))}
+                            </select>
+                            <button
+                                title="清空历史记录"
+                                onClick={() => {
+                                    if (window.confirm('确定要清空最近加载历史吗？')) {
+                                        localStorage.removeItem(RECENT_LOADS_KEY);
+                                        setRecentLoads([]);
+                                    }
+                                }}
+                                className="load-btn-secondary"
+                                style={{ padding: '7px 10px', fontSize: '13px', borderRadius: '8px', cursor: 'pointer', border: '1px solid var(--border)', background: 'var(--bg-base)' }}
+                            >清空</button>
                         </div>
                     )}
+                    
+                    <div className="load-title-row">
+                        <img src="/static/logo.png" alt="" className="load-logo" />
+                        <h1 className="load-title">{config.appName || lp.title}</h1>
+                    </div>
+                    <div className="load-subtitle">专业的计算机视觉数据查看、修正与评估工具</div>
+                    
+                    <div className="load-tabs">
+                        <div className={`load-tab ${loadTab === 'scan' ? 'active' : ''}`} onClick={() => setLoadTab('scan')}>📁 多目录合并扫描</div>
+                        <div className={`load-tab ${loadTab === 'single' ? 'active' : ''}`} onClick={() => setLoadTab('single')}>📄 单文件精准加载</div>
+                    </div>
                 </div>
 
-                {/* 方式二：单文件加载 */}
-                <div className="load-section">
-                    <h2 className="load-section-title">单文件加载</h2>
-                    <p className="load-section-desc" style={{ marginBottom: '10px' }}>保存的记录会写在对应 COCO 文件目录下，下次打开可点「检测上次记录」或从扫描列表「加载上次」。</p>
-                    <form onSubmit={handleSubmit}>
-                        <div className="load-field">
-                            <label className="load-label">{lp.cocoPathLabel}</label>
-                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                <input className="load-input" type="text" value={cocoPath} onChange={(e) => setCocoPath(e.target.value)} placeholder={lp.cocoPathPlaceholder || '/path/to/annotations.json 或 COCO 所在目录'} style={{ flex: 1 }} />
-                                <button type="button" className="load-btn load-btn-secondary" onClick={handleDetectLastRecord} title="从该路径（目录或文件）读取上次加载记录并填充">检测上次记录</button>
+                <div className="load-body-area">
+                    {loadTab === 'scan' && (
+                        <div className="load-section">
+                            <p className="load-section-desc">约定：自动扫描指定目录及其子目录下的 <code>_annotations.coco.json</code> 文件。支持拖入或粘贴路径。</p>
+                            <div className="load-field">
+                                <label className="load-label">根目录路径</label>
+                                <div className="load-path-row">
+                                    <div
+                                        className="load-drop-zone"
+                                        onDrop={handleDrop}
+                                        onDragOver={(e) => e.preventDefault()}
+                                        onPaste={handlePaste}
+                                        style={{ flex: 1 }}
+                                    >
+                                        <div className="drop-zone-icon">📥</div>
+                                        <div className="load-drop-zone-text">拖拽目录到此处，或粘贴路径</div>
+                                        <input
+                                            type="text"
+                                            value={rootPath}
+                                            onChange={(e) => setRootPath(e.target.value)}
+                                            placeholder="例如 D:\data\coco_root 或 /path/to/root"
+                                            className="load-input"
+                                        />
+                                    </div>
+                                    <button type="button" className="load-btn load-btn-secondary" onClick={() => setShowPathPicker(true)} title="弹窗选择路径" style={{marginTop: 0, padding: '0 24px', borderRadius: '12px'}}>浏览目录...</button>
+                                </div>
                             </div>
+                            {showPathPicker && (
+                                <PathPickerModal
+                                    initialPath={rootPath}
+                                    onSelect={(p) => { setRootPath(p); setShowPathPicker(false); }}
+                                    onClose={() => setShowPathPicker(false)}
+                                />
+                            )}
+                            <div className="load-actions">
+                                <button type="button" className="load-btn" onClick={handleScan} disabled={scanning} style={{flex: 1}}>
+                                    {scanning ? '正在深度扫描中...' : '开始扫描'}
+                                </button>
+                            </div>
+                            
+                            {scanItems.length > 0 && (
+                                <div className="load-scan-list" style={{ marginTop: '24px', borderTop: '1px solid var(--border)', paddingTop: '20px' }}>
+                                    <div className="load-scan-list-header">
+                                        已发现 {scanItems.length} 个标注目录
+                                        {scanItems.some(it => it.auto_created) && (
+                                            <span style={{ color: '#f0a040', marginLeft: '6px' }}>
+                                                （含 {scanItems.filter(it => it.auto_created).length} 个自动创建的数据集）
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div style={{ maxHeight: '250px', overflowY: 'auto', background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: '8px', padding: '4px' }}>
+                                        {scanItems.map((item, i) => (
+                                            <div key={i} className="load-scan-item" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px', padding: '8px 12px', borderBottom: '1px solid var(--border)', background: selectedIndices.has(i) ? 'var(--bg-hover)' : 'transparent' }}>
+                                                <label style={{ display: 'flex', alignItems: 'center', flex: '1 1 auto', minWidth: 0, cursor: 'pointer' }}>
+                                                    <input type="checkbox" checked={selectedIndices.has(i)} onChange={() => toggleItem(i)} style={{accentColor: 'var(--accent)'}} />
+                                                    <span className="load-scan-rel" style={{marginLeft: '8px', fontWeight: '500'}}>{item.relative_path || '(根)'}</span>
+                                                    {item.auto_created && (
+                                                        <span title={`该目录含 ${item.num_images ?? '?'} 张图片，已自动创建 _annotations.coco.json`}
+                                                            style={{ fontSize: '10px', background: 'rgba(245,165,36,0.15)', color: 'var(--warning)', border: '1px solid rgba(245,165,36,0.35)', borderRadius: '4px', padding: '2px 6px', marginLeft: '8px', whiteSpace: 'nowrap' }}>
+                                                            自动创建 · {item.num_images ?? '?'} 张
+                                                        </span>
+                                                    )}
+                                                    <span className="load-scan-path" style={{marginLeft: 'auto', fontSize: '12px', color: 'var(--text-muted)'}} title={item.coco_path}>{item.coco_path.split(/[/\\]/).pop()}</span>
+                                                </label>
+                                                <button type="button" className="load-btn load-btn-secondary" style={{ flexShrink: 0, width: 'auto', padding: '4px 10px', fontSize: '12px', marginTop: 0 }} onClick={() => handleLoadSingleFromScanItem(item)} disabled={loading} title="仅加载此目录的 COCO 文件">
+                                                    单项加载
+                                                </button>
+                                                {item.loader_record && (
+                                                    <button type="button" className="load-btn load-btn-secondary" style={{ flexShrink: 0, width: 'auto', padding: '4px 10px', fontSize: '12px', marginTop: 0, color: 'var(--accent)', borderColor: 'var(--accent)' }} onClick={() => handleLoadLastFromScanItem(item)} disabled={loading}>
+                                                        加载上次
+                                                    </button>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="load-actions" style={{ marginTop: '16px' }}>
+                                        <button type="button" className="load-btn load-btn-secondary" style={{width: 'auto', flex: 0}} onClick={toggleSelectAll}>
+                                            {selectedIndices.size === scanItems.length ? '取消全选' : '全选'}
+                                        </button>
+                                        <span className="load-merged-name" style={{flex: 1, display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--bg-base)', padding: '0 12px', borderRadius: '8px', border: '1px solid var(--border)'}}>
+                                            <label className="load-label" style={{margin: 0, whiteSpace: 'nowrap'}}>合并后名称</label>
+                                            <input type="text" value={datasetName} onChange={(e) => setDatasetName(e.target.value)} placeholder="merged_dataset" className="load-input load-input-inline" style={{border: 'none', background: 'transparent', flex: 1, boxShadow: 'none'}} />
+                                        </span>
+                                        <button type="button" className="load-btn" style={{width: 'auto', flex: 0, margin: 0, padding: '12px 24px'}} onClick={handleLoadMerged} disabled={loading || selectedIndices.size === 0}>
+                                            {loading ? '加载中...' : `加载选中 (${selectedIndices.size})`}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
-                        <div className="load-field">
-                            <label className="load-label">{lp.imageDirLabel}</label>
-                            <input className="load-input" type="text" value={imageDir} onChange={(e) => setImageDir(e.target.value)} placeholder={lp.imageDirPlaceholder || '/path/to/images/'} />
+                    )}
+
+                    {loadTab === 'single' && (
+                        <div className="load-section">
+                            <p className="load-section-desc">直接提供精确的 JSON 路径和图片目录进行加载，适用于标准独立的 COCO 数据集。</p>
+                            <form onSubmit={handleSubmit}>
+                                <div className="load-field">
+                                    <label className="load-label">{lp.cocoPathLabel}</label>
+                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                        <input className="load-input" type="text" value={cocoPath} onChange={(e) => setCocoPath(e.target.value)} placeholder={lp.cocoPathPlaceholder || '/path/to/annotations.json 或 COCO 所在目录'} style={{ flex: 1 }} />
+                                        <button type="button" className="load-btn load-btn-secondary" style={{width: 'auto', margin: 0, padding: '14px 20px', whiteSpace: 'nowrap'}} onClick={handleDetectLastRecord} title="从该路径（目录或文件）读取上次加载记录并填充">检测记录</button>
+                                    </div>
+                                </div>
+                                <div className="load-field">
+                                    <label className="load-label">{lp.imageDirLabel}</label>
+                                    <input className="load-input" type="text" value={imageDir} onChange={(e) => setImageDir(e.target.value)} placeholder={lp.imageDirPlaceholder || '/path/to/images/'} />
+                                </div>
+                                <div className="load-field">
+                                    <label className="load-label">{lp.datasetNameLabel}</label>
+                                    <input className="load-input" type="text" value={datasetName} onChange={(e) => setDatasetName(e.target.value)} placeholder={lp.datasetNamePlaceholder} />
+                                </div>
+                                <button className="load-btn" type="submit" disabled={loading} style={{marginTop: '30px'}}>
+                                    {loading ? '正在加载数据...' : lp.loadButtonText}
+                                </button>
+                            </form>
                         </div>
-                        <div className="load-field">
-                            <label className="load-label">{lp.datasetNameLabel}</label>
-                            <input className="load-input" type="text" value={datasetName} onChange={(e) => setDatasetName(e.target.value)} placeholder={lp.datasetNamePlaceholder} />
-                        </div>
-                        <button className="load-btn" type="submit" disabled={loading}>
-                            {loading ? '加载中...' : lp.loadButtonText}
-                        </button>
-                    </form>
+                    )}
                 </div>
             </div>
         </div>
@@ -1052,8 +1288,19 @@ function computeFullMapReport(images, model, scoreThreshold) {
 }
 
 // PR 曲线画布
-const PR_CURVE_COLORS = ['#52c41a','#1890ff','#faad14','#f5222d','#722ed1','#13c2c2','#fa8c16','#eb2f96','#a0d911','#36cfc9'];
+function getPRCurveColors(theme) {
+    if (theme === 'light') {
+        return ['#2f8f57','#2f67d8','#bd7b12','#c33d4d','#6a45cc','#15949e','#c26d17','#c03f92','#6b9a10','#1f9d9d'];
+    }
+    if (theme === 'dim') {
+        return ['#48be84','#5b8df6','#d59a33','#e35b6b','#8d6cf0','#25b7b7','#de8938','#d95aae','#8ec41c','#3fbdbd'];
+    }
+    return ['#52c41a','#1890ff','#faad14','#f5222d','#722ed1','#13c2c2','#fa8c16','#eb2f96','#a0d911','#36cfc9'];
+}
 function PRCurveCanvas({ prCurves, agnosticCurve }) {
+    const config = useConfig();
+    const uiTheme = config.uiTheme || DEFAULT_CONFIG.uiTheme || 'dark';
+    const prCurveColors = React.useMemo(() => getPRCurveColors(uiTheme), [uiTheme]);
     const containerRef = React.useRef(null);
     const canvasRef = React.useRef(null);
 
@@ -1070,28 +1317,36 @@ function PRCurveCanvas({ prCurves, agnosticCurve }) {
         const W = W_total - padL - padR;
         const H = H_total - padT - padB;
 
-        ctx.fillStyle = '#111122';
+        const css = getComputedStyle(document.documentElement);
+        const cBg = css.getPropertyValue('--bg-soft').trim() || '#111122';
+        const cGrid = css.getPropertyValue('--border').trim() || '#2b3550';
+        const cAxis = css.getPropertyValue('--border-strong').trim() || '#3a4870';
+        const cTick = css.getPropertyValue('--text-muted').trim() || '#7d88a8';
+        const cLabel = css.getPropertyValue('--text-secondary').trim() || '#b0b9d4';
+        const cAgnostic = css.getPropertyValue('--text-primary').trim() || '#e6ebff';
+
+        ctx.fillStyle = cBg;
         ctx.fillRect(0, 0, W_total, H_total);
 
         // 格线
-        ctx.strokeStyle = '#1e1e3a';
+        ctx.strokeStyle = cGrid;
         ctx.lineWidth = 1;
         for (let i = 0; i <= 10; i++) {
             ctx.beginPath(); ctx.moveTo(padL + W * i / 10, padT); ctx.lineTo(padL + W * i / 10, padT + H); ctx.stroke();
             ctx.beginPath(); ctx.moveTo(padL, padT + H * i / 10); ctx.lineTo(padL + W, padT + H * i / 10); ctx.stroke();
         }
-        ctx.strokeStyle = '#334'; ctx.lineWidth = 1;
+        ctx.strokeStyle = cAxis; ctx.lineWidth = 1;
         ctx.strokeRect(padL, padT, W, H);
 
         // 坐标刻度
-        ctx.font = '10px sans-serif'; ctx.fillStyle = '#556';
+        ctx.font = '10px sans-serif'; ctx.fillStyle = cTick;
         for (let i = 0; i <= 5; i++) {
             ctx.textAlign = 'center';
             ctx.fillText((i / 5).toFixed(1), padL + W * i / 5, padT + H + 14);
             ctx.textAlign = 'right';
             ctx.fillText((1 - i / 5).toFixed(1), padL - 5, padT + H * i / 5 + 3);
         }
-        ctx.fillStyle = '#778'; ctx.font = '11px sans-serif';
+        ctx.fillStyle = cLabel; ctx.font = '11px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('Recall →', padL + W / 2, H_total - 4);
         ctx.save(); ctx.translate(11, padT + H / 2); ctx.rotate(-Math.PI / 2);
@@ -1100,8 +1355,8 @@ function PRCurveCanvas({ prCurves, agnosticCurve }) {
         // 曲线数据：按类别 + 类别无关
         const sortedCats = Object.keys(prCurves).sort();
         const curves = [
-            ...sortedCats.map((cat, i) => ({ label: cat, color: PR_CURVE_COLORS[i % PR_CURVE_COLORS.length], ap: 0, ...prCurves[cat] })),
-            { label: '全部缺陷(类别无关)', color: '#ffffff', dash: [7, 3], ap: agnosticCurve.ap || 0, ...agnosticCurve.prCurve },
+            ...sortedCats.map((cat, i) => ({ label: cat, color: prCurveColors[i % prCurveColors.length], ap: 0, ...prCurves[cat] })),
+            { label: '全部缺陷(类别无关)', color: cAgnostic, dash: [7, 3], ap: agnosticCurve.ap || 0, ...agnosticCurve.prCurve },
         ];
 
         curves.forEach(({ recalls, precs, color, dash }) => {
@@ -1123,11 +1378,11 @@ function PRCurveCanvas({ prCurves, agnosticCurve }) {
         curves.forEach(({ label, color, ap }, i) => {
             const ly = legStartY + i * 15;
             ctx.fillStyle = color; ctx.fillRect(legX - 120, ly - 4, 16, 2.5);
-            ctx.fillStyle = color === '#ffffff' ? '#ddd' : color;
+            ctx.fillStyle = color;
             ctx.font = '9.5px sans-serif'; ctx.textAlign = 'left';
             ctx.fillText(`${label}  AP=${(ap * 100).toFixed(1)}%`, legX - 100, ly);
         });
-    }, [prCurves, agnosticCurve]);
+    }, [prCurves, agnosticCurve, prCurveColors]);
 
     return (
         <div ref={containerRef} style={{ width: '100%' }}>
@@ -1138,6 +1393,9 @@ function PRCurveCanvas({ prCurves, agnosticCurve }) {
 
 // ==================== mAP 报告弹窗 ====================
 function MapReportModal({ images, model, scoreThresh, onClose }) {
+    const config = useConfig();
+    const uiTheme = config.uiTheme || DEFAULT_CONFIG.uiTheme || 'dark';
+    const prCurveColors = React.useMemo(() => getPRCurveColors(uiTheme), [uiTheme]);
     const [computing, setComputing] = React.useState(true);
     const [report, setReport] = React.useState(null);
     const [activeTab, setActiveTab] = React.useState('table'); // 'table' | 'agnostic' | 'pr'
@@ -1174,10 +1432,10 @@ function MapReportModal({ images, model, scoreThresh, onClose }) {
     };
 
     const TAB_STYLE = (key) => ({
-        padding: '6px 16px', fontSize: '13px', cursor: 'pointer', border: 'none',
-        background: activeTab === key ? '#2a3a5a' : 'transparent',
-        color: activeTab === key ? '#7af' : '#888',
-        borderBottom: activeTab === key ? '2px solid #4a7af0' : '2px solid transparent',
+        padding: '6px 16px', fontSize: 'var(--font-md)', cursor: 'pointer', border: 'none',
+        background: activeTab === key ? 'var(--bg-hover)' : 'transparent',
+        color: activeTab === key ? 'var(--accent)' : 'var(--text-muted)',
+        borderBottom: activeTab === key ? '2px solid var(--accent)' : '2px solid transparent',
         fontWeight: activeTab === key ? 'bold' : 'normal',
     });
 
@@ -1189,27 +1447,27 @@ function MapReportModal({ images, model, scoreThresh, onClose }) {
             overflowY: 'auto', padding: '24px 12px',
         }} onClick={e => e.target === e.currentTarget && onClose()}>
             <div style={{
-                background: '#16162e',
-                borderRadius: '12px',
-                border: '1px solid #2d2d50',
-                boxShadow: '0 24px 60px rgba(0,0,0,0.85)',
+                background: 'var(--bg-surface)',
+                borderRadius: '14px',
+                border: '1px solid var(--border-strong)',
+                boxShadow: '0 24px 60px rgba(0,0,0,0.7)',
                 maxWidth: '1000px', width: '100%',
                 display: 'flex', flexDirection: 'column',
             }}>
                 {/* 标题栏 */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid #2d2d50' }}>
-                    <span style={{ fontWeight: 'bold', fontSize: '15px', color: '#ddd' }}>📊 检测指标报告 · <span style={{ color: '#7af' }}>{model}</span></span>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
+                    <span style={{ fontWeight: 'bold', fontSize: 'var(--font-lg)', color: 'var(--text-primary)' }}>📊 检测指标报告 · <span style={{ color: 'var(--accent)' }}>{model}</span></span>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                         <button className="btn btn-sm btn-secondary" onClick={copyTable} disabled={!report}>📋 复制表格</button>
-                        <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: '#888', fontSize: '18px', cursor: 'pointer', lineHeight: 1 }}>✕</button>
+                        <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer', lineHeight: 1 }}>✕</button>
                     </div>
                 </div>
 
                 <div style={{ padding: '16px 20px 0', overflow: 'hidden' }}>
                     {computing ? (
-                        <div style={{ textAlign: 'center', padding: '60px', color: '#666', fontSize: '16px' }}>⏳ 计算中…</div>
+                        <div style={{ textAlign: 'center', padding: '60px', color: 'var(--text-muted)', fontSize: 'var(--font-xl)' }}>⏳ 计算中…</div>
                     ) : !report ? (
-                        <div style={{ textAlign: 'center', padding: '40px', color: '#f5222d' }}>计算失败，请检查数据</div>
+                        <div style={{ textAlign: 'center', padding: '40px', color: 'var(--danger)' }}>计算失败，请检查数据</div>
                     ) : (
                         <>
                             {/* 指标卡片：按类 mAP + 类别无关 AP */}
@@ -1222,25 +1480,25 @@ function MapReportModal({ images, model, scoreThresh, onClose }) {
                                     { label: 'AP@75', value: report.agnostic.ap75, color: '#eb2f96', sub: '类别无关' },
                                     { label: 'AP@50:95', value: report.agnostic.ap50_95, color: '#13c2c2', sub: '类别无关' },
                                 ].map(({ label, value, color, sub }) => (
-                                    <div key={label} style={{ background: '#1a1a2e', borderRadius: '8px', padding: '12px 8px', textAlign: 'center', border: `1px solid ${color}44` }}>
-                                        <div style={{ fontSize: '10px', color: '#666', marginBottom: '1px' }}>{sub}</div>
+                                    <div key={label} style={{ background: 'var(--bg-raised)', borderRadius: '8px', padding: '12px 8px', textAlign: 'center', border: `1px solid ${color}44` }}>
+                                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '1px' }}>{sub}</div>
                                         <div style={{ fontSize: '22px', fontWeight: 'bold', color, lineHeight: 1.2 }}>{fmt(value)}</div>
-                                        <div style={{ fontSize: '11px', color: '#888', marginTop: '2px' }}>{label}</div>
+                                        <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-muted)', marginTop: '2px' }}>{label}</div>
                                     </div>
                                 ))}
                             </div>
 
                             {/* 元信息 */}
-                            <div style={{ fontSize: '12px', color: '#666', marginBottom: '12px', display: 'flex', gap: '18px', flexWrap: 'wrap' }}>
-                                <span>模型：<strong style={{ color: '#aaa' }}>{model}</strong></span>
-                                <span>置信度阈值：<strong style={{ color: '#aaa' }}>{scoreThresh.toFixed(2)}</strong></span>
-                                <span>图片数：<strong style={{ color: '#aaa' }}>{images.length}</strong></span>
-                                <span>类别数：<strong style={{ color: '#aaa' }}>{Object.keys(report.perClass).length}</strong></span>
-                                <span style={{ color: '#555' }}>AP = AUC-PR（单调包络）</span>
+                            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '12px', display: 'flex', gap: '18px', flexWrap: 'wrap' }}>
+                                <span>模型：<strong style={{ color: 'var(--text-primary)' }}>{model}</strong></span>
+                                <span>置信度阈值：<strong style={{ color: 'var(--text-primary)' }}>{scoreThresh.toFixed(2)}</strong></span>
+                                <span>图片数：<strong style={{ color: 'var(--text-primary)' }}>{images.length}</strong></span>
+                                <span>类别数：<strong style={{ color: 'var(--text-primary)' }}>{Object.keys(report.perClass).length}</strong></span>
+                                <span style={{ color: 'var(--text-secondary)' }}>AP = AUC-PR（单调包络）</span>
                             </div>
 
                             {/* 标签页切换 */}
-                            <div style={{ display: 'flex', borderBottom: '1px solid #2d2d50', marginBottom: '0' }}>
+                            <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', marginBottom: '0' }}>
                                 {[['table','按类别指标'], ['agnostic','类别无关指标'], ['pr','PR 曲线']].map(([k, label]) => (
                                     <button key={k} style={TAB_STYLE(k)} onClick={() => setActiveTab(k)}>{label}</button>
                                 ))}
@@ -1254,7 +1512,7 @@ function MapReportModal({ images, model, scoreThresh, onClose }) {
                     <div style={{ padding: '16px 20px', overflowY: 'auto', maxHeight: '55vh' }}>
                         {activeTab === 'table' && (
                             <div style={{ overflowX: 'auto' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', tableLayout: 'fixed' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--font-md)', tableLayout: 'fixed' }}>
                                     <colgroup>
                                         <col style={{ width: '80px' }} />
                                         {['GT','预测','TP','FP','FN','Precision','Recall','F1','AP@50','AP@75','AP@50:95'].map((_, i) => (
@@ -1262,40 +1520,40 @@ function MapReportModal({ images, model, scoreThresh, onClose }) {
                                         ))}
                                     </colgroup>
                                     <thead>
-                                        <tr style={{ background: '#1e1e3a', position: 'sticky', top: 0, zIndex: 1 }}>
+                                        <tr style={{ background: 'var(--bg-raised)', position: 'sticky', top: 0, zIndex: 1 }}>
                                             {[['类别','left'],['GT','center'],['预测','center'],['TP','center'],['FP','center'],['FN','center'],['Precision','center'],['Recall','center'],['F1','center'],['AP@50','center'],['AP@75','center'],['AP@50:95','center']].map(([h, a]) => (
-                                                <th key={h} style={{ ...cs(a), fontWeight: 'bold', color: '#bbb', background: '#1e1e3a', borderBottom: '2px solid #3d3d60', fontSize: '12px' }}>{h}</th>
+                                                <th key={h} style={{ ...cs(a), fontWeight: 'bold', color: 'var(--text-secondary)', background: 'var(--bg-raised)', borderBottom: `2px solid var(--border-strong)`, fontSize: 'var(--font-sm)' }}>{h}</th>
                                             ))}
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {Object.keys(report.perClass).sort().map((cat, i) => {
                                             const r = report.perClass[cat];
-                                            const catColor = PR_CURVE_COLORS[i % PR_CURVE_COLORS.length];
+                                            const catColor = prCurveColors[i % prCurveColors.length];
                                             return (
-                                                <tr key={cat} style={{ background: i % 2 === 0 ? '#14142a' : '#18183a', borderBottom: '1px solid #252545' }}>
-                                                    <td style={{ ...cs('left'), color: catColor, fontWeight: 'bold', fontSize: '12px' }}>{cat}</td>
-                                                    <td style={{ ...cs(), color: '#aaa', fontSize: '12px' }}>{r.numGT}</td>
-                                                    <td style={{ ...cs(), color: '#aaa', fontSize: '12px' }}>{r.numPred}</td>
-                                                    <td style={{ ...cs(), color: '#52c41a', fontWeight: 'bold', fontSize: '12px' }}>{r.tp}</td>
-                                                    <td style={{ ...cs(), color: '#f5222d', fontSize: '12px' }}>{r.fp}</td>
-                                                    <td style={{ ...cs(), color: '#faad14', fontSize: '12px' }}>{r.fn}</td>
-                                                    <td style={{ ...cs(), fontSize: '12px' }}>{fmt(r.precision)}</td>
-                                                    <td style={{ ...cs(), fontSize: '12px' }}>{fmt(r.recall)}</td>
-                                                    <td style={{ ...cs(), fontSize: '12px' }}>{fmt(r.f1)}</td>
-                                                    <td style={{ ...cs(), color: '#52c41a', fontWeight: 'bold', fontSize: '12px' }}>{fmt(r.ap)}</td>
-                                                    <td style={{ ...cs(), color: '#1890ff', fontSize: '12px' }}>{fmt(report.perClassAP75[cat]||0)}</td>
-                                                    <td style={{ ...cs(), color: '#722ed1', fontSize: '12px' }}>{fmt(report.perClassAP50_95[cat]||0)}</td>
+                                                <tr key={cat} style={{ background: i % 2 === 0 ? 'var(--bg-soft)' : 'var(--bg-raised)', borderBottom: '1px solid var(--border)' }}>
+                                                    <td style={{ ...cs('left'), color: catColor, fontWeight: 'bold', fontSize: 'var(--font-sm)' }}>{cat}</td>
+                                                    <td style={{ ...cs(), color: 'var(--text-muted)', fontSize: 'var(--font-sm)' }}>{r.numGT}</td>
+                                                    <td style={{ ...cs(), color: 'var(--text-muted)', fontSize: 'var(--font-sm)' }}>{r.numPred}</td>
+                                                    <td style={{ ...cs(), color: '#52c41a', fontWeight: 'bold', fontSize: 'var(--font-sm)' }}>{r.tp}</td>
+                                                    <td style={{ ...cs(), color: '#f5222d', fontSize: 'var(--font-sm)' }}>{r.fp}</td>
+                                                    <td style={{ ...cs(), color: '#faad14', fontSize: 'var(--font-sm)' }}>{r.fn}</td>
+                                                    <td style={{ ...cs(), fontSize: 'var(--font-sm)' }}>{fmt(r.precision)}</td>
+                                                    <td style={{ ...cs(), fontSize: 'var(--font-sm)' }}>{fmt(r.recall)}</td>
+                                                    <td style={{ ...cs(), fontSize: 'var(--font-sm)' }}>{fmt(r.f1)}</td>
+                                                    <td style={{ ...cs(), color: '#52c41a', fontWeight: 'bold', fontSize: 'var(--font-sm)' }}>{fmt(r.ap)}</td>
+                                                    <td style={{ ...cs(), color: '#1890ff', fontSize: 'var(--font-sm)' }}>{fmt(report.perClassAP75[cat]||0)}</td>
+                                                    <td style={{ ...cs(), color: '#722ed1', fontSize: 'var(--font-sm)' }}>{fmt(report.perClassAP50_95[cat]||0)}</td>
                                                 </tr>
                                             );
                                         })}
                                         {/* mAP 汇总行 */}
-                                        <tr style={{ background: '#1e1e3a', borderTop: '2px solid #3d3d60' }}>
-                                            <td style={{ ...cs('left'), color: '#fff', fontWeight: 'bold', fontSize: '12px' }}>mAP</td>
+                                        <tr style={{ background: 'var(--bg-raised)', borderTop: `2px solid var(--border-strong)` }}>
+                                            <td style={{ ...cs('left'), color: 'var(--text-primary)', fontWeight: 'bold', fontSize: 'var(--font-sm)' }}>mAP</td>
                                             <td colSpan={8} style={{ borderBottom: 'none' }} />
-                                            <td style={{ ...cs(), color: '#52c41a', fontWeight: 'bold', fontSize: '13px' }}>{fmt(report.mAP50)}</td>
-                                            <td style={{ ...cs(), color: '#1890ff', fontWeight: 'bold', fontSize: '13px' }}>{fmt(report.mAP75)}</td>
-                                            <td style={{ ...cs(), color: '#722ed1', fontWeight: 'bold', fontSize: '13px' }}>{fmt(report.mAP50_95)}</td>
+                                            <td style={{ ...cs(), color: '#52c41a', fontWeight: 'bold', fontSize: 'var(--font-md)' }}>{fmt(report.mAP50)}</td>
+                                            <td style={{ ...cs(), color: '#1890ff', fontWeight: 'bold', fontSize: 'var(--font-md)' }}>{fmt(report.mAP75)}</td>
+                                            <td style={{ ...cs(), color: '#722ed1', fontWeight: 'bold', fontSize: 'var(--font-md)' }}>{fmt(report.mAP50_95)}</td>
                                         </tr>
                                     </tbody>
                                 </table>
@@ -1306,23 +1564,23 @@ function MapReportModal({ images, model, scoreThresh, onClose }) {
                             const a = report.agnostic;
                             return (
                                 <div>
-                                    <div style={{ fontSize: '13px', color: '#888', marginBottom: '16px', background: '#1a1a30', padding: '10px 14px', borderRadius: '6px' }}>
-                                        <strong style={{ color: '#ccc' }}>类别无关指标</strong>：忽略缺陷类型，只要预测框与任意GT框 IoU 达到阈值，即视为检出。评估模型对缺陷的整体感知能力。
+                                    <div style={{ fontSize: 'var(--font-md)', color: 'var(--text-muted)', marginBottom: '16px', background: 'var(--bg-raised)', padding: '10px 14px', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                                        <strong style={{ color: 'var(--text-secondary)' }}>类别无关指标</strong>：忽略缺陷类型，只要预测框与任意GT框 IoU 达到阈值，即视为检出。评估模型对缺陷的整体感知能力。
                                     </div>
                                     <div style={{ overflowX: 'auto' }}>
-                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--font-md)' }}>
                                             <thead>
-                                                <tr style={{ background: '#1e1e3a', borderBottom: '2px solid #3d3d60' }}>
+                                                <tr style={{ background: 'var(--bg-raised)', borderBottom: `2px solid var(--border-strong)` }}>
                                                     {['指标','GT总数','预测总数','TP','FP','FN','Precision','Recall','F1','AP@50','AP@75','AP@50:95'].map(h => (
-                                                        <th key={h} style={{ ...cs(h==='指标'?'left':'center'), color: '#bbb', fontWeight: 'bold', fontSize: '12px' }}>{h}</th>
+                                                        <th key={h} style={{ ...cs(h==='指标'?'left':'center'), color: 'var(--text-secondary)', fontWeight: 'bold', fontSize: 'var(--font-sm)' }}>{h}</th>
                                                     ))}
                                                 </tr>
                                             </thead>
                                             <tbody>
-                                                <tr style={{ background: '#14142a', borderBottom: '1px solid #252545' }}>
+                                                <tr style={{ background: 'var(--bg-soft)', borderBottom: `1px solid var(--border)` }}>
                                                     <td style={{ ...cs('left'), color: '#fa8c16', fontWeight: 'bold' }}>缺陷检出</td>
-                                                    <td style={{ ...cs(), color: '#aaa' }}>{a.numGT}</td>
-                                                    <td style={{ ...cs(), color: '#aaa' }}>{a.numPred}</td>
+                                                    <td style={{ ...cs(), color: 'var(--text-muted)' }}>{a.numGT}</td>
+                                                    <td style={{ ...cs(), color: 'var(--text-muted)' }}>{a.numPred}</td>
                                                     <td style={{ ...cs(), color: '#52c41a', fontWeight: 'bold' }}>{a.tp}</td>
                                                     <td style={{ ...cs(), color: '#f5222d' }}>{a.fp}</td>
                                                     <td style={{ ...cs(), color: '#faad14' }}>{a.fn}</td>
@@ -1336,11 +1594,11 @@ function MapReportModal({ images, model, scoreThresh, onClose }) {
                                             </tbody>
                                         </table>
                                     </div>
-                                    <div style={{ marginTop: '20px', fontSize: '13px', color: '#666', background: '#111128', borderRadius: '6px', padding: '12px 16px', lineHeight: '1.8' }}>
-                                        <div><span style={{color:'#888'}}>漏检数 (FN)：</span><strong style={{color:'#faad14'}}>{a.fn}</strong> 个GT未被任何预测框覆盖</div>
-                                        <div><span style={{color:'#888'}}>误检数 (FP)：</span><strong style={{color:'#f5222d'}}>{a.fp}</strong> 个预测框未与任何GT匹配</div>
-                                        <div><span style={{color:'#888'}}>漏检率：</span><strong style={{color:'#faad14'}}>{a.numGT > 0 ? fmt(a.fn/a.numGT) : '—'}</strong></div>
-                                        <div><span style={{color:'#888'}}>误检率：</span><strong style={{color:'#f5222d'}}>{a.numPred > 0 ? fmt(a.fp/a.numPred) : '—'}</strong></div>
+                                    <div style={{ marginTop: '20px', fontSize: 'var(--font-md)', color: 'var(--text-secondary)', background: 'var(--bg-soft)', borderRadius: '6px', padding: '12px 16px', lineHeight: '1.8' }}>
+                                        <div><span style={{color:'var(--text-muted)'}}>漏检数 (FN)：</span><strong style={{color:'#faad14'}}>{a.fn}</strong> 个GT未被任何预测框覆盖</div>
+                                        <div><span style={{color:'var(--text-muted)'}}>误检数 (FP)：</span><strong style={{color:'#f5222d'}}>{a.fp}</strong> 个预测框未与任何GT匹配</div>
+                                        <div><span style={{color:'var(--text-muted)'}}>漏检率：</span><strong style={{color:'#faad14'}}>{a.numGT > 0 ? fmt(a.fn/a.numGT) : '—'}</strong></div>
+                                        <div><span style={{color:'var(--text-muted)'}}>误检率：</span><strong style={{color:'#f5222d'}}>{a.numPred > 0 ? fmt(a.fp/a.numPred) : '—'}</strong></div>
                                     </div>
                                 </div>
                             );
@@ -1348,7 +1606,7 @@ function MapReportModal({ images, model, scoreThresh, onClose }) {
 
                         {activeTab === 'pr' && (
                             <div>
-                                <div style={{ fontSize: '12px', color: '#666', marginBottom: '10px' }}>PR 曲线基于 IoU@50 计算，曲线下面积即为 AP@50。</div>
+                                <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '10px' }}>PR 曲线基于 IoU@50 计算，曲线下面积即为 AP@50。</div>
                                 <PRCurveCanvas prCurves={report.prCurves} agnosticCurve={report.agnostic} />
                             </div>
                         )}
@@ -1356,7 +1614,7 @@ function MapReportModal({ images, model, scoreThresh, onClose }) {
                 )}
 
                 {/* 底部 */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '12px 20px', borderTop: '1px solid #2d2d50' }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
                     <button className="btn btn-secondary" onClick={onClose}>关闭</button>
                 </div>
             </div>
@@ -1426,19 +1684,19 @@ function PredEvalModal({ predModelNames, initModel, initIou, initScore, onApply,
                 </div>
                 <div className="modal-body">
                     <div style={{ marginBottom: '18px' }}>
-                        <div style={{ fontWeight: 'bold', marginBottom: '8px', fontSize: '13px', color: '#ccc' }}>选择预测模型（单选）</div>
+                        <div style={{ fontWeight: 'bold', marginBottom: '8px', fontSize: 'var(--font-md)', color: 'var(--text-secondary)' }}>选择预测模型（单选）</div>
                         {predModelNames.map(model => (
                             <label key={model} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px', cursor: 'pointer', padding: '6px 10px', background: localModel === model ? '#2a3a5a' : '#1e1e38', borderRadius: '6px', border: localModel === model ? '1px solid #4a7af0' : '1px solid transparent' }}>
                                 <input type="radio" name="pred_eval_model" value={model} checked={localModel === model} onChange={() => setLocalModel(model)} />
-                                <span style={{ fontFamily: 'monospace', fontSize: '13px' }}>{model}</span>
+                                <span style={{ fontFamily: 'monospace', fontSize: 'var(--font-md)' }}>{model}</span>
                             </label>
                         ))}
                     </div>
 
                     <div style={{ marginBottom: '16px' }}>
-                        <div style={{ fontSize: '13px', color: '#ccc', marginBottom: '6px' }}>
+                        <div style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)', marginBottom: '6px' }}>
                             IoU 阈值：<strong style={{ color: '#7af' }}>{localIou.toFixed(2)}</strong>
-                            <span style={{ fontSize: '11px', color: '#888', marginLeft: '8px' }}>（预测框与GT框的重叠度 ≥ 此值才算正确）</span>
+                            <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-muted)', marginLeft: '8px' }}>（预测框与GT框的重叠度 ≥ 此值才算正确）</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                             <input type="range" min="0" max="1" step="0.05" value={localIou} onChange={handleIouSlider} style={{ flex: 1 }} />
@@ -1447,9 +1705,9 @@ function PredEvalModal({ predModelNames, initModel, initIou, initScore, onApply,
                     </div>
 
                     <div style={{ marginBottom: '8px' }}>
-                        <div style={{ fontSize: '13px', color: '#ccc', marginBottom: '6px' }}>
+                        <div style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)', marginBottom: '6px' }}>
                             置信度阈值：<strong style={{ color: '#7af' }}>{localScore.toFixed(2)}</strong>
-                            <span style={{ fontSize: '11px', color: '#888', marginLeft: '8px' }}>（低于此值的预测框不参与评估）</span>
+                            <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-muted)', marginLeft: '8px' }}>（低于此值的预测框不参与评估）</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                             <input type="range" min="0" max="1" step="0.05" value={localScore} onChange={handleScoreSlider} style={{ flex: 1 }} />
@@ -1457,11 +1715,11 @@ function PredEvalModal({ predModelNames, initModel, initIou, initScore, onApply,
                         </div>
                     </div>
 
-                    <div style={{ fontSize: '12px', color: '#888', marginTop: '14px', background: '#181830', padding: '10px', borderRadius: '6px', lineHeight: '1.7' }}>
+                                    <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginTop: '14px', background: 'var(--bg-raised)', padding: '10px', borderRadius: '6px', border: '1px solid var(--border)', lineHeight: '1.7' }}>
                         <div>✓ <strong style={{color:'#52c41a'}}>预测正确</strong>：无误检且无漏检（TP全匹配）</div>
                         <div>⚡ <strong style={{color:'#faad14'}}>误检</strong>：存在未命中GT的预测框（FP &gt; 0）</div>
                         <div>◎ <strong style={{color:'#f5222d'}}>漏检</strong>：存在未被预测框命中的GT框（FN &gt; 0）</div>
-                        <div style={{color:'#666', fontSize:'11px', marginTop:'4px'}}>注：一张图可同时属于误检和漏检</div>
+                        <div style={{color:'var(--text-muted)', fontSize:'11px', marginTop:'4px'}}>注：一张图可同时属于误检和漏检</div>
                     </div>
                 </div>
                 <div className="modal-footer">
@@ -1480,7 +1738,7 @@ function PredEvalModal({ predModelNames, initModel, initIou, initScore, onApply,
 }
 
 // ==================== 图片宫格页面 ====================
-function GalleryPage({ datasetData, images, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, onUpdateCategory, onUpdateCategories, onUpdateNote, onBatchUpdateCategory, onRollback, metaFilterOptions, onApplyMetaFilters, autoSaveStatus }) {
+function GalleryPage({ datasetData, images, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, onUpdateCategory, onUpdateCategories, onUpdateNote, onBatchUpdateCategory, onBatchClearAnnotations, onRollback, metaFilterOptions, onApplyMetaFilters, autoSaveStatus, onAnnotationsSaved, onReloadImages, jumpToCategory, onJumpHandled, jumpToImageId, onJumpImageHandled }) {
     const config = useConfig();
     const gallery = config.gallery || DEFAULT_CONFIG.gallery;
     const [currentPage, setCurrentPage] = useState(1);
@@ -1488,6 +1746,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     const [selectedLabelCategory, setSelectedLabelCategory] = useState('all'); // 标注类别筛选
     const [selectedImageCategory, setSelectedImageCategory] = useState('all'); // 图片分类筛选
     const [selectedDirectory, setSelectedDirectory] = useState('all'); // 目录筛选（多目录合并时）
+    const [showUnannotatedOnly, setShowUnannotatedOnly] = useState(false); // 仅显示未标注图片
     const [searchText, setSearchText] = useState('');
     // 图片元数据筛选（c_time / product_id / position），仅当 COCO 含对应字段时显示
     const [metaCtimeStart, setMetaCtimeStart] = useState('');
@@ -1497,14 +1756,42 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     const [metaFilterApplying, setMetaFilterApplying] = useState(false);
     const [scoreMin, setScoreMin] = useState('');
     const [scoreMax, setScoreMax] = useState('');
+    const [gtCountMin, setGtCountMin] = useState('');
+    const [gtCountMax, setGtCountMax] = useState('');
+    const [predCountMin, setPredCountMin] = useState('');
+    const [predCountMax, setPredCountMax] = useState('');
+    const [areaMax, setAreaMax] = useState(''); // 包含极小目标(面积 < xxx)
+    const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
     const [selectedImages, setSelectedImages] = useState(new Set());
     const [showExportModal, setShowExportModal] = useState(false);
     const [showVersionModal, setShowVersionModal] = useState(false);
     const [showSaveModal, setShowSaveModal] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [showCatMgr, setShowCatMgr] = useState(false); // 类别管理弹窗
+
+    // EDA 联动：收到 jumpToCategory 时自动设置标注类别筛选并跳到第1页
+    useEffect(() => {
+        if (!jumpToCategory) return;
+        setSelectedLabelCategory(jumpToCategory);
+        setCurrentPage(1);
+        if (onJumpHandled) onJumpHandled();
+    }, [jumpToCategory]); // eslint-disable-line
+
+    // EDA 联动：收到 jumpToImageId 时直接打开对应图片查看器
+    useEffect(() => {
+        if (!jumpToImageId || !images || images.length === 0) return;
+        const target = images.find(img => img.image_id === jumpToImageId || img.image_id === Number(jumpToImageId));
+        if (target) {
+            setSelectedImage(target);
+            setViewerOpen(true);
+        }
+        if (onJumpImageHandled) onJumpImageHandled();
+    }, [jumpToImageId, images]); // eslint-disable-line
+
     // 大图查看器状态：直接存在 GalleryPage，filteredImages 可直接传入
     const [viewerOpen, setViewerOpen] = useState(false);
     const [selectedImage, setSelectedImage] = useState(null);
+    const [sortOrder, setSortOrder] = useState('default'); // 'default'|'name_asc'|'name_desc'|'ann_desc'|'ann_asc'
     // 预测评估状态
     const [predEvalOpen, setPredEvalOpen] = useState(false);
     const [predEvalEnabled, setPredEvalEnabled] = useState(false);
@@ -1516,25 +1803,31 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     // 控制哪些预测模型可见（null 表示全显示，Set 表示白名单）
     const [visiblePredModels, setVisiblePredModels] = useState(null);
 
-    // 标注类别统计
-    const labelCategoryStats = {};
-    let totalAnnotations = 0;
+    // 标注类别统计（useMemo 缓存，仅在 images 变化时重算）
+    const { labelCategoryStats, totalAnnotations } = React.useMemo(() => {
+        const stats = {};
+        let total = 0;
     images.forEach(img => {
         img.annotations.forEach(ann => {
-            labelCategoryStats[ann.category] = (labelCategoryStats[ann.category] || 0) + 1;
-            totalAnnotations++;
+                stats[ann.category] = (stats[ann.category] || 0) + 1;
+                total++;
         });
     });
+        return { labelCategoryStats: stats, totalAnnotations: total };
+    }, [images]);
 
-    // 图片分类统计（一图可属多类，按归属计数）
-    const imageCategoryStats = {};
-    (imageCategories || []).forEach(cat => { imageCategoryStats[cat] = 0; });
+    // 图片分类统计（useMemo 缓存）
     const defaultImageCat = (imageCategories && imageCategories[0]) || '未分类';
+    const imageCategoryStats = React.useMemo(() => {
+        const stats = {};
+        (imageCategories || []).forEach(cat => { stats[cat] = 0; });
     images.forEach(img => {
         const cats = imageClassifications[img.image_id];
         const arr = Array.isArray(cats) && cats.length ? cats : [defaultImageCat];
-        arr.forEach(cat => { imageCategoryStats[cat] = (imageCategoryStats[cat] || 0) + 1; });
+            arr.forEach(cat => { stats[cat] = (stats[cat] || 0) + 1; });
     });
+        return stats;
+    }, [images, imageClassifications, imageCategories, defaultImageCat]);
 
     // 目录列表（多目录合并时用于筛选）
     const directoryOptions = React.useMemo(() => {
@@ -1545,7 +1838,12 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
 
     // 是否存在置信度分数字段（决定是否显示分数筛选器）
     const hasScoreData = React.useMemo(() =>
-        images.some(img => img.annotations.some(a => typeof a.score === 'number' && !isNaN(a.score)))
+        images.some(img => 
+            img.annotations.some(a => typeof a.score === 'number' && !isNaN(a.score)) || 
+            (img.pred_annotations && img.pred_annotations.some(a => typeof a.score === 'number' && !isNaN(a.score))) ||
+            img.annotations.some(a => typeof a.score === 'string' && a.score !== '') ||
+            (img.pred_annotations && img.pred_annotations.some(a => typeof a.score === 'string' && a.score !== ''))
+        )
     , [images]);
 
     // 预测模型列表（只有同时存在GT和预测时才有）
@@ -1582,24 +1880,47 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     }, [imageEvalResults, predEvalEnabled]);
 
     // 筛选图片（与宫格一致；大图查看器用同一份列表翻页，filteredImages 直接传入 ImageViewer）
-    const filteredImages = React.useMemo(() => images.filter(img => {
+    const _filteredImages = React.useMemo(() => images.filter(img => {
         if (selectedDirectory !== 'all' && (img.source_path != null ? img.source_path : '') !== selectedDirectory) return false;
         if (selectedLabelCategory !== 'all' && !img.annotations.some(a => a.category === selectedLabelCategory)) return false;
+        if (showUnannotatedOnly && img.annotations && img.annotations.length > 0) return false;
         if (selectedImageCategory !== 'all') {
             const arr = imageClassifications[img.image_id];
             const imgCats = Array.isArray(arr) && arr.length ? arr : [defaultImageCat];
             if (!imgCats.includes(selectedImageCategory)) return false;
         }
         if (searchText && !img.file_name.toLowerCase().includes(searchText.toLowerCase())) return false;
-        // 置信度范围筛选：只要图片中任意框的分数在范围内即通过
+        // 置信度范围筛选：只要图片中任意 GT 或预测框的分数在范围内即通过
         if (scoreMin !== '' || scoreMax !== '') {
             const sMin = scoreMin !== '' ? parseFloat(scoreMin) : -Infinity;
             const sMax = scoreMax !== '' ? parseFloat(scoreMax) : Infinity;
-            const hit = img.annotations.some(a => {
+            const checkScore = (a) => {
                 const s = typeof a.score === 'number' ? a.score : parseFloat(a.score);
                 return !isNaN(s) && s >= sMin && s <= sMax;
-            });
+            };
+            const hit = img.annotations.some(checkScore) || (img.pred_annotations && img.pred_annotations.some(checkScore));
             if (!hit) return false;
+        }
+        // GT 框数量筛选
+        if (gtCountMin !== '') {
+            if ((img.annotations?.length || 0) < parseInt(gtCountMin, 10)) return false;
+        }
+        if (gtCountMax !== '') {
+            if ((img.annotations?.length || 0) > parseInt(gtCountMax, 10)) return false;
+        }
+        // 预测框数量筛选
+        if (predCountMin !== '') {
+            if ((img.pred_annotations?.length || 0) < parseInt(predCountMin, 10)) return false;
+        }
+        if (predCountMax !== '') {
+            if ((img.pred_annotations?.length || 0) > parseInt(predCountMax, 10)) return false;
+        }
+        // 目标面积筛选 (小于该面积)
+        if (areaMax !== '') {
+            const aMax = parseFloat(areaMax);
+            const hasSmallObj = img.annotations.some(a => a.bbox && a.bbox[2] * a.bbox[3] < aMax) || 
+                               (img.pred_annotations && img.pred_annotations.some(a => a.bbox && a.bbox[2] * a.bbox[3] < aMax));
+            if (!hasSmallObj) return false;
         }
         // 预测评估筛选
         if (predEvalEnabled && predEvalFilter !== null) {
@@ -1610,7 +1931,30 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
             if (predEvalFilter === 'fn' && !r.hasFN) return false;
         }
         return true;
-    }), [images, selectedDirectory, selectedLabelCategory, selectedImageCategory, searchText, imageClassifications, defaultImageCat, scoreMin, scoreMax, predEvalEnabled, predEvalFilter, imageEvalResults]);
+    }), [images, selectedDirectory, selectedLabelCategory, selectedImageCategory, searchText, imageClassifications, defaultImageCat, scoreMin, scoreMax, gtCountMin, gtCountMax, predCountMin, predCountMax, areaMax, predEvalEnabled, predEvalFilter, imageEvalResults, showUnannotatedOnly]);
+
+    // 排序
+    const filteredImages = React.useMemo(() => {
+        const arr = [..._filteredImages];
+        if (sortOrder === 'name_asc') arr.sort((a, b) => a.file_name.localeCompare(b.file_name));
+        else if (sortOrder === 'name_desc') arr.sort((a, b) => b.file_name.localeCompare(a.file_name));
+        else if (sortOrder === 'ann_desc') arr.sort((a, b) => (b.annotations?.length || 0) - (a.annotations?.length || 0));
+        else if (sortOrder === 'ann_asc') arr.sort((a, b) => (a.annotations?.length || 0) - (b.annotations?.length || 0));
+        else if (sortOrder === 'pred_desc') arr.sort((a, b) => (b.pred_annotations?.length || 0) - (a.pred_annotations?.length || 0));
+        else if (sortOrder === 'pred_asc') arr.sort((a, b) => (a.pred_annotations?.length || 0) - (b.pred_annotations?.length || 0));
+        else if (sortOrder === 'size_desc') arr.sort((a, b) => (b.file_size || 0) - (a.file_size || 0));
+        else if (sortOrder === 'size_asc') arr.sort((a, b) => (a.file_size || 0) - (b.file_size || 0));
+        else if (sortOrder === 'mtime_desc') arr.sort((a, b) => (b.modified_time || 0) - (a.modified_time || 0));
+        else if (sortOrder === 'mtime_asc') arr.sort((a, b) => (a.modified_time || 0) - (b.modified_time || 0));
+        return arr;
+    }, [_filteredImages, sortOrder]);
+
+    // 标注进度统计（基于全量 images，不受当前筛选影响）
+    const annotationProgress = React.useMemo(() => {
+        const total = images.length;
+        const annotated = images.filter(img => img.annotations && img.annotations.length > 0).length;
+        return { total, annotated, unannotated: total - annotated };
+    }, [images]);
 
     // 筛选条件变化时：当前大图若不在新列表里，跳到第一张；列表为空则关闭
     const selectedImageId = selectedImage && selectedImage.image_id;
@@ -1620,6 +1964,22 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
         const stillIn = filteredImages.some(i => i.image_id === selectedImageId);
         if (!stillIn) setSelectedImage(filteredImages[0]);
     }, [viewerOpen, filteredImages, selectedImageId]);
+
+    // Enter 键重新打开上次查看的图片（ESC 关闭后可快速返回）
+    useEffect(() => {
+        const handler = (e) => {
+            if (viewerOpen) return;
+            if (!selectedImage) return;
+            const tag = (e.target || {}).tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                setViewerOpen(true);
+            }
+        };
+        window.addEventListener('keydown', handler);
+        return () => window.removeEventListener('keydown', handler);
+    }, [viewerOpen, selectedImage]);
 
     const totalPages = Math.ceil(filteredImages.length / pageSize);
     const startIdx = (currentPage - 1) * pageSize;
@@ -1689,7 +2049,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
         <>
             <div className="main-content">
                 {hasMetaFilterCapability && (
-                    <div className="meta-filter-bar" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px', padding: '8px 12px', background: '#f5f5f5', borderRadius: '6px', marginBottom: '10px' }}>
+                    <div className="meta-filter-bar">
                         <span style={{ fontWeight: 600, marginRight: '4px' }}>元数据筛选:</span>
                         {metaFilterOptions.has_c_time && (
                             <>
@@ -1776,7 +2136,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                         {/* 预测模型可见性切换（有预测数据时显示） */}
                         {predModelNames.length > 0 && visiblePredModels && (
                             <span style={{ display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
-                                <span style={{ fontSize: '12px', color: '#888' }}>预测模型:</span>
+                                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)' }}>预测模型:</span>
                                 {predModelNames.map(model => {
                                     const isOn = visiblePredModels.has(model);
                                     return (
@@ -1785,10 +2145,10 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                             className="btn btn-sm"
                                             title={isOn ? `隐藏 ${model} 的预测结果` : `显示 ${model} 的预测结果`}
                                             style={{
-                                                fontSize: '11px', padding: '2px 8px',
+                                                fontSize: 'var(--font-xs)', padding: '2px 8px',
                                                 background: isOn ? '#2a4a7a' : 'transparent',
-                                                color: isOn ? '#7af' : '#555',
-                                                border: `1px solid ${isOn ? '#4a7af0' : '#444'}`,
+                                                color: isOn ? 'var(--accent)' : 'var(--text-muted)',
+                                                border: `1px solid ${isOn ? 'var(--accent)' : 'var(--border)'}`,
                                                 fontWeight: isOn ? 'bold' : 'normal',
                                                 maxWidth: '120px',
                                                 overflow: 'hidden',
@@ -1815,7 +2175,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                             <span style={{ display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
                                 <button
                                     className={`btn btn-sm ${predEvalEnabled ? 'btn-primary' : 'btn-secondary'}`}
-                                    style={{ fontSize: '12px', padding: '3px 8px' }}
+                                    style={{ fontSize: 'var(--font-sm)', padding: '3px 8px' }}
                                     title={predEvalEnabled ? `当前模型: ${predEvalModel}，点击重新配置` : '开启预测评估筛选'}
                                     onClick={() => setPredEvalOpen(true)}
                                 >
@@ -1832,7 +2192,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                                 key={key}
                                                 className="btn btn-sm"
                                                 style={{
-                                                    fontSize: '12px', padding: '3px 8px',
+                                                    fontSize: 'var(--font-sm)', padding: '3px 8px',
                                                     background: predEvalFilter === key ? color : 'transparent',
                                                     color: predEvalFilter === key ? '#fff' : color,
                                                     border: `1px solid ${color}`,
@@ -1844,14 +2204,13 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                             </button>
                                         ))}
                                         <button
-                                            className="btn btn-sm"
-                                            style={{ fontSize: '12px', padding: '3px 8px', background: '#1a2a4a', color: '#7af', border: '1px solid #4a7af0' }}
+                                            className="btn btn-sm" style={{ fontSize: 'var(--font-sm)', padding: '3px 8px', background: 'rgba(111,140,255,0.12)', color: 'var(--accent)', border: '1px solid var(--accent)' }}
                                             title="计算 mAP 等检测指标"
                                             onClick={() => setShowMapModal(true)}
                                         >📊 指标</button>
                                         <button
                                             className="btn btn-sm btn-secondary"
-                                            style={{ fontSize: '12px', padding: '3px 6px' }}
+                                            style={{ fontSize: 'var(--font-sm)', padding: '3px 6px' }}
                                             title="关闭预测评估"
                                             onClick={() => { setPredEvalEnabled(false); setPredEvalFilter(null); setPredEvalModel(null); setCurrentPage(1); }}
                                         >✕</button>
@@ -1861,7 +2220,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                         )}
                         {hasScoreData && (
                             <span style={{ display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
-                                <span style={{ fontSize: '12px', color: '#555' }}>置信度</span>
+                                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)' }}>置信度</span>
                                 <input
                                     type="number" min="0" max="1" step="0.01"
                                     className="filter-input"
@@ -1870,7 +2229,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                     value={scoreMin}
                                     onChange={e => { setScoreMin(e.target.value); setCurrentPage(1); }}
                                 />
-                                <span style={{ fontSize: '12px', color: '#888' }}>~</span>
+                                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)' }}>~</span>
                                 <input
                                     type="number" min="0" max="1" step="0.01"
                                     className="filter-input"
@@ -1881,8 +2240,8 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                 />
                                 {(scoreMin !== '' || scoreMax !== '') && (
                                     <button
-                                        className="btn btn-sm"
-                                        style={{ padding: '2px 6px', fontSize: '11px', background: '#f0f0f0', color: '#666' }}
+                                        className="btn btn-sm btn-secondary"
+                                        style={{ padding: '2px 6px', fontSize: 'var(--font-xs)' }}
                                         onClick={() => { setScoreMin(''); setScoreMax(''); setCurrentPage(1); }}
                                         title="清除置信度筛选"
                                     >✕</button>
@@ -1890,34 +2249,116 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                             </span>
                         )}
                         <input className="filter-input" placeholder="搜索文件名..." value={searchText} onChange={(e) => { setSearchText(e.target.value); setCurrentPage(1); }} />
+                        <button
+                            className={`btn btn-sm ${showAdvancedFilter || gtCountMin || gtCountMax || predCountMin || predCountMax || areaMax ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setShowAdvancedFilter(!showAdvancedFilter)}
+                            title="展开/收起高级筛选"
+                        >
+                            高级筛选 ▾
+                        </button>
+                        <select value={sortOrder} onChange={e => { setSortOrder(e.target.value); setCurrentPage(1); }}
+                            className="sort-select" title="排序方式">
+                            <option value="default">默认顺序</option>
+                            <option value="name_asc">文件名 A→Z</option>
+                            <option value="name_desc">文件名 Z→A</option>
+                            <option value="ann_desc">GT框数 多→少</option>
+                            <option value="ann_asc">GT框数 少→多</option>
+                            {hasPredData && <option value="pred_desc">预测框数 多→少</option>}
+                            {hasPredData && <option value="pred_asc">预测框数 少→多</option>}
+                            <option value="size_desc">文件大小 大→小</option>
+                            <option value="size_asc">文件大小 小→大</option>
+                            <option value="mtime_desc">修改时间 新→旧</option>
+                            <option value="mtime_asc">修改时间 旧→新</option>
+                        </select>
+                        {!viewerOpen && selectedImage && (
+                            <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => setViewerOpen(true)}
+                                title={`按 Enter 也可返回 · ${selectedImage.file_name}`}
+                                style={{ whiteSpace: 'nowrap', fontSize: 'var(--font-sm)' }}
+                            >↩ 返回上图</button>
+                        )}
                         {autoSaveStatus === 'pending' && (
-                            <span style={{ fontSize: '12px', color: '#aaa', whiteSpace: 'nowrap' }}>⏳ 备份中…</span>
+                            <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>⏳ 备份中…</span>
                         )}
                         {autoSaveStatus === 'saved' && (
-                            <span style={{ fontSize: '12px', color: '#52c41a', whiteSpace: 'nowrap' }}>✓ 已备份</span>
+                            <span style={{ fontSize: 'var(--font-sm)', color: '#52c41a', whiteSpace: 'nowrap' }}>✓ 已备份</span>
                         )}
                         {autoSaveStatus === 'error' && (
-                            <span style={{ fontSize: '12px', color: '#f5222d', whiteSpace: 'nowrap' }}>⚠ 备份失败</span>
+                            <span style={{ fontSize: 'var(--font-sm)', color: '#f5222d', whiteSpace: 'nowrap' }}>⚠ 备份失败</span>
                         )}
                         <button className="btn btn-success btn-sm" onClick={() => setShowSaveModal(true)} disabled={saving}>
                             {saving ? '保存中...' : `💾 ${gallery.saveButtonText}`}
                         </button>
                         <button className="btn btn-secondary btn-sm" onClick={() => setShowVersionModal(true)}>📋 {gallery.versionButtonText}</button>
+                        <button className="btn btn-secondary btn-sm" onClick={() => setShowCatMgr(true)} title="跨图批量重命名/合并标注类别">🏷 类别管理</button>
                         <button className="btn btn-primary btn-sm" onClick={() => setShowExportModal(true)}>📤 {gallery.exportButtonText}</button>
                     </div>
+                    
+                    {/* 高级筛选面板 */}
+                    {showAdvancedFilter && (
+                        <div style={{ padding: '10px 20px', background: 'var(--bg-raised)', borderBottom: '1px solid var(--border)', display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)' }}>GT框数：</span>
+                                <input type="number" min="0" className="filter-input" style={{ width: '60px', padding: '4px 6px' }} placeholder="Min" value={gtCountMin} onChange={e => { setGtCountMin(e.target.value); setCurrentPage(1); }} />
+                                <span style={{ color: 'var(--text-muted)' }}>-</span>
+                                <input type="number" min="0" className="filter-input" style={{ width: '60px', padding: '4px 6px' }} placeholder="Max" value={gtCountMax} onChange={e => { setGtCountMax(e.target.value); setCurrentPage(1); }} />
+                            </div>
+                            {hasPredData && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)' }}>预测框数：</span>
+                                    <input type="number" min="0" className="filter-input" style={{ width: '60px', padding: '4px 6px' }} placeholder="Min" value={predCountMin} onChange={e => { setPredCountMin(e.target.value); setCurrentPage(1); }} />
+                                    <span style={{ color: 'var(--text-muted)' }}>-</span>
+                                    <input type="number" min="0" className="filter-input" style={{ width: '60px', padding: '4px 6px' }} placeholder="Max" value={predCountMax} onChange={e => { setPredCountMax(e.target.value); setCurrentPage(1); }} />
+                                </div>
+                            )}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)' }} title="筛选出包含面积小于该值的目标的图片">极小目标面积 &lt;</span>
+                                <input type="number" min="0" className="filter-input" style={{ width: '80px', padding: '4px 6px' }} placeholder="面积(px²)" value={areaMax} onChange={e => { setAreaMax(e.target.value); setCurrentPage(1); }} />
+                            </div>
+                            {(gtCountMin || gtCountMax || predCountMin || predCountMax || areaMax) && (
+                                <button className="btn btn-sm btn-secondary" onClick={() => { setGtCountMin(''); setGtCountMax(''); setPredCountMin(''); setPredCountMax(''); setAreaMax(''); setCurrentPage(1); }}>
+                                    清除高级筛选
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 <div className="content-area">
                     <div className="gallery-section">
                         <div className="gallery-header">
-                            <span className="gallery-title">{gallery.galleryTitlePrefix} {filteredImages.length} {gallery.galleryTitleSuffix} {selectedImages.size > 0 && `(${gallery.selectedSuffix} ${selectedImages.size} 张)`}</span>
+                            <span className="gallery-title">
+                                {gallery.galleryTitlePrefix} {filteredImages.length} {gallery.galleryTitleSuffix}
+                                {selectedImages.size > 0 && ` (${gallery.selectedSuffix} ${selectedImages.size} 张)`}
+                            </span>
+                            {/* 标注进度条 */}
+                            {annotationProgress.total > 0 && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: '0 0 auto' }}>
+                                    <div style={{ position: 'relative', width: '120px', height: '8px', background: 'var(--bg-hover)', borderRadius: '4px', overflow: 'hidden' }}>
+                                        <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${annotationProgress.total > 0 ? (annotationProgress.annotated / annotationProgress.total * 100) : 0}%`, background: 'var(--success)', borderRadius: '4px', transition: 'width 0.3s' }} />
+                                    </div>
+                                    <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                        已标注 <span style={{ color: '#52c41a', fontWeight: 'bold' }}>{annotationProgress.annotated}</span> / {annotationProgress.total}
+                                    </span>
+                                    {annotationProgress.unannotated > 0 && (
+                                        <button
+                                            onClick={() => { setShowUnannotatedOnly(v => !v); setCurrentPage(1); }}
+                                            title={showUnannotatedOnly ? '显示全部' : `仅显示未标注图片 (${annotationProgress.unannotated} 张)`}
+                                                style={{ fontSize: 'var(--font-xs)', padding: '2px 8px', background: showUnannotatedOnly ? 'var(--warning)' : 'transparent', color: showUnannotatedOnly ? '#000' : 'var(--warning)', border: '1px solid var(--warning)', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                                        >
+                                            {showUnannotatedOnly ? '✕ 取消筛选' : `⚠ 未标注 ${annotationProgress.unannotated}`}
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                             <div className="gallery-actions">
                                 <label style={{marginRight: '15px'}}>
                                     <input type="checkbox" onChange={(e) => setSelectedImages(e.target.checked ? new Set(pageImages.map(i => i.image_id)) : new Set())} /> 全选当页
                                 </label>
                                 {selectedImages.size > 0 && (
                                     <div className="batch-actions">
-                                        <span style={{marginRight: '10px', fontSize: '12px', color: '#666'}}>{gallery.batchSetLabel}</span>
+                                        <span style={{marginRight: '10px', fontSize: 'var(--font-sm)', color: 'var(--text-secondary)'}}>{gallery.batchSetLabel}</span>
                                         {(imageCategories || []).filter(c => c !== (imageCategories && imageCategories[0])).map(cat => (
                                             <button 
                                                 key={cat} 
@@ -1928,12 +2369,26 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                                 {cat}
                                             </button>
                                         ))}
+                                        {onBatchClearAnnotations && (
+                                            <button
+                                                className="btn btn-sm"
+                                                style={{ background: 'transparent', border: `1px solid var(--danger)`, color: 'var(--danger)', marginLeft: '8px' }}
+                                                title={`清空选中 ${selectedImages.size} 张图片的全部 GT 标注`}
+                                                onClick={async () => { await onBatchClearAnnotations(Array.from(selectedImages)); setSelectedImages(new Set()); }}
+                                            >🗑 批量清空标注</button>
+                                        )}
                                     </div>
                                 )}
                             </div>
                         </div>
                         <div className="gallery-grid">
-                            {pageImages.map(img => (
+                            {pageImages.length === 0 ? (
+                                <div className="gallery-empty">
+                                    <p className="gallery-empty-title">当前页没有可显示的图片</p>
+                                    <p className="gallery-empty-hint">可能受分类、搜索、元数据筛选或预测评估条件影响，可放宽条件或清空搜索后再试。</p>
+                                </div>
+                            ) : (
+                                pageImages.map(img => (
                                 <ImageCard
                                     key={img.image_id}
                                     image={img}
@@ -1948,9 +2403,10 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                         sel ? newSet.add(img.image_id) : newSet.delete(img.image_id);
                                         setSelectedImages(newSet);
                                     }}
-                                    onClick={() => { setSelectedImage(img); setViewerOpen(true); }}
+                                        onClick={() => { setSelectedImage(img); setViewerOpen(true); }}
                                 />
-                            ))}
+                                ))
+                            )}
                         </div>
                         <div className="pagination">
                             <button className="page-btn" disabled={currentPage <= 1} onClick={() => setCurrentPage(1)}>{'<<'}</button>
@@ -2011,6 +2467,17 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                 />
             )}
 
+            {showCatMgr && (
+                <CategoryManagerModal
+                    datasetData={datasetData}
+                    images={images}
+                    onClose={() => setShowCatMgr(false)}
+                    onRenamed={() => {
+                        if (onReloadImages) onReloadImages();
+                    }}
+                />
+            )}
+
             {showMapModal && predEvalModel && (
                 <MapReportModal
                     images={images}
@@ -2054,6 +2521,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                     onUpdateCategory={onUpdateCategory}
                     onUpdateCategories={onUpdateCategories}
                     onUpdateNote={onUpdateNote}
+                    onAnnotationsSaved={onAnnotationsSaved}
                 />
             )}
         </>
@@ -2070,6 +2538,7 @@ function SettingsModal({ onClose }) {
     const imageCategories = config.imageCategories || DEFAULT_CONFIG.imageCategories || [];
     const imageCategoryColors = config.imageCategoryColors || DEFAULT_CONFIG.imageCategoryColors || {};
     const colorPalette = config.colorPalette || DEFAULT_CONFIG.colorPalette || ['#888'];
+    const currentTheme = config.uiTheme || DEFAULT_CONFIG.uiTheme || 'dark';
 
     const updateViewer = (key, value) => {
         setSettings(prev => ({ ...prev, viewer: { ...(prev.viewer || {}), [key]: value } }));
@@ -2146,6 +2615,21 @@ function SettingsModal({ onClose }) {
                 </div>
                 <div className="modal-body">
                     <div className="form-group">
+                        <label className="form-label">{st.themeLabel || '界面主题'}</label>
+                        <select
+                            className="form-input"
+                            value={currentTheme}
+                            onChange={(e) => setSettings(prev => ({ ...prev, uiTheme: e.target.value }))}
+                        >
+                            <option value="dark">{st.themeDarkLabel || '深色'}</option>
+                            <option value="light">{st.themeLightLabel || '浅色'}</option>
+                            <option value="dim">{st.themeDimLabel || '柔和暗色'}</option>
+                        </select>
+                        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginTop: '4px' }}>
+                            {st.themeHint || '支持深色、浅色与柔和暗色，可随时切换。'}
+                        </p>
+                    </div>
+                    <div className="form-group">
                         <label className="form-label">{st.viewerBackgroundLabel || '查看器背景'}</label>
                         <div style={{ display: 'flex', gap: '16px', marginBottom: '8px' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
@@ -2159,7 +2643,7 @@ function SettingsModal({ onClose }) {
                         </div>
                         {(viewer.backgroundStyle || 'checkerboard') === 'solid' && (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
-                                <span style={{ fontSize: '13px', color: '#666' }}>背景色</span>
+                                <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)' }}>背景色</span>
                                 <input type="color" value={viewer.backgroundColor || '#1a1a2e'} onChange={(e) => updateViewer('backgroundColor', e.target.value)} style={{ width: 36, height: 28, padding: 2, cursor: 'pointer' }} />
                             </div>
                         )}
@@ -2169,16 +2653,25 @@ function SettingsModal({ onClose }) {
                         <select className="form-input" value={viewer.lineWidthDefault ?? 0.5} onChange={(e) => updateViewer('lineWidthDefault', Number(e.target.value))}>
                             {lineWidthOptions.map(v => <option key={v} value={v}>{v}</option>)}
                         </select>
-                        <p style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>0.1～1 共十档，查看器内可随时调整</p>
+                        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginTop: '4px' }}>0.1～1 共十档，查看器内可随时调整</p>
                     </div>
                     <div className="form-group" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #eee' }}>
                         <label className="form-label">{st.imageCategoriesLabel || '图片分类'}</label>
-                        <p style={{ fontSize: '12px', color: '#666', marginBottom: '10px' }}>{st.imageCategoriesHint || '用于标注图片级分类，可增删改名称与颜色。'}</p>
+                        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '10px' }}>{st.imageCategoriesHint || '用于标注图片级分类，可增删改名称与颜色。'}</p>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', cursor: 'pointer', userSelect: 'none' }}>
+                            <input
+                                type="checkbox"
+                                checked={!!(config.imageCategoryMultiSelect ?? DEFAULT_CONFIG.imageCategoryMultiSelect)}
+                                onChange={(e) => setSettings(prev => ({ ...prev, imageCategoryMultiSelect: e.target.checked }))}
+                            />
+                            <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)' }}>允许图片多分类</span>
+                            <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)' }}>（默认单选，勾选后可为一张图片打多个分类标签）</span>
+                        </label>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             {imageCategories.map((name, i) => (
                                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                     {i === 0 ? (
-                                        <span className="form-input" style={{ flex: 1, minWidth: 0, background: '#f0f0f0', color: '#666', cursor: 'not-allowed' }} title="固定，不可修改">未分类</span>
+                                        <span className="form-input" style={{ flex: 1, minWidth: 0, background: 'var(--bg-soft)', color: 'var(--text-muted)', cursor: 'not-allowed' }} title="固定，不可修改">未分类</span>
                                     ) : (
                                         <input
                                             key={name}
@@ -2195,7 +2688,7 @@ function SettingsModal({ onClose }) {
                                         type="color"
                                         value={imageCategoryColors[name] || '#888'}
                                         onChange={(e) => updateCategoryColor(i, e.target.value)}
-                                        style={{ width: 36, height: 32, padding: 2, cursor: i === 0 ? 'default' : 'pointer', border: '1px solid #ccc', borderRadius: '4px' }}
+                                        style={{ width: 36, height: 32, padding: 2, cursor: i === 0 ? 'default' : 'pointer', border: '1px solid var(--border-strong)', borderRadius: '4px' }}
                                         title="颜色"
                                     />
                                     <button
@@ -2227,6 +2720,107 @@ function SettingsModal({ onClose }) {
     );
 }
 
+// ==================== 类别管理弹窗（跨图批量重命名/合并） ====================
+function CategoryManagerModal({ datasetData, images, onClose, onRenamed }) {
+    const config = useConfig();
+    const palette = config.colorPalette || DEFAULT_CONFIG.colorPalette;
+    // 从 images 中统计所有 GT 类别及数量
+    const catStats = React.useMemo(() => {
+        const m = {};
+        images.forEach(img => {
+            (img.annotations || []).forEach(ann => {
+                if (ann.category) m[ann.category] = (m[ann.category] || 0) + 1;
+            });
+        });
+        return Object.entries(m).sort((a, b) => b[1] - a[1]);
+    }, [images]);
+
+    const [editMap, setEditMap] = useState(() => Object.fromEntries(catStats.map(([c]) => [c, c])));
+    const [busy, setBusy] = useState(false);
+    const [results, setResults] = useState([]); // [{oldName, newName, status, msg}]
+
+    const handleApply = async () => {
+        const changes = catStats.filter(([c]) => editMap[c] && editMap[c].trim() && editMap[c].trim() !== c);
+        if (changes.length === 0) { alert('没有需要修改的类别'); return; }
+        if (!window.confirm(`即将修改 ${changes.length} 个类别，操作将写入 COCO 文件（自动存档版本），确认？`)) return;
+        setBusy(true);
+        const newResults = [];
+        let anySuccess = false;
+        for (const [oldName] of changes) {
+            const newName = editMap[oldName].trim();
+            try {
+                const res = await fetch('/api/rename_category', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dataset_id: datasetData.dataset_id, old_name: oldName, new_name: newName })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    newResults.push({ oldName, newName, status: 'ok', msg: d.message });
+                    anySuccess = true;
+                } else {
+                    newResults.push({ oldName, newName, status: 'err', msg: d.error });
+                }
+            } catch (e) {
+                newResults.push({ oldName, newName, status: 'err', msg: e.message });
+            }
+        }
+        setResults(newResults);
+        setBusy(false);
+        // 全部操作结束后，若有任意成功则触发一次刷新
+        if (anySuccess && onRenamed) onRenamed();
+    };
+
+    return (
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:3000, display:'flex', alignItems:'center', justifyContent:'center'}} onClick={onClose}>
+            <div style={{background:'var(--bg-surface)', border:'1px solid var(--border-strong)', borderRadius:'12px', padding:'20px', width:'480px', maxWidth:'95vw', maxHeight:'80vh', display:'flex', flexDirection:'column', gap:'12px', boxShadow:'0 16px 48px rgba(0,0,0,0.55)'}} onClick={e => e.stopPropagation()}>
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                    <span style={{fontWeight:'bold', fontSize:'15px', color:'var(--text-primary)'}}>🏷 类别管理（跨图批量重命名/合并）</span>
+                    <button onClick={onClose} style={{background:'none', border:'none', color:'var(--text-muted)', fontSize:'18px', cursor:'pointer'}}>✕</button>
+                </div>
+                <div style={{fontSize:'12px', color:'var(--text-muted)'}}>修改右侧输入框中的类别名称，点「应用修改」即可跨全部图片批量改名。若目标名已存在则自动合并。操作前会自动存档版本。</div>
+
+                {results.length > 0 && (
+                    <div style={{background:'rgba(62,207,142,0.06)', border:'1px solid rgba(62,207,142,0.2)', borderRadius:'6px', padding:'8px 12px', maxHeight:'120px', overflowY:'auto'}}>
+                        {results.map((r, i) => (
+                            <div key={i} style={{fontSize:'12px', color: r.status === 'ok' ? '#6f6' : '#f66', padding:'2px 0'}}>
+                                {r.status === 'ok' ? '✓' : '✕'} {r.oldName} → {r.newName}：{r.msg}
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                <div style={{overflowY:'auto', flex:1, display:'flex', flexDirection:'column', gap:'4px'}}>
+                    {catStats.length === 0 && <div style={{color:'var(--text-muted)', fontSize:'13px', padding:'20px', textAlign:'center'}}>当前数据集无 GT 标注类别</div>}
+                    {catStats.map(([cat, cnt]) => (
+                        <div key={cat} style={{display:'flex', alignItems:'center', gap:'8px', padding:'4px 0', borderBottom:'1px solid var(--border)'}}>
+                            <div style={{width:'10px', height:'10px', borderRadius:'50%', background: getCategoryColor(palette, cat), flexShrink:0}}></div>
+                            <span style={{fontSize:'13px', color:'var(--text-secondary)', flex:'0 0 auto', minWidth:'100px', maxWidth:'160px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}} title={cat}>{cat}</span>
+                            <span style={{fontSize:'11px', color:'var(--text-muted)', flex:'0 0 auto'}}>{cnt} 个框</span>
+                            <span style={{color:'var(--text-muted)', fontSize:'12px', flex:'0 0 auto'}}>→</span>
+                            <input
+                                value={editMap[cat] ?? cat}
+                                onChange={e => setEditMap(m => ({...m, [cat]: e.target.value}))}
+                                style={{flex:1, background: editMap[cat] !== cat ? 'rgba(62,207,142,0.14)' : 'var(--bg-soft)', border:`1px solid ${editMap[cat] !== cat ? 'rgba(62,207,142,0.5)' : 'var(--border)'}`, color: editMap[cat] !== cat ? 'var(--success)' : 'var(--text-secondary)', borderRadius:'4px', padding:'3px 8px', fontSize:'12px', outline:'none'}}
+                            />
+                        </div>
+                    ))}
+                </div>
+
+                <div style={{display:'flex', gap:'10px', justifyContent:'flex-end'}}>
+                    <button onClick={onClose} className="btn btn-secondary" style={{padding:'6px 18px', borderRadius:'5px', cursor:'pointer'}}>取消</button>
+                    <button
+                        onClick={handleApply}
+                        disabled={busy || catStats.every(([c]) => !editMap[c] || editMap[c].trim() === c)}
+                        className="btn btn-success" style={{padding:'6px 18px', borderRadius:'5px', cursor: busy ? 'not-allowed' : 'pointer', fontWeight:'bold', opacity: busy ? 0.5 : 1}}
+                    >{busy ? '处理中…' : '应用修改'}</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+
 // ==================== 保存模态框（版本说明） ====================
 function SaveModal({ onClose, onSave, saving }) {
     const config = useConfig();
@@ -2247,7 +2841,7 @@ function SaveModal({ onClose, onSave, saving }) {
                 </div>
                 <form onSubmit={handleSubmit}>
                     <div className="modal-body">
-                        <p style={{marginBottom: '12px', color: '#666', fontSize: '13px'}}>
+                        <p style={{marginBottom: '12px', color: 'var(--text-muted)', fontSize: 'var(--font-md)'}}>
                             {sm.description}
                         </p>
                         <div className="form-group">
@@ -2344,11 +2938,11 @@ function VersionModal({ datasetData, onClose, onRollback }) {
                     <button className="modal-close" onClick={onClose}>✕</button>
                 </div>
                 <div className="modal-body">
-                    <p style={{marginBottom: '8px', color: '#666', fontSize: '13px'}}>
+                    <p style={{marginBottom: '8px', color: 'var(--text-muted)', fontSize: 'var(--font-md)'}}>
                         {vm.description}
                     </p>
                     {vm.descriptionHint && (
-                        <p style={{marginBottom: '12px', color: '#888', fontSize: '12px'}}>
+                        <p style={{marginBottom: '12px', color: 'var(--text-muted)', fontSize: 'var(--font-sm)'}}>
                             {vm.descriptionHint}
                         </p>
                     )}
@@ -2391,6 +2985,7 @@ function ImageCard({ image, datasetId, selected, imageCategory, imageCategoryCol
     let thumbUrl = `/api/get_image?dataset_id=${datasetId}&file_name=${encodeURIComponent(image.file_name)}`;
     if (image.source_path != null && image.source_path !== '') thumbUrl += `&source_path=${encodeURIComponent(image.source_path)}`;
     const labelCategories = [...new Set(image.annotations.map(a => a.category))].slice(0, 3);
+    const isUnannotated = !image.annotations || image.annotations.length === 0;
     const catColors = imageCategoryColors || {};
     const palette = colorPalette || DEFAULT_CONFIG.colorPalette;
     const defaultCat = DEFAULT_CONFIG.imageCategories && DEFAULT_CONFIG.imageCategories[0];
@@ -2399,25 +2994,47 @@ function ImageCard({ image, datasetId, selected, imageCategory, imageCategoryCol
     const showBadge = primaryCat && primaryCat !== defaultCat;
 
     return (
-        <div className={`image-card ${selected ? 'selected' : ''}`} onClick={onClick}>
-            <div className="image-card-checkbox" onClick={(e) => { e.stopPropagation(); onSelect(!selected); }}>
-                <input type="checkbox" checked={selected} readOnly />
+        <div className={`image-card ${selected ? 'selected' : ''}`} onClick={onClick}
+            style={isUnannotated ? { outline: '2px solid rgba(240,160,64,0.5)', outlineOffset: '-2px' } : undefined}>
+            <div className="image-card-thumb-wrapper">
+                <img className="image-card-thumb" src={thumbUrl} alt={image.file_name} loading="lazy" />
+                <div className="image-card-checkbox" onClick={(e) => { e.stopPropagation(); onSelect(!selected); }}>
+                    <input type="checkbox" checked={selected} readOnly />
+                </div>
+                {isUnannotated && (
+                    <div className="image-card-badge image-card-badge-warning" title="无标注">
+                        未标注
+                    </div>
+                )}
+                {showBadge && (
+                    <div className="image-card-category" style={{ background: catColors[primaryCat] || 'var(--text-muted)' }} title={cats.length > 1 ? cats.join(', ') : primaryCat}>
+                        {cats.length > 1 ? `${primaryCat}+${cats.length - 1}` : primaryCat}
+                    </div>
+                )}
+                {hasNote && <div className="image-card-note-icon" title="有备注">📝</div>}
             </div>
-            {showBadge && (
-                <div className="image-card-category" style={{ background: catColors[primaryCat] || '#888' }} title={cats.length > 1 ? cats.join(', ') : primaryCat}>
-                    {cats.length > 1 ? `${primaryCat}+${cats.length - 1}` : primaryCat}
-                </div>
-            )}
-            {hasNote && <div className="image-card-note-icon" title="有备注">📝</div>}
-            {image.source_path != null && image.source_path !== '' && (
-                <div className="image-card-dir" title={image.source_path}>{image.source_path}</div>
-            )}
-            <img className="image-card-thumb" src={thumbUrl} alt={image.file_name} loading="lazy" />
+            
             <div className="image-card-info">
-                <div className="image-card-name" title={image.file_name}>{image.file_name.split('/').pop()}</div>
-                <div className="image-card-tags">
-                    {labelCategories.map(cat => <span key={cat} className="image-card-tag" style={{ background: getCategoryColor(palette, cat) }}>{cat}</span>)}
+                <div className="image-card-header">
+                    <div className="image-card-name" title={image.file_name}>{image.file_name.split('/').pop()}</div>
+                    {image.source_path != null && image.source_path !== '' && (
+                        <div className="image-card-dir" title={image.source_path}>{image.source_path}</div>
+                    )}
                 </div>
+                
+                <div className="image-card-meta">
+                    <span title="GT 标注数">GT: <strong>{image.annotations?.length || 0}</strong></span>
+                    {(image.pred_annotations && image.pred_annotations.length > 0) && (
+                        <span title="预测框数" style={{color: 'var(--accent)'}}>Pred: <strong>{image.pred_annotations.length}</strong></span>
+                    )}
+                </div>
+
+                {labelCategories.length > 0 && (
+                    <div className="image-card-tags">
+                        {labelCategories.map(cat => <span key={cat} className="image-card-tag" style={{ background: getCategoryColor(palette, cat) }}>{cat}</span>)}
+                        {image.annotations?.length > 3 && <span className="image-card-tag-more">...</span>}
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -2481,8 +3098,7 @@ function ImageCategoryStatsPanel({ imageCategoryStats, labelCategoryStats, total
     );
 }
 
-// 将图片与标注绘制到 canvas，返回 PNG Blob（若有 score 则在框上方写类别+置信度）
-function drawImageWithBoxes(blob, width, height, annotations, palette) {
+function drawImageWithBoxes(blob, width, height, annotations, palette, format = 'image/jpeg', quality = 0.85) {
     return new Promise((resolve, reject) => {
         const url = URL.createObjectURL(blob);
         const img = new Image();
@@ -2524,7 +3140,7 @@ function drawImageWithBoxes(blob, width, height, annotations, palette) {
                 canvas.toBlob(b => {
                     URL.revokeObjectURL(url);
                     if (b) resolve(b); else reject(new Error('toBlob failed'));
-                }, 'image/png');
+                }, format, quality);
             } catch (e) {
                 URL.revokeObjectURL(url);
                 reject(e);
@@ -2538,6 +3154,102 @@ function drawImageWithBoxes(blob, width, height, annotations, palette) {
     });
 }
 
+// ==================== 缩略图导航带 (Filmstrip) ====================
+function Filmstrip({ images, currentIndex, datasetId, onNavigateTo }) {
+    const stripRef = useRef(null);
+    
+    // 当当前图片变化时，让选中的缩略图滚动到视图中央
+    useEffect(() => {
+        if (!stripRef.current) return;
+        const activeEl = stripRef.current.querySelector('.filmstrip-item-active');
+        if (activeEl) {
+            const containerCenter = stripRef.current.clientWidth / 2;
+            const elCenter = activeEl.offsetLeft + activeEl.offsetWidth / 2;
+            stripRef.current.scrollTo({
+                left: elCenter - containerCenter,
+                behavior: 'smooth'
+            });
+        }
+    }, [currentIndex]);
+
+    // 计算要显示的图片范围，避免渲染太多导致卡顿。当前后各取 20 张
+    const startIdx = Math.max(0, currentIndex - 20);
+    const endIdx = Math.min(images.length - 1, currentIndex + 20);
+    const visibleImages = [];
+    for (let i = startIdx; i <= endIdx; i++) {
+        visibleImages.push({ img: images[i], idx: i });
+    }
+
+    return (
+        <div 
+            ref={stripRef}
+            style={{
+                position: 'absolute',
+                bottom: '12px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                maxWidth: '80%',
+                display: 'flex',
+                gap: '8px',
+                padding: '8px 12px',
+                background: 'rgba(15,17,23,0.85)',
+                border: '1px solid var(--border-strong)',
+                borderRadius: '8px',
+                overflowX: 'auto',
+                backdropFilter: 'blur(8px)',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+                zIndex: 900
+            }}
+            className="filmstrip-container custom-scrollbar"
+            onWheel={(e) => {
+                // 将上下滚轮转换为左右滚动
+                if (e.deltaY !== 0) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    stripRef.current.scrollLeft += e.deltaY;
+                }
+            }}
+        >
+            {visibleImages.map(({ img, idx }) => {
+                const isActive = idx === currentIndex;
+                let thumbUrl = `/api/get_image?dataset_id=${datasetId}&file_name=${encodeURIComponent(img.file_name)}`;
+                if (img.source_path != null && img.source_path !== '') thumbUrl += `&source_path=${encodeURIComponent(img.source_path)}`;
+                
+                return (
+                    <div 
+                        key={img.image_id}
+                        className={isActive ? 'filmstrip-item-active' : ''}
+                        onClick={(e) => { e.stopPropagation(); onNavigateTo(idx); }}
+                        style={{
+                            flexShrink: 0,
+                            width: '60px',
+                            height: '45px',
+                            borderRadius: '4px',
+                            overflow: 'hidden',
+                            cursor: 'pointer',
+                            border: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+                            opacity: isActive ? 1 : 0.6,
+                            transition: 'all 0.2s',
+                            background: 'var(--bg-base)'
+                        }}
+                        title={img.file_name.split('/').pop()}
+                        onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                        onMouseLeave={e => { if (!isActive) e.currentTarget.style.opacity = '0.6'; }}
+                    >
+                        <img 
+                            src={thumbUrl} 
+                            alt="" 
+                            draggable={false}
+                            style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
+                            loading="lazy"
+                        />
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
 // ==================== 导出模态框 ====================
 function ExportModal({ images, imageClassifications, imageNotes, datasetData, imageCategories, imageCategoryColors, onClose }) {
     const config = useConfig();
@@ -2548,13 +3260,13 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
     const [exporting, setExporting] = useState(false);
     const [exportProgress, setExportProgress] = useState('');
     const [selectedCategories, setSelectedCategories] = useState(() => new Set(catList));
-    const [exportWithBoxes, setExportWithBoxes] = useState(true);
+    const [exportWithBoxes, setExportWithBoxes] = useState(false);
     const [exportMultiCategoryMode, setExportMultiCategoryMode] = useState('all'); // 'all' 放入所有归属目录 | 'priority' 仅放入最高优先级目录
-    const defaultZipName = `${datasetData?.dataset_name || 'export'}${exp.zipFilenameSuffix || '_by_category.zip'}`;
+    const defaultZipName = `${datasetData?.dataset_name || 'export'}_分类导出.zip`;
     const [zipFileName, setZipFileName] = useState(defaultZipName);
     useEffect(() => {
-        if (datasetData?.dataset_name) setZipFileName(`${datasetData.dataset_name}${exp.zipFilenameSuffix || '_by_category.zip'}`);
-    }, [datasetData?.dataset_name, exp.zipFilenameSuffix]);
+        if (datasetData?.dataset_name) setZipFileName(`${datasetData.dataset_name}_分类导出.zip`);
+    }, [datasetData?.dataset_name]);
 
     const toggleCategory = (cat) => {
         const newSet = new Set(selectedCategories);
@@ -2637,7 +3349,7 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
                             ...imgRest,
                             id: image_id,
                             file_name: (imgRest.file_name || '').split('/').pop() || imgRest.file_name,
-                            image_category: cat,
+                        image_category: cat,
                             image_categories: imageClassifications[image_id] || [cat],
                             note: imageNotes[image_id] || imgRest.note || '',
                         };
@@ -2676,9 +3388,9 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
                             const blob = await res.blob();
                             categoryFolder.file(imageName, blob);
                             if (exportWithBoxes && img.annotations && img.annotations.length > 0) {
-                                const bboxName = imageName.replace(/\.[^.]+$/, '') + '_bbox.png';
+                                const bboxName = imageName.replace(/\.[^.]+$/, '') + '_bbox.jpg';
                                 try {
-                                    const bboxBlob = await drawImageWithBoxes(blob, img.width, img.height, img.annotations, palette);
+                                    const bboxBlob = await drawImageWithBoxes(blob, img.width, img.height, img.annotations, palette, 'image/jpeg', 0.85);
                                     categoryFolder.file(bboxName, bboxBlob);
                                 } catch (e) {
                                     console.warn('Skip bbox image:', img.file_name, e);
@@ -2732,9 +3444,9 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
                     <button className="modal-close" onClick={onClose}>✕</button>
                 </div>
                 <div className="modal-body">
-                    <p style={{marginBottom: '15px', color: '#666'}}>{exp.modalDescription}</p>
+                    <p style={{marginBottom: '15px', color: 'var(--text-muted)'}}>{exp.modalDescription}</p>
                     <div style={{ marginBottom: '15px' }}>
-                        <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: '#555' }}>ZIP 文件名</label>
+                        <label style={{ display: 'block', marginBottom: '6px', fontSize: 'var(--font-md)', color: 'var(--text-secondary)' }}>ZIP 文件名</label>
                         <input
                             type="text"
                             className="filter-input"
@@ -2743,10 +3455,10 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
                             placeholder={defaultZipName}
                             style={{ width: '100%', maxWidth: '400px' }}
                         />
-                        <span style={{ fontSize: '12px', color: '#888', marginLeft: '8px' }}>（不含路径，未填则用默认名）</span>
+                        <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginLeft: '8px' }}>（不含路径，未填则用默认名）</span>
                     </div>
                     <div style={{ marginBottom: '15px' }}>
-                        <span style={{ fontSize: '13px', color: '#555', marginRight: '10px' }}>多类别图片：</span>
+                        <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)', marginRight: '10px' }}>多类别图片：</span>
                         <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginRight: '16px', cursor: 'pointer' }}>
                             <input type="radio" name="multiCatMode" checked={exportMultiCategoryMode === 'all'} onChange={() => setExportMultiCategoryMode('all')} />
                             <span>放入所有归属目录</span>
@@ -2758,7 +3470,7 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
                     </div>
                     <label className="export-with-boxes-option" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '15px', cursor: 'pointer' }}>
                         <input type="checkbox" checked={exportWithBoxes} onChange={(e) => setExportWithBoxes(e.target.checked)} />
-                        <span>同时导出带框图片（每张原图会多生成一张 _bbox.png，框上方显示类别；若有 score 则显示置信度）</span>
+                        <span>同时导出带框图片（每张原图会多生成一张 _bbox.jpg，框上方显示类别；若有 score 则显示置信度）</span>
                     </label>
                     <div className="export-categories">
                         {catList.map(cat => {
@@ -2798,12 +3510,297 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
     );
 }
 
-// ==================== 图片查看器（仅查看，支持图片分类与备注） ====================
-function ImageViewer({ image, images, datasetId, categories, imageClassifications, imageNotes, imageCategories, visiblePredModels, onClose, onNavigate, onUpdateCategory, onUpdateCategories, onUpdateNote }) {
+// ==================== 标注类别选择弹窗 ====================
+// C10: 对比面板（独立可缩放/平移）
+function ComparePane({ syncState, image, imageUrl, type, palette, lineWidth, annFill, hiddenCats, brightness, contrast, visiblePredModels, confOpacity, confThreshold = 0 }) {
+    const canvasRef = useRef(null);
+    const imgRef = useRef(null);
+    const containerRef = useRef(null);
+    const dragRef = useRef(null);
+    
+    const [localZoom, setLocalZoom] = useState(0.5);
+    const [localPanX, setLocalPanX] = useState(0);
+    const [localPanY, setLocalPanY] = useState(0);
+
+    const zoom = syncState ? syncState.zoom : localZoom;
+    const setZoom = syncState ? syncState.setZoom : setLocalZoom;
+    const panX = syncState ? syncState.panX : localPanX;
+    const setPanX = syncState ? syncState.setPanX : setLocalPanX;
+    const panY = syncState ? syncState.panY : localPanY;
+    const setPanY = syncState ? syncState.setPanY : setLocalPanY;
+
+    const [imgLoaded, setImgLoaded] = useState(false);
+
+    const calcFit = () => {
+        const el = containerRef.current;
+        if (!el) return 0.5;
+        const iw = image.width || (imgRef.current ? imgRef.current.naturalWidth : 1) || 1;
+        const ih = image.height || (imgRef.current ? imgRef.current.naturalHeight : 1) || 1;
+        return Math.min((el.clientWidth - 16) / iw, (el.clientHeight - 16) / ih, 1);
+    };
+
+    // 绘制标注到 canvas
+    const drawAnns = useCallback(() => {
+        const canvas = canvasRef.current, img = imgRef.current;
+        if (!canvas || !img || img.naturalWidth === 0) return;
+        const iw = image.width || img.naturalWidth, ih = image.height || img.naturalHeight;
+        const dw = iw * zoom, dh = ih * zoom;
+        canvas.width = dw; canvas.height = dh;
+        canvas.style.width = dw + 'px'; canvas.style.height = dh + 'px';
+        const ctx = canvas.getContext('2d');
+        const sx = dw / iw, sy = dh / ih;
+        ctx.clearRect(0, 0, dw, dh);
+        const DASHES = [[8,4],[4,4],[2,4],[10,4,2,4],[14,4]];
+        if (type === 'gt') {
+            image.annotations.forEach(ann => {
+                if (!ann.bbox || hiddenCats.has(ann.category)) return;
+                if (!passesConfThreshold(ann, confThreshold)) return;
+                const [x, y, bw, bh] = ann.bbox;
+                const color = getCategoryColor(palette, ann.category);
+                ctx.strokeStyle = color; ctx.lineWidth = Math.max(1, lineWidth * zoom * 4);
+                ctx.strokeRect(x*sx, y*sy, bw*sx, bh*sy);
+                if (annFill) { ctx.fillStyle = color+'22'; ctx.fillRect(x*sx, y*sy, bw*sx, bh*sy); }
+                const label = ann.score != null
+                    ? `${ann.category}  ${Math.round(bw)}×${Math.round(bh)}  ${(Number(ann.score)*100).toFixed(0)}%`
+                    : `${ann.category}  ${Math.round(bw)}×${Math.round(bh)}`;
+                ctx.font = 'bold 11px sans-serif';
+                const lw2 = ctx.measureText(label).width + 8, lh = 16;
+                const lx = x*sx, ly = y*sy > lh+2 ? y*sy-lh-2 : y*sy+2;
+                ctx.fillStyle = color; ctx.fillRect(lx, ly, lw2, lh);
+                ctx.fillStyle = '#fff'; ctx.fillText(label, lx+4, ly+lh-4);
+            });
+        } else {
+            const predAnns = image.pred_annotations || [];
+            const predModels = [...new Set(predAnns.map(a => a._pred_source))];
+            predAnns.forEach(ann => {
+                if (!ann.bbox || hiddenCats.has(ann.category)) return;
+                if (visiblePredModels && !visiblePredModels.has(ann._pred_source)) return;
+                if (!passesConfThreshold(ann, confThreshold)) return;
+                const [x, y, bw, bh] = ann.bbox;
+                const color = getCategoryColor(palette, ann.category);
+                ctx.globalAlpha = confOpacity && ann.score != null ? Math.max(0.25, Number(ann.score)) : 1;
+                const dash = DASHES[predModels.indexOf(ann._pred_source) % DASHES.length];
+                ctx.strokeStyle = color; ctx.lineWidth = Math.max(1, lineWidth * zoom * 4);
+                ctx.setLineDash(dash); ctx.strokeRect(x*sx, y*sy, bw*sx, bh*sy); ctx.setLineDash([]);
+                if (annFill) { ctx.fillStyle = color+'22'; ctx.fillRect(x*sx, y*sy, bw*sx, bh*sy); }
+                ctx.globalAlpha = 1;
+                const label = ann.score != null
+                    ? `${ann.category}  ${Math.round(bw)}×${Math.round(bh)}  ${(ann.score*100).toFixed(0)}%`
+                    : `${ann.category}  ${Math.round(bw)}×${Math.round(bh)}`;
+                ctx.font = 'bold 11px sans-serif';
+                const lw2 = ctx.measureText(label).width + 8, lh = 16;
+                const lx = x*sx, ly = y*sy > lh+2 ? y*sy-lh-2 : y*sy+2;
+                ctx.fillStyle = color+'cc'; ctx.fillRect(lx, ly, lw2, lh);
+                ctx.fillStyle = '#fff'; ctx.fillText(label, lx+4, ly+lh-4);
+            });
+        }
+    }, [image, zoom, type, palette, lineWidth, annFill, hiddenCats, visiblePredModels, confOpacity, confThreshold, imgLoaded]);
+
+    useEffect(() => { drawAnns(); }, [drawAnns]);
+
+    // 滚轮缩放（无需 Ctrl）
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        const h = (e) => {
+            if (!e.deltaY) return; // 忽略纯横向滚动，避免意外缩放
+            e.preventDefault();
+            e.stopPropagation();
+            // 放开缩放上限，允许放大到任意尺度 (原限制为 50)
+            setZoom(z => Math.max(0.01, z * (e.deltaY < 0 ? 1.12 : 0.9)));
+        };
+        el.addEventListener('wheel', h, { passive: false, capture: true });
+        return () => el.removeEventListener('wheel', h, { capture: true });
+    }, [setZoom]);
+
+    const handleLoad = () => {
+        setImgLoaded(true);
+        // 等 DOM 稳定后计算 fit
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                const z = calcFit();
+                const newZ = z > 0.01 ? z : 0.5;
+                if (syncState && syncState.registerLoad) {
+                    syncState.registerLoad(newZ);
+                } else {
+                    setZoom(newZ);
+                }
+                if (!syncState) { setPanX(0); setPanY(0); }
+            });
+        });
+    };
+
+    // ResizeObserver: 容器尺寸变化时重新计算 fit
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        const ro = new ResizeObserver(() => {
+            if (imgRef.current && imgRef.current.naturalWidth > 0) {
+                const z = calcFit();
+                if (z > 0.01) {
+                    if (syncState && syncState.registerLoad) {
+                        // Let the layout sync it, but avoid infinite loops
+                    } else {
+                        setZoom(z); setPanX(0); setPanY(0);
+                    }
+                }
+            }
+        });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [syncState]); // eslint-disable-line
+
+    // 图片切换时重置
+    useEffect(() => {
+        setImgLoaded(false);
+        if (!syncState) { setPanX(0); setPanY(0); }
+        const t = setTimeout(() => {
+            if (imgRef.current && imgRef.current.complete && imgRef.current.naturalWidth > 0) {
+                handleLoad();
+            }
+        }, 150);
+        return () => clearTimeout(t);
+    }, [image.image_id, syncState]); // eslint-disable-line
+
+    const iw = (image.width || 1) * zoom, ih = (image.height || 1) * zoom;
+    const filterStyle = brightness !== 100 || contrast !== 100 ? { filter:`brightness(${brightness}%) contrast(${contrast}%)` } : {};
+
+    return (
+        <div style={{position:'absolute', inset:0, overflow:'hidden', cursor: dragRef.current ? 'grabbing' : 'grab'}} ref={containerRef}
+            onMouseDown={e => { e.preventDefault(); dragRef.current = { x:e.clientX, y:e.clientY, px:panX, py:panY }; }}
+            onMouseMove={e => { if (!dragRef.current) return; setPanX(dragRef.current.px+e.clientX-dragRef.current.x); setPanY(dragRef.current.py+e.clientY-dragRef.current.y); }}
+            onMouseUp={() => { dragRef.current = null; }}
+            onMouseLeave={() => { dragRef.current = null; }}
+        >
+            {/* 居中定位，通过 panX/panY 偏移 */}
+            <div style={{position:'absolute', left:`calc(50% + ${panX}px)`, top:`calc(50% + ${panY}px)`, transform:'translate(-50%,-50%)', lineHeight:0, userSelect:'none'}}>
+                <img ref={imgRef} src={imageUrl} alt="" draggable={false}
+                    style={{ width: iw, height: ih, display:'block', ...filterStyle }}
+                    onLoad={handleLoad} />
+                <canvas ref={canvasRef} style={{position:'absolute', top:0, left:0, pointerEvents:'none', width:iw, height:ih}}></canvas>
+            </div>
+            {/* 缩放提示 */}
+            <div style={{position:'absolute', bottom:4, right:6, fontSize:'10px', color:'var(--text-muted)', pointerEvents:'none', background:'rgba(0,0,0,0.5)', padding:'2px 6px', borderRadius:'4px'}}>
+                {Math.round(zoom*100)}%
+            </div>
+        </div>
+    );
+}
+
+// 包装组件：实现双栏状态同步
+function CompareLayout({ currentImage, imageUrl, palette, lineWidth, annFill, hiddenCats, brightness, contrast, visiblePredModels, confOpacity, confThreshold }) {
+    const [zoom, setZoom] = useState(0.5);
+    const [panX, setPanX] = useState(0);
+    const [panY, setPanY] = useState(0);
+    const loadsRef = useRef(0);
+
+    useEffect(() => {
+        loadsRef.current = 0;
+        setPanX(0);
+        setPanY(0);
+    }, [currentImage.image_id]);
+
+    const syncState = {
+        zoom, setZoom, panX, setPanX, panY, setPanY,
+        registerLoad: (z) => {
+            loadsRef.current++;
+            if (loadsRef.current === 1 || z < zoom) {
+                setZoom(z);
+            }
+        }
+    };
+
+    const gtVisCount = (() => { const g = currentImage.annotations; const vis = g.filter(a => passesConfThreshold(a, confThreshold)).length; const tot = g.length; return confThreshold > 0 && g.some(a => a.score != null) ? `${vis}/${tot}` : String(tot); })();
+    const predVisCount = (() => { const preds = currentImage.pred_annotations || []; const inModel = preds.filter(a => !visiblePredModels || visiblePredModels.has(a._pred_source)); const vis = inModel.filter(a => passesConfThreshold(a, confThreshold)).length; const tot = inModel.length; return confThreshold > 0 && preds.some(a => a.score != null) ? `${vis}/${tot}` : String(tot); })();
+
+    return (
+        <div style={{display:'flex', flex:1, overflow:'hidden', gap:'2px'}}>
+            {/* 左：GT 标注 */}
+            <div style={{flex:1, display:'flex', flexDirection:'column', overflow:'hidden', borderRight:'2px solid #333'}}>
+                <div className="compare-pane-label compare-pane-label--gt">✔ GT 标注 ({gtVisCount})</div>
+                <div style={{flex:1, overflow:'hidden', position:'relative', background:'var(--bg-soft)'}}>
+                    <ComparePane syncState={syncState} image={currentImage} imageUrl={imageUrl} type="gt" palette={palette} lineWidth={lineWidth} annFill={annFill} hiddenCats={hiddenCats} brightness={brightness} contrast={contrast} confThreshold={confThreshold} />
+                </div>
+            </div>
+            {/* 右：预测结果 */}
+            <div style={{flex:1, display:'flex', flexDirection:'column', overflow:'hidden'}}>
+                <div className="compare-pane-label compare-pane-label--pred">⋯ 预测结果 ({predVisCount})</div>
+                <div style={{flex:1, overflow:'hidden', position:'relative', background:'var(--bg-soft)'}}>
+                    <ComparePane syncState={syncState} image={currentImage} imageUrl={imageUrl} type="pred" palette={palette} lineWidth={lineWidth} annFill={annFill} hiddenCats={hiddenCats} brightness={brightness} contrast={contrast} visiblePredModels={visiblePredModels} confOpacity={confOpacity} confThreshold={confThreshold} />
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function CategoryPicker({ categories, lastCategory, onConfirm, onCancel }) {
+    const [newCat, setNewCat] = React.useState('');
+    const inputRef = React.useRef(null);
+    React.useEffect(() => { inputRef.current && inputRef.current.focus(); }, []);
+
+    // 上次类别排在最前
+    const orderedCats = lastCategory
+        ? [lastCategory, ...categories.filter(c => c !== lastCategory)]
+        : categories;
+
+    return (
+        <div style={{
+            position: 'fixed', inset: 0, zIndex: 9800,
+            background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            pointerEvents: 'all',
+        }} onClick={e => e.target === e.currentTarget && onCancel()}>
+            <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-strong)', borderRadius: '12px', padding: '18px 22px', minWidth: '260px', maxWidth: '380px', boxShadow: '0 16px 48px rgba(0,0,0,0.55)' }}>
+                <div style={{ color: 'var(--text-primary)', fontWeight: '600', marginBottom: '12px', fontSize: 'var(--font-lg)' }}>选择标注类别
+                    {lastCategory && <span style={{fontSize:'11px',color:'var(--text-muted)',fontWeight:'normal',marginLeft:'8px'}}>Enter = 重用上次类别</span>}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '14px' }}>
+                    {orderedCats.map((cat, i) => (
+                        <button key={cat} onClick={() => onConfirm(cat)} style={{
+                            padding: '5px 12px', borderRadius: '6px',
+                            border: `1px solid ${i === 0 && lastCategory ? '#ffaa00' : '#4a7af0'}`,
+                            background: i === 0 && lastCategory ? '#2a2000' : '#1a2a4a',
+                            color: i === 0 && lastCategory ? '#ffdd00' : '#7af',
+                            cursor: 'pointer', fontSize: 'var(--font-md)',
+                            fontWeight: i === 0 && lastCategory ? 'bold' : 'normal',
+                        }}>
+                            {i === 0 && lastCategory ? `★ ${cat}` : cat}
+                        </button>
+                    ))}
+                </div>
+                <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '6px' }}>或输入新类别：</div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    <input
+                        ref={inputRef}
+                        type="text"
+                        value={newCat}
+                        onChange={e => setNewCat(e.target.value)}
+                        onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                if (newCat.trim()) onConfirm(newCat.trim());
+                                else if (lastCategory) onConfirm(lastCategory);
+                            }
+                            if (e.key === 'Escape') onCancel();
+                        }}
+                        placeholder={lastCategory ? `回车重用: ${lastCategory}` : '新类别名称'}
+                        className="form-input" style={{ flex: 1, padding: '5px 10px', fontSize: 'var(--font-md)' }}
+                    />
+                    <button onClick={() => { if (newCat.trim()) onConfirm(newCat.trim()); else if (lastCategory) onConfirm(lastCategory); }}
+                        className="btn btn-primary" style={{ padding: '5px 14px', fontSize: 'var(--font-md)' }}>确认</button>
+                    <button onClick={onCancel} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: 'var(--font-md)' }}>取消</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ==================== 图片查看器（查看 + 标注编辑） ====================
+function ImageViewer({ image, images, datasetId, categories, imageClassifications, imageNotes, imageCategories, visiblePredModels, onClose, onNavigate, onUpdateCategory, onUpdateCategories, onUpdateNote, onAnnotationsSaved }) {
     const config = useConfig();
     const viewer = config.viewer || DEFAULT_CONFIG.viewer;
     const catList = imageCategories || DEFAULT_CONFIG.imageCategories;
     const palette = config.colorPalette || DEFAULT_CONFIG.colorPalette;
+    const multiSelectCat = !!(config.imageCategoryMultiSelect ?? DEFAULT_CONFIG.imageCategoryMultiSelect);
     const canvasRef = useRef(null);
     const imgRef = useRef(null);
     const wrapperRef = useRef(null);
@@ -2828,17 +3825,139 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     const [noteInput, setNoteInput] = useState('');
     const noteInputRef = useRef(null);
 
-    // 父级因筛选变化等原因更新当前图时，与内部状态同步
+    // ---- 标注编辑模式 ----
+    const editCanvasRef = useRef(null);
+    const [annotateMode, setAnnotateMode] = useState(false);
+    const [localAnns, setLocalAnns] = useState([]); // 编辑中的 annotations 深拷贝
+    const [annoTool, setAnnoTool] = useState('draw'); // 'draw' | 'select'
+    const [drawingBox, setDrawingBox] = useState(null); // { x0, y0, x1, y1 } 图片坐标
+    const [selectedAnnIdx, setSelectedAnnIdx] = useState(null);
+    const [dragOp, setDragOp] = useState(null); // null | 'move' | 'resize-nw' | 'resize-n' | ...
+    const annoEditRef = useRef(null); // { imgX0, imgY0, origBbox, annIdx }
+    const undoStack = useRef([]);
+    const redoStack = useRef([]);
+    const [categoryPickerBbox, setCategoryPickerBbox] = useState(null); // 待分类的新框 bbox
+    const [saveStatus, setSaveStatus] = useState('idle'); // 'idle'|'saving'|'saved'|'error'
+    const [dirty, setDirty] = useState(false);
+    const annotateModeRef = useRef(false);
+    useEffect(() => { annotateModeRef.current = annotateMode; }, [annotateMode]);
+    const annoToolRef = useRef('draw');
+    useEffect(() => { annoToolRef.current = annoTool; }, [annoTool]);
+    const spaceRef = useRef(false);        // 空格键按住（标注模式临时平移）
+    const lastCategoryRef = useRef('');    // 上次使用的类别（快速标注）
+    const [quickMode, setQuickMode] = useState(false); // 快速标注：使用上次类别不弹窗
+    const [editCursor, setEditCursor] = useState('crosshair'); // editCanvas 动态光标
+    const localAnnsRef = useRef([]);       // 同步 localAnns 到 ref 供事件闭包使用
+    useEffect(() => { localAnnsRef.current = localAnns; }, [localAnns]);
+    const dirtyRef = useRef(false);
+    useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
+    const currentImageRef = useRef(null);
+    useEffect(() => { currentImageRef.current = currentImage; }, [currentImage]);
+    const bboxFocusedRef = useRef(false);  // 坐标输入框是否已压入 undo 快照
+    // ---- 新增功能 state/ref ----
+    const copiedAnnRef = useRef(null);                 // B1: 复制的标注框
+    const crossImageClipboardRef = useRef(null);       // B4: 跨图复制标注
+    const [selectedAnnIdxSet, setSelectedAnnIdxSet] = useState(new Set()); // B2: 多选集合
+    const [selRect, setSelRect] = useState(null);      // B2: 拖拽框选矩形 {x0,y0,x1,y1}
+    const [snapEnabled, setSnapEnabled] = useState(true); // B5: 贴边吸附
+    const snapEnabledRef = useRef(true);
+    useEffect(() => { snapEnabledRef.current = snapEnabled; }, [snapEnabled]);
+    const [brightness, setBrightness] = useState(100); // B7: 亮度
+    const [contrast, setContrast] = useState(100);     // B7: 对比度
+    const [annFill, setAnnFill] = useState(false);     // B3: 半透明填充（默认关）
+    const [annSearchText, setAnnSearchText] = useState(''); // B6: 标注搜索
+    const [showHelp, setShowHelp] = useState(false);   // B9: 帮助面板
+    const minimapCanvasRef = useRef(null);             // B8: 小地图
+    // 十字辅助线 refs
+    const crosshairXRef = useRef(null);
+    const crosshairYRef = useRef(null);
+
+    // ---- 查看模式增强 ----
+    const [lockedAnn, setLockedAnn] = useState(null);  // C1: 锁定信息面板 {type,ann,sx,sy}
+    const [isFullscreen, setIsFullscreen] = useState(false); // C4: 全屏
+    const viewerModalRef = useRef(null);
+    const [hiddenCats, setHiddenCats] = useState(new Set()); // C5: 类别筛选
+    const [showBoxIndex, setShowBoxIndex] = useState(false); // C6: 框序号
+    const [confOpacity, setConfOpacity] = useState(false);   // C7: 置信度透明
+    const [confThreshold, setConfThreshold] = useState(0);   // 置信度过滤阈值（0 = 不过滤）
+    const [compareMode, setCompareMode] = useState(false);   // C10: 对比模式
+    const [showLabels, setShowLabels] = useState(true);       // 查看模式：常显类别标签
+    const clickStartRef = useRef(null); // 用于 C1 点击检测（mousedown 位置）
+    const [exportModal, setExportModal] = useState(null); // C9: 导出弹窗 { dataUrl, fileName }
+    const [ctxMenu, setCtxMenu] = useState(null); // opt6: 右键菜单 { x, y, ann, type, annIdx }
+    // ---- 流水线标注辅助 refs ----
+    const keepAnnotateModeRef = useRef(false); // navigate 时是否保持标注模式
+    const pendingSaveRef = useRef(null);       // { imageId, anns } — navigate 前捕获旧图待保存数据
+    const autoSaveTimerRef = useRef(null);     // 画框后延迟自动保存的 timer
+    const [undoToast, setUndoToast] = useState(null); // { msg, id } 撤销/重做提示
+    const undoToastTimerRef = useRef(null);
+
+    // 图片切换时同步状态（自动保存旧图、可选保持标注模式）
     useEffect(() => {
+        // 处理 navigate() 预先捕获的旧图保存任务
+        const pending = pendingSaveRef.current;
+        if (pending) {
+            pendingSaveRef.current = null;
+            fetch('/api/save_annotations', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    dataset_id: datasetId,
+                    images: [{ image_id: pending.imageId, annotations: pending.anns.map(a => ({ category_id: a.category_id, category: a.category, bbox: a.bbox, area: a.bbox ? a.bbox[2] * a.bbox[3] : 0, iscrowd: a.iscrowd || 0 })) }]
+                })
+            }).then(r => r.json()).then(data => {
+                if (data.success && onAnnotationsSaved) onAnnotationsSaved(pending.imageId, pending.anns);
+            }).catch(e => console.warn('auto-save on navigate:', e));
+        }
+        // 清除画框自动保存 timer（切图后旧 timer 无意义）
+        if (autoSaveTimerRef.current) { clearTimeout(autoSaveTimerRef.current); autoSaveTimerRef.current = null; }
+
+        const wasAnnotating = keepAnnotateModeRef.current;
+        keepAnnotateModeRef.current = false;
+
         setCurrentImage(image);
         setHiddenAnns(new Set());
         setHiddenPredAnns(new Set());
         setHoveredPredAnnIdx(null);
-    }, [image.image_id]);
+        setSelectedAnnIdx(null);
+        setSelectedAnnIdxSet(new Set());
+        setDrawingBox(null);
+        setSelRect(null);
+        setDirty(false);
+        undoStack.current = [];
+        redoStack.current = [];
+
+        if (wasAnnotating) {
+            // 保持标注模式，加载新图的标注
+            setAnnotateMode(true);
+            setAnnoTool('draw');
+            setLocalAnns((image.annotations || []).map(a => ({ ...a, bbox: [...(a.bbox || [])] })));
+        } else {
+            setAnnotateMode(false);
+            setLocalAnns([]);
+        }
+    }, [image.image_id]); // eslint-disable-line
 
     const imageIdx = images.findIndex(i => i.image_id === currentImage.image_id);
     let imageUrl = `/api/get_image?dataset_id=${datasetId}&file_name=${encodeURIComponent(currentImage.file_name)}`;
     if (currentImage.source_path != null && currentImage.source_path !== '') imageUrl += `&source_path=${encodeURIComponent(currentImage.source_path)}`;
+    
+    // 前后图预加载
+    useEffect(() => {
+        if (imageIdx < 0) return;
+        const preload = (idx) => {
+            if (idx >= 0 && idx < images.length) {
+                const img = images[idx];
+                let url = `/api/get_image?dataset_id=${datasetId}&file_name=${encodeURIComponent(img.file_name)}`;
+                if (img.source_path != null && img.source_path !== '') url += `&source_path=${encodeURIComponent(img.source_path)}`;
+                const imageObj = new Image();
+                imageObj.src = url;
+            }
+        };
+        preload(imageIdx + 1);
+        preload(imageIdx - 1);
+    }, [imageIdx, images, datasetId]);
+
     const rawCats = imageClassifications[currentImage.image_id];
     const currentCategories = Array.isArray(rawCats) && rawCats.length ? rawCats : [catList[0] || '未分类'];
     const currentCategory = currentCategories[0];
@@ -2882,23 +4001,50 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         const sx = w / currentImage.width;
         const sy = h / currentImage.height;
         ctx.clearRect(0, 0, w, h);
-        currentImage.annotations.forEach((ann, idx) => {
-            if (!ann.bbox || hiddenAnns.has(idx)) return;
+
+        // 标注模式下绘制 localAnns，否则绘制 currentImage.annotations
+        const annsToShow = annotateMode ? localAnns : currentImage.annotations;
+        annsToShow.forEach((ann, idx) => {
+            if (!ann.bbox || (!annotateMode && hiddenAnns.has(idx))) return;
+            if (!annotateMode && !passesConfThreshold(ann, confThreshold)) return;
+            // C5: 类别筛选（查看模式下隐藏已过滤类别）
+            if (!annotateMode && hiddenCats.has(ann.category)) return;
             const [x, y, bw, bh] = ann.bbox;
             const rx = x * sx, ry = y * sy, rw = bw * sx, rh = bh * sy;
-            const isHovered = hoveredAnnIdx === idx;
-            ctx.strokeStyle = getCategoryColor(palette, ann.category);
-            ctx.lineWidth = isHovered ? Math.max(lineWidth + 0.2, 0.3) : lineWidth;
-            if (isHovered) ctx.setLineDash([6, 4]);
+            const isHovered = !annotateMode && hoveredAnnIdx === idx;
+            const isSelected = annotateMode && selectedAnnIdx === idx;
+            const isMultiSel = annotateMode && selectedAnnIdxSet.has(idx);
+            const color = getCategoryColor(palette, ann.category);
+            ctx.strokeStyle = isMultiSel && !isSelected ? '#ffaa00' : color;
+            ctx.lineWidth = (isHovered || isSelected || isMultiSel) ? Math.max(lineWidth + 0.3, 0.4) : lineWidth;
+            if (isSelected) ctx.setLineDash([5, 3]);
+            if (isMultiSel && !isSelected) ctx.setLineDash([4, 2]);
             ctx.strokeRect(rx, ry, rw, rh);
-            if (isHovered) ctx.setLineDash([]);
+            ctx.setLineDash([]);
+            // B3: 半透明填充
+            if (annFill) {
+                ctx.fillStyle = color + (isSelected || isMultiSel ? '30' : '1a');
+                ctx.fillRect(rx, ry, rw, rh);
+            }
+            // 标注模式 or 查看模式常显标签：绘制类别标签
+            if ((annotateMode || (!annotateMode && showLabels)) && ann.category) {
+                ctx.font = 'bold 11px sans-serif';
+                const labelW = ctx.measureText(ann.category).width + 8;
+                const labelH = 16;
+                const lx = rx, ly = ry > labelH + 2 ? ry - labelH - 2 : ry + 2;
+                ctx.fillStyle = color + 'cc';
+                ctx.fillRect(lx, ly, labelW, labelH);
+                ctx.fillStyle = '#fff';
+                ctx.fillText(ann.category, lx + 4, ly + labelH - 4);
+            }
             if (isHovered) {
                 const area = bw * bh;
                 const lines = [
                     ann.category,
+                    ann.score != null ? `置信度: ${(Number(ann.score) * 100).toFixed(1)}%` : null,
                     `[${Math.round(x)},${Math.round(y)},${Math.round(bw)}×${Math.round(bh)}]`,
                     `面积: ${area.toLocaleString()}`
-                ];
+                ].filter(Boolean);
                 ctx.font = '12px sans-serif';
                 const lineH = 14;
                 const pad = 6;
@@ -2918,62 +4064,112 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                     ctx.fillText(line, tx + pad, ty + pad + (i + 1) * lineH - 2);
                 });
             }
-        });
-
-        // 绘制预测标注（虚线区分，其余交互与 GT 完全一致）
-        const PRED_DASH_PATTERNS = [[8,4],[4,4],[2,4],[10,4,2,4],[14,4]];
-        const predAnns = currentImage.pred_annotations || [];
-        const predModels = [...new Set(predAnns.map(a => a._pred_source))];
-        predAnns.forEach((ann, idx) => {
-            if (!ann.bbox || ann.bbox.length < 4) return;
-            if (hiddenPredAnns.has(idx)) return;
-            // 全局模型可见性过滤
-            if (visiblePredModels && !visiblePredModels.has(ann._pred_source)) return;
-            const [x, y, bw, bh] = ann.bbox;
-            const rx = x * sx, ry = y * sy, rw = bw * sx, rh = bh * sy;
-            const isHovered = hoveredPredAnnIdx === idx;
-            const modelIdx = predModels.indexOf(ann._pred_source);
-            const dash = PRED_DASH_PATTERNS[modelIdx % PRED_DASH_PATTERNS.length];
-            const color = getCategoryColor(palette, ann.category);
-            ctx.strokeStyle = color;
-            ctx.lineWidth = isHovered ? Math.max(lineWidth + 0.2, 0.3) : lineWidth;
-            ctx.setLineDash(dash);
-            ctx.strokeRect(rx, ry, rw, rh);
-            ctx.setLineDash([]);
-            if (isHovered) {
-                const area = bw * bh;
-                const lines = [
-                    `[预测] ${ann._pred_source}`,
-                    ann.category,
-                    ann.score !== undefined && ann.score !== null
-                        ? `置信度: ${(Number(ann.score) * 100).toFixed(1)}%`
-                        : null,
-                    `[${Math.round(x)},${Math.round(y)},${Math.round(bw)}×${Math.round(bh)}]`,
-                    `面积: ${area.toLocaleString()}`
-                ].filter(Boolean);
-                ctx.font = '12px sans-serif';
-                const lineH = 14;
-                const pad = 6;
-                const boxW = Math.max(...lines.map(l => ctx.measureText(l).width)) + pad * 2;
-                const boxH = lines.length * lineH + pad * 2;
-                let tx = rx, ty = ry - boxH - 4;
-                if (ty < 0) ty = ry + rh + 4;
-                if (tx + boxW > w) tx = w - boxW;
-                if (tx < 0) tx = 4;
-                ctx.fillStyle = 'rgba(0,0,0,0.85)';
-                ctx.fillRect(tx, ty, boxW, boxH);
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 1;
-                ctx.setLineDash(dash);
-                ctx.strokeRect(tx, ty, boxW, boxH);
-                ctx.setLineDash([]);
+            // C6: 框序号
+            if (!annotateMode && showBoxIndex) {
+                const numStr = String(idx + 1);
+                ctx.font = 'bold 11px monospace';
+                const nw = ctx.measureText(numStr).width + 6, nh = 15;
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(rx, ry, nw, nh);
                 ctx.fillStyle = '#fff';
-                lines.forEach((line, i) => {
-                    ctx.fillText(line, tx + pad, ty + pad + (i + 1) * lineH - 2);
-                });
+                ctx.fillText(numStr, rx + 3, ry + nh - 3);
             }
         });
-    }, [currentImage, zoom, hiddenAnns, hoveredAnnIdx, lineWidth, palette, hiddenPredAnns, hoveredPredAnnIdx, visiblePredModels]);
+
+        // 预测标注（标注模式下半透明参考显示）
+        {
+            const PRED_DASH_PATTERNS = [[8,4],[4,4],[2,4],[10,4,2,4],[14,4]];
+            const predAnns = currentImage.pred_annotations || [];
+            const predModels = [...new Set(predAnns.map(a => a._pred_source))];
+            if (annotateMode) ctx.globalAlpha = 0.38;
+            predAnns.forEach((ann, idx) => {
+                if (!ann.bbox || ann.bbox.length < 4) return;
+                if (!annotateMode && hiddenPredAnns.has(idx)) return;
+                if (visiblePredModels && !visiblePredModels.has(ann._pred_source)) return;
+                if (!passesConfThreshold(ann, confThreshold)) return;
+                // C5: 类别筛选
+                if (!annotateMode && hiddenCats.has(ann.category)) return;
+                const [x, y, bw, bh] = ann.bbox;
+                const rx = x * sx, ry = y * sy, rw = bw * sx, rh = bh * sy;
+                const isHovered = hoveredPredAnnIdx === idx;
+                const modelIdx = predModels.indexOf(ann._pred_source);
+                const dash = PRED_DASH_PATTERNS[modelIdx % PRED_DASH_PATTERNS.length];
+                const color = getCategoryColor(palette, ann.category);
+                // C7: 置信度渐变透明度
+                const baseAlpha = annotateMode ? 0.38 : 1;
+                const confAlpha = (confOpacity && !annotateMode && ann.score != null)
+                    ? Math.max(0.25, Number(ann.score)) : 1;
+                ctx.globalAlpha = baseAlpha * confAlpha;
+                ctx.strokeStyle = color;
+                ctx.lineWidth = isHovered ? Math.max(lineWidth + 0.2, 0.3) : lineWidth;
+                ctx.setLineDash(dash);
+                ctx.strokeRect(rx, ry, rw, rh);
+                ctx.setLineDash([]);
+                if (isHovered) {
+                    const area = bw * bh;
+                    const lines = [
+                        `[预测] ${ann._pred_source}`,
+                        ann.category,
+                        ann.score !== undefined && ann.score !== null
+                            ? `置信度: ${(Number(ann.score) * 100).toFixed(1)}%`
+                            : null,
+                        `[${Math.round(x)},${Math.round(y)},${Math.round(bw)}×${Math.round(bh)}]`,
+                        `面积: ${area.toLocaleString()}`
+                    ].filter(Boolean);
+                    ctx.font = '12px sans-serif';
+                    const lineH = 14;
+                    const pad = 6;
+                    const boxW = Math.max(...lines.map(l => ctx.measureText(l).width)) + pad * 2;
+                    const boxH = lines.length * lineH + pad * 2;
+                    let tx = rx, ty = ry - boxH - 4;
+                    if (ty < 0) ty = ry + rh + 4;
+                    if (tx + boxW > w) tx = w - boxW;
+                    if (tx < 0) tx = 4;
+                    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+                    ctx.fillRect(tx, ty, boxW, boxH);
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash(dash);
+                    ctx.strokeRect(tx, ty, boxW, boxH);
+                    ctx.setLineDash([]);
+                    ctx.fillStyle = '#fff';
+                    lines.forEach((line, i) => {
+                        ctx.fillText(line, tx + pad, ty + pad + (i + 1) * lineH - 2);
+                    });
+                }
+                // 查看模式常显标签（预测框）
+                if (!annotateMode && showLabels && ann.category && !isHovered) {
+                    ctx.globalAlpha = baseAlpha * confAlpha;
+                    ctx.font = '10px sans-serif';
+                    const scoreStr = ann.score != null ? ` ${(Number(ann.score)*100).toFixed(0)}%` : '';
+                    const labelTxt = ann.category + scoreStr;
+                    const labelW = ctx.measureText(labelTxt).width + 6;
+                    const labelH = 14;
+                    const lx = rx + rw - labelW, ly = ry > labelH + 1 ? ry - labelH - 1 : ry + 1;
+                    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                    ctx.fillRect(lx, ly, labelW, labelH);
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 0.5;
+                    ctx.setLineDash([]);
+                    ctx.strokeRect(lx, ly, labelW, labelH);
+                    ctx.fillStyle = color;
+                    ctx.fillText(labelTxt, lx + 3, ly + labelH - 3);
+                }
+                // C6: 预测框序号
+                if (!annotateMode && showBoxIndex) {
+                    ctx.globalAlpha = 1;
+                    const numStr = `p${idx + 1}`;
+                    ctx.font = 'bold 10px monospace';
+                    const nw = ctx.measureText(numStr).width + 5, nh = 13;
+                    ctx.fillStyle = 'rgba(60,60,0,0.8)';
+                    ctx.fillRect(rx + rw - nw, ry, nw, nh);
+                    ctx.fillStyle = '#ffdd00';
+                    ctx.fillText(numStr, rx + rw - nw + 2, ry + nh - 2);
+                }
+            });
+            ctx.globalAlpha = 1;
+        }
+    }, [currentImage, zoom, hiddenAnns, hoveredAnnIdx, lineWidth, palette, hiddenPredAnns, hoveredPredAnnIdx, visiblePredModels, annotateMode, localAnns, selectedAnnIdx, selectedAnnIdxSet, annFill, hiddenCats, showBoxIndex, confOpacity, confThreshold, showLabels]);
 
     useEffect(() => {
         setPanX(0);
@@ -2997,14 +4193,646 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
 
     useEffect(() => { drawAnnotations(); }, [zoom, hiddenAnns, hoveredAnnIdx, hiddenPredAnns, hoveredPredAnnIdx, lineWidth, drawAnnotations]);
 
+    // ---- editCanvas: 绘制正在拖拽的新框 + 选中框的控制点 ----
+    const HANDLE_R_IMG = 5; // 控制点半径（图片坐标）
+    function getHandles(bbox) {
+        const [x, y, bw, bh] = bbox;
+        return [
+            { id: 'nw', cx: x,        cy: y },
+            { id: 'n',  cx: x + bw/2, cy: y },
+            { id: 'ne', cx: x + bw,   cy: y },
+            { id: 'e',  cx: x + bw,   cy: y + bh/2 },
+            { id: 'se', cx: x + bw,   cy: y + bh },
+            { id: 's',  cx: x + bw/2, cy: y + bh },
+            { id: 'sw', cx: x,        cy: y + bh },
+            { id: 'w',  cx: x,        cy: y + bh/2 },
+        ];
+    }
+    const HANDLE_CURSORS = { nw:'nw-resize', n:'n-resize', ne:'ne-resize', e:'e-resize', se:'se-resize', s:'s-resize', sw:'sw-resize', w:'w-resize' };
+
+    const drawEditCanvas = useCallback(() => {
+        const ec = editCanvasRef.current;
+        const img = imgRef.current;
+        if (!ec || !img || img.naturalWidth === 0) return;
+        const w = img.naturalWidth * zoom;
+        const h = img.naturalHeight * zoom;
+        ec.width = w; ec.height = h;
+        ec.style.width = w + 'px'; ec.style.height = h + 'px';
+        const ctx = ec.getContext('2d');
+        ctx.clearRect(0, 0, w, h);
+        if (!annotateMode) return;
+        const sx = zoom, sy = zoom;
+        // 绘制正在画的框
+        if (drawingBox) {
+            const rx = Math.min(drawingBox.x0, drawingBox.x1) * sx;
+            const ry = Math.min(drawingBox.y0, drawingBox.y1) * sy;
+            const rw = Math.abs(drawingBox.x1 - drawingBox.x0) * sx;
+            const rh = Math.abs(drawingBox.y1 - drawingBox.y0) * sy;
+            ctx.strokeStyle = '#ffdd00';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([6, 3]);
+            ctx.strokeRect(rx, ry, rw, rh);
+            ctx.setLineDash([]);
+            ctx.fillStyle = 'rgba(255,221,0,0.08)';
+            ctx.fillRect(rx, ry, rw, rh);
+            // ★ 实时尺寸标签（Shift 时提示正方形模式）
+            const imgW = Math.round(Math.abs(drawingBox.x1 - drawingBox.x0));
+            const imgH = Math.round(Math.abs(drawingBox.y1 - drawingBox.y0));
+            const isSquare = imgW === imgH;
+            const label = isSquare ? `⬛ ${imgW} × ${imgH}` : `${imgW} × ${imgH}`;
+            ctx.font = 'bold 12px monospace';
+            const lw = ctx.measureText(label).width + 10;
+            const lh = 18;
+            let lx = rx + rw / 2 - lw / 2;
+            let ly = ry + rh + 4;
+            if (ly + lh > h) ly = ry - lh - 4;
+            if (lx < 2) lx = 2;
+            if (lx + lw > w - 2) lx = w - lw - 2;
+            ctx.fillStyle = 'rgba(0,0,0,0.72)';
+            ctx.fillRect(lx, ly, lw, lh);
+            ctx.fillStyle = '#ffdd00';
+            ctx.fillText(label, lx + 5, ly + lh - 4);
+        }
+        // 绘制选中框的控制点
+        if (selectedAnnIdx !== null && localAnns[selectedAnnIdx]) {
+            const handles = getHandles(localAnns[selectedAnnIdx].bbox);
+            handles.forEach(h => {
+                ctx.fillStyle = '#fff';
+                ctx.strokeStyle = '#4a7af0';
+                ctx.lineWidth = 1.5;
+                const hx = h.cx * sx - HANDLE_R_IMG, hy = h.cy * sy - HANDLE_R_IMG;
+                const hs = HANDLE_R_IMG * 2;
+                ctx.fillRect(hx, hy, hs, hs);
+                ctx.strokeRect(hx, hy, hs, hs);
+            });
+        }
+        // B2: 绘制框选矩形
+        if (selRect) {
+            const rx = Math.min(selRect.x0, selRect.x1) * sx;
+            const ry = Math.min(selRect.y0, selRect.y1) * sy;
+            const rw = Math.abs(selRect.x1 - selRect.x0) * sx;
+            const rh = Math.abs(selRect.y1 - selRect.y0) * sy;
+            ctx.strokeStyle = '#ffdd00';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([5, 3]);
+            ctx.strokeRect(rx, ry, rw, rh);
+            ctx.setLineDash([]);
+            ctx.fillStyle = 'rgba(255,221,0,0.06)';
+            ctx.fillRect(rx, ry, rw, rh);
+        }
+    }, [annotateMode, zoom, drawingBox, selectedAnnIdx, localAnns, selRect]);
+
+    // B8: 小地图绘制
+    useEffect(() => {
+        const mc = minimapCanvasRef.current;
+        const img = imgRef.current;
+        const container = containerRef.current;
+        if (!mc || !img || img.naturalWidth === 0 || !container) return;
+        const MAP_W = 150, MAP_H = 100;
+        const scale = Math.min(MAP_W / img.naturalWidth, MAP_H / img.naturalHeight);
+        const mw = img.naturalWidth * scale, mh = img.naturalHeight * scale;
+        mc.width = mw; mc.height = mh;
+        mc.style.width = mw + 'px'; mc.style.height = mh + 'px';
+        const ctx = mc.getContext('2d');
+        ctx.clearRect(0, 0, mw, mh);
+        try { ctx.drawImage(img, 0, 0, mw, mh); } catch(e) { /* cross-origin */ }
+        // 绘制视口矩形
+        const cw = container.clientWidth, ch = container.clientHeight;
+        const vpW = (cw / zoom) * scale, vpH = (ch / zoom) * scale;
+        const vpX = (-panX / zoom) * scale, vpY = (-panY / zoom) * scale;
+        ctx.strokeStyle = '#ffaa00';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(vpX, vpY, vpW, vpH);
+        ctx.fillStyle = 'rgba(255,170,0,0.12)';
+        ctx.fillRect(vpX, vpY, vpW, vpH);
+    }, [zoom, panX, panY, currentImage.image_id]);
+
+    useEffect(() => { drawEditCanvas(); }, [drawEditCanvas]);
+
+    // ---- 标注模式工具函数 ----
+    // C1: 查看模式下将 clientXY 转换为图片像素坐标
+    function viewClientToImage(clientX, clientY) {
+        const wrapper = wrapperRef.current;
+        if (!wrapper) return { x: 0, y: 0 };
+        const rect = wrapper.getBoundingClientRect();
+        return { x: (clientX - rect.left) / zoom, y: (clientY - rect.top) / zoom };
+    }
+
+    // C4: 全屏切换
+    function toggleFullscreen() {
+        const el = viewerModalRef.current;
+        if (!el) return;
+        if (!document.fullscreenElement) {
+            el.requestFullscreen().catch(() => {});
+        } else {
+            document.exitFullscreen();
+        }
+    }
+
+    // 居中到指定标注框（image坐标系中的bbox）
+    function centerOnAnnotation(bbox) {
+        if (!bbox || bbox.length < 4 || !containerRef.current || !imgRef.current) return;
+        const [bx, by, bw, bh] = bbox;
+        const imgW = currentImage.width || imgRef.current.naturalWidth || 1;
+        const imgH = currentImage.height || imgRef.current.naturalHeight || 1;
+        const container = containerRef.current;
+        const cw = container.clientWidth, ch = container.clientHeight;
+        // 框中心的 image 归一化坐标
+        const cx = (bx + bw / 2) / imgW;
+        const cy = (by + bh / 2) / imgH;
+        // 适当放大以便看清该框（不超过2倍屏幕），至少让框占据屏幕40%
+        const targetZoomW = cw * 0.6 / (bw / imgW * (currentImage.width || imgW));
+        const targetZoomH = ch * 0.6 / (bh / imgH * (currentImage.height || imgH));
+        const targetZoom = Math.min(targetZoomW, targetZoomH, zoom * 3, 8);
+        const newZoom = Math.max(targetZoom, zoom);
+        // pan使框中心位于容器中心
+        const newPanX = cw / 2 - cx * imgW * newZoom;
+        const newPanY = ch / 2 - cy * imgH * newZoom;
+        setZoom(newZoom);
+        setPanX(newPanX);
+        setPanY(newPanY);
+        zoomPanRef.current = { zoom: newZoom, panX: newPanX, panY: newPanY };
+    }
+
+    // C9: 带标注截图导出
+    async function exportAnnotatedImage() {
+        const img = imgRef.current;
+        if (!img || img.naturalWidth === 0) { alert('图片尚未加载完成'); return; }
+        const SCALE = Math.min(1, 1200 / Math.max(img.naturalWidth, img.naturalHeight)); // 限制最大边1200px
+        const offW = Math.round(img.naturalWidth * SCALE), offH = Math.round(img.naturalHeight * SCALE);
+        const imgMeta = currentImage;
+        const imgW = imgMeta.width || img.naturalWidth, imgH = imgMeta.height || img.naturalHeight;
+        const sx = offW / imgW, sy = offH / imgH;
+        const PRED_DASH_PATTERNS = [[8,4],[4,4],[2,4],[10,4,2,4],[14,4]];
+        const allPredAnns = imgMeta.pred_annotations || [];
+        const predModels = [...new Set(allPredAnns.map(a => a._pred_source))];
+        // 收集可见标注信息（用于信息条）
+        const visGT = imgMeta.annotations.filter((a, i) => a.bbox && !hiddenAnns.has(i) && !hiddenCats.has(a.category) && passesConfThreshold(a, confThreshold));
+        const visPred = allPredAnns.filter((a, i) => a.bbox && !hiddenPredAnns.has(i) && !hiddenCats.has(a.category) && (!visiblePredModels || visiblePredModels.has(a._pred_source)) && passesConfThreshold(a, confThreshold));
+        // 信息条高度
+        const FONT_SZ = 13, LINE_H = 20, PAD = 8;
+        const infoLines = [
+            `文件: ${imgMeta.file_name.split('/').pop()}   尺寸: ${imgMeta.width}×${imgMeta.height}`,
+            ...visGT.map(a => `  [GT] ${a.category}  ${Math.round(a.bbox[2])}×${Math.round(a.bbox[3])}`),
+            ...visPred.map(a => `  [预测] ${a.category}  ${Math.round(a.bbox[2])}×${Math.round(a.bbox[3])}${a.score != null ? `  置信度:${(a.score*100).toFixed(1)}%` : ''}`),
+        ];
+        const infoH = infoLines.length * LINE_H + PAD * 2;
+        // 合成画布
+        const off = document.createElement('canvas');
+        off.width = offW; off.height = offH + infoH;
+        const ctx = off.getContext('2d');
+        // 绘制图片
+        if (brightness !== 100 || contrast !== 100) ctx.filter = `brightness(${brightness}%) contrast(${contrast}%)`;
+        ctx.drawImage(img, 0, 0, offW, offH);
+        ctx.filter = 'none';
+        // 绘制 GT 框
+        visGT.forEach(ann => {
+            const [x, y, bw, bh] = ann.bbox;
+            const color = getCategoryColor(palette, ann.category);
+            ctx.strokeStyle = color; ctx.lineWidth = Math.max(2, 2 * SCALE * 2);
+            ctx.strokeRect(x*sx, y*sy, bw*sx, bh*sy);
+            if (annFill) { ctx.fillStyle = color+'22'; ctx.fillRect(x*sx, y*sy, bw*sx, bh*sy); }
+            const label = `${ann.category}  ${Math.round(bw)}×${Math.round(bh)}`;
+            ctx.font = `bold ${Math.max(11, FONT_SZ*SCALE)}px sans-serif`;
+            const lw = ctx.measureText(label).width + 8, lh = Math.max(15, 15*SCALE);
+            const lx = x*sx, ly = y*sy > lh+2 ? y*sy-lh-2 : y*sy+2;
+            ctx.fillStyle = color; ctx.fillRect(lx, ly, lw, lh);
+            ctx.fillStyle = '#fff'; ctx.fillText(label, lx+4, ly+lh-4);
+        });
+        // 绘制预测框
+        visPred.forEach(ann => {
+            const [x, y, bw, bh] = ann.bbox;
+            const color = getCategoryColor(palette, ann.category);
+            const dash = PRED_DASH_PATTERNS[predModels.indexOf(ann._pred_source) % PRED_DASH_PATTERNS.length].map(v => v * Math.max(1, SCALE*2));
+            ctx.strokeStyle = color; ctx.lineWidth = Math.max(1.5, 1.5*SCALE*2);
+            ctx.setLineDash(dash); ctx.strokeRect(x*sx, y*sy, bw*sx, bh*sy); ctx.setLineDash([]);
+            const label = ann.score != null
+                ? `${ann.category}  ${Math.round(bw)}×${Math.round(bh)}  ${(ann.score*100).toFixed(1)}%`
+                : `${ann.category}  ${Math.round(bw)}×${Math.round(bh)}`;
+            ctx.font = `bold ${Math.max(11, FONT_SZ*SCALE)}px sans-serif`;
+            const lw = ctx.measureText(label).width + 8, lh = Math.max(15, 15*SCALE);
+            const lx = x*sx, ly = y*sy > lh+2 ? y*sy-lh-2 : y*sy+2;
+            ctx.fillStyle = color+'cc'; ctx.fillRect(lx, ly, lw, lh);
+            ctx.fillStyle = '#fff'; ctx.fillText(label, lx+4, ly+lh-4);
+        });
+        // 绘制信息条（深色背景）
+        ctx.fillStyle = '#111827';
+        ctx.fillRect(0, offH, offW, infoH);
+        ctx.font = `${FONT_SZ}px monospace`;
+        infoLines.forEach((line, i) => {
+            const isHeader = i === 0;
+            ctx.fillStyle = isHeader ? '#9ca3af' : (line.includes('[GT]') ? '#6ee7b7' : '#93c5fd');
+            if (isHeader) ctx.font = `bold ${FONT_SZ}px monospace`;
+            else ctx.font = `${FONT_SZ}px monospace`;
+            ctx.fillText(line, PAD, offH + PAD + (i + 1) * LINE_H - 4);
+        });
+        const fileName = imgMeta.file_name.split('/').pop().replace(/\.[^.]+$/, '') + '_annotated.jpg';
+        const dataUrl = off.toDataURL('image/jpeg', 0.88);
+        setExportModal({ dataUrl, fileName, canvas: off });
+    }
+
+    // B5: 贴边吸附：将坐标吸附到候选值列表中的最近值
+    function snapCoord(val, candidates, snapDist) {
+        const dist = snapDist || 8;
+        let best = null, bestD = dist + 1;
+        for (const c of candidates) {
+            const d = Math.abs(val - c);
+            if (d < bestD) { bestD = d; best = c; }
+        }
+        return bestD <= dist ? best : val;
+    }
+
+    // B4: 跨图复制
+    function copyAnnotationsToClipboard() {
+        crossImageClipboardRef.current = localAnns.map(a => ({ ...a, bbox: [...a.bbox] }));
+        alert(`已复制 ${localAnns.length} 个标注框到跨图剪贴板，切换到其他图片后点击"粘贴"即可。`);
+    }
+    function pasteAnnotationsFromClipboard() {
+        const clip = crossImageClipboardRef.current;
+        if (!clip || clip.length === 0) return;
+        commitChange([...localAnns, ...clip.map(a => ({ ...a, bbox: [...a.bbox] }))]);
+    }
+
+    function clientToImage(clientX, clientY) {
+        const ec = editCanvasRef.current;
+        if (!ec) return { x: 0, y: 0 };
+        const rect = ec.getBoundingClientRect();
+        return { x: (clientX - rect.left) / zoom, y: (clientY - rect.top) / zoom };
+    }
+
+    function hitTestHandles(bbox, clientX, clientY) {
+        const ec = editCanvasRef.current;
+        if (!ec) return null;
+        const rect = ec.getBoundingClientRect();
+        const handles = getHandles(bbox);
+        for (const h of handles) {
+            const sx = h.cx * zoom + rect.left, sy = h.cy * zoom + rect.top;
+            if (Math.abs(clientX - sx) <= HANDLE_R_IMG + 3 && Math.abs(clientY - sy) <= HANDLE_R_IMG + 3) return h.id;
+        }
+        return null;
+    }
+
+    function hitTestBox(bbox, imgX, imgY) {
+        const [x, y, bw, bh] = bbox;
+        return imgX >= x && imgX <= x + bw && imgY >= y && imgY <= y + bh;
+    }
+
+    function commitChange(nextAnns) {
+        undoStack.current = [...undoStack.current, localAnns.map(a => ({ ...a, bbox: [...a.bbox] }))];
+        redoStack.current = [];
+        setLocalAnns(nextAnns);
+        setDirty(true);
+        scheduleAutoSave(); // 所有标注变更（移动/删除/粘贴等）均触发自动保存
+    }
+
+    function showUndoToast(msg) {
+        if (undoToastTimerRef.current) clearTimeout(undoToastTimerRef.current);
+        setUndoToast({ msg, id: Date.now() });
+        undoToastTimerRef.current = setTimeout(() => setUndoToast(null), 1500);
+    }
+
+    function undo() {
+        if (!undoStack.current.length) { showUndoToast('已无可撤销操作'); return; }
+        redoStack.current = [...redoStack.current, localAnns.map(a => ({ ...a, bbox: [...a.bbox] }))];
+        const prev = undoStack.current[undoStack.current.length - 1];
+        undoStack.current = undoStack.current.slice(0, -1);
+        setLocalAnns(prev);
+        setSelectedAnnIdx(null);
+        showUndoToast(`已撤销（还可撤销 ${undoStack.current.length} 步）`);
+    }
+
+    function redo() {
+        if (!redoStack.current.length) { showUndoToast('已无可重做操作'); return; }
+        undoStack.current = [...undoStack.current, localAnns.map(a => ({ ...a, bbox: [...a.bbox] }))];
+        const next = redoStack.current[redoStack.current.length - 1];
+        redoStack.current = redoStack.current.slice(0, -1);
+        setLocalAnns(next);
+        setSelectedAnnIdx(null);
+        showUndoToast(`已重做`);
+    }
+
+    function enterAnnotateMode() {
+        setLocalAnns(currentImage.annotations.map(a => ({ ...a, bbox: [...(a.bbox || [])] })));
+        undoStack.current = [];
+        redoStack.current = [];
+        setSelectedAnnIdx(null);
+        setDrawingBox(null);
+        setDirty(false);
+        setSaveStatus('idle');
+        setAnnotateMode(true);
+        setAnnoTool('draw');
+        setEditCursor('crosshair');
+        spaceRef.current = false;
+    }
+
+    async function exitAnnotateMode(force) {
+        // 有未保存修改时自动保存，不再弹确认框
+        if (dirty) {
+            if (force) {
+                // 强制退出：放弃修改
+                setDirty(false);
+            } else {
+                await saveAnnotations();
+            }
+        }
+        // 清除待自动保存的 timer
+        if (autoSaveTimerRef.current) { clearTimeout(autoSaveTimerRef.current); autoSaveTimerRef.current = null; }
+        setAnnotateMode(false);
+        keepAnnotateModeRef.current = false;
+        setSelectedAnnIdx(null);
+        setSelectedAnnIdxSet(new Set());
+        setDrawingBox(null);
+        setSaveStatus('idle');
+    }
+
+    async function saveAnnotations() {
+        setSaveStatus('saving');
+        try {
+            const res = await fetch('/api/save_annotations', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    dataset_id: datasetId,
+                    images: [{
+                        image_id: currentImage.image_id,
+                        annotations: localAnns.map(a => ({
+                            category_id: a.category_id,
+                            category: a.category,
+                            bbox: a.bbox,
+                            area: a.bbox ? a.bbox[2] * a.bbox[3] : 0,
+                            iscrowd: a.iscrowd || 0,
+                        }))
+                    }]
+                })
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || '保存失败');
+            setSaveStatus('saved');
+            setDirty(false);
+            // 同步回父组件 images 状态
+            if (onAnnotationsSaved) onAnnotationsSaved(currentImage.image_id, localAnns);
+            // 更新 currentImage.annotations，确保退出标注模式后查看模式能显示最新标注
+            const savedAnns = localAnns.map(a => ({ ...a, bbox: [...(a.bbox || [])] }));
+            setCurrentImage(prev => ({ ...prev, annotations: savedAnns }));
+            setTimeout(() => setSaveStatus('idle'), 2000);
+        } catch (e) {
+            setSaveStatus('error');
+            alert('保存失败: ' + e.message);
+            setTimeout(() => setSaveStatus('idle'), 3000);
+        }
+    }
+
+    // 画框后延迟自动保存（800ms 防抖）
+    function scheduleAutoSave() {
+        if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = setTimeout(async () => {
+            autoSaveTimerRef.current = null;
+            const imgId = currentImageRef.current?.image_id;
+            const anns = localAnnsRef.current;
+            if (!imgId || !dirtyRef.current) return;
+            try {
+                const res = await fetch('/api/save_annotations', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        dataset_id: datasetId,
+                        images: [{ image_id: imgId, annotations: anns.map(a => ({ category_id: a.category_id, category: a.category, bbox: a.bbox, area: a.bbox ? a.bbox[2] * a.bbox[3] : 0, iscrowd: a.iscrowd || 0 })) }]
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    setDirty(false);
+                    dirtyRef.current = false;
+                    if (onAnnotationsSaved) onAnnotationsSaved(imgId, anns);
+                    setCurrentImage(prev => ({ ...prev, annotations: anns.map(a => ({ ...a, bbox: [...(a.bbox || [])] })) }));
+                    setSaveStatus('saved');
+                    setTimeout(() => setSaveStatus('idle'), 1200);
+                }
+            } catch (e) { console.warn('scheduleAutoSave:', e); }
+        }, 800);
+    }
+
+    // ---- 标注模式鼠标事件处理 ----
+    // editCanvas 上的 mousedown
+    const handleEditMouseDown = useCallback((e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        // 空格+拖拽：临时平移模式
+        if (spaceRef.current) {
+            const { panX: px0, panY: py0 } = zoomPanRef.current;
+            dragStartRef.current = { clientX: e.clientX, clientY: e.clientY, panX: px0, panY: py0 };
+            return;
+        }
+
+        const { x: imgX, y: imgY } = clientToImage(e.clientX, e.clientY);
+
+        if (annoToolRef.current === 'select') {
+            // 先测试选中框的控制点
+            if (selectedAnnIdx !== null && localAnns[selectedAnnIdx]) {
+                const handleId = hitTestHandles(localAnns[selectedAnnIdx].bbox, e.clientX, e.clientY);
+                if (handleId) {
+                    undoStack.current = [...undoStack.current, localAnns.map(a => ({ ...a, bbox: [...a.bbox] }))];
+                    redoStack.current = [];
+                    annoEditRef.current = { imgX0: imgX, imgY0: imgY, origBbox: [...localAnns[selectedAnnIdx].bbox], annIdx: selectedAnnIdx };
+                    setDragOp('resize-' + handleId);
+                    return;
+                }
+            }
+            // 测试是否点击了某个框内部（从后往前）
+            let hit = -1;
+            for (let i = localAnns.length - 1; i >= 0; i--) {
+                if (localAnns[i].bbox && hitTestBox(localAnns[i].bbox, imgX, imgY)) { hit = i; break; }
+            }
+            if (hit >= 0) {
+                if (e.ctrlKey || e.metaKey) {
+                    // B2: Ctrl+点击 → 多选切换
+                    setSelectedAnnIdxSet(prev => {
+                        const next = new Set(prev);
+                        if (next.has(hit)) next.delete(hit); else next.add(hit);
+                        return next;
+                    });
+                    setSelectedAnnIdx(hit);
+                } else {
+                    // 普通点击 → 单选（清空多选集）
+                    setSelectedAnnIdx(hit);
+                    setSelectedAnnIdxSet(new Set());
+                    undoStack.current = [...undoStack.current, localAnns.map(a => ({ ...a, bbox: [...a.bbox] }))];
+                    redoStack.current = [];
+                    annoEditRef.current = { imgX0: imgX, imgY0: imgY, origBbox: [...localAnns[hit].bbox], annIdx: hit };
+                    setDragOp('move');
+                }
+            } else {
+                // 点击空白 → 开始框选
+                setSelectedAnnIdx(null);
+                setSelectedAnnIdxSet(new Set());
+                setSelRect({ x0: imgX, y0: imgY, x1: imgX, y1: imgY });
+            }
+        } else {
+            // draw 模式：开始画框
+            setDrawingBox({ x0: imgX, y0: imgY, x1: imgX, y1: imgY });
+        }
+    }, [selectedAnnIdx, localAnns, zoom]); // eslint-disable-line
+
+    // 在 window 上注册 mousemove / mouseup（标注模式）
+    useEffect(() => {
+        if (!annotateMode) return;
+        const imgW = currentImage.width || 1e6;
+        const imgH = currentImage.height || 1e6;
+
+        const onMove = (e) => {
+            // 空格平移：由 dragStartRef 驱动，不做标注操作
+            if (dragStartRef.current && spaceRef.current) return;
+
+            const { x: imgX, y: imgY } = clientToImage(e.clientX, e.clientY);
+
+            if (drawingBox) {
+                let cx = Math.max(0, Math.min(imgW, imgX));
+                let cy = Math.max(0, Math.min(imgH, imgY));
+                // B5: 贴边吸附（画框时）
+                if (snapEnabledRef.current) {
+                    const xCands = [0, imgW, ...localAnnsRef.current.flatMap(a => a.bbox ? [a.bbox[0], a.bbox[0]+a.bbox[2]] : [])];
+                    const yCands = [0, imgH, ...localAnnsRef.current.flatMap(a => a.bbox ? [a.bbox[1], a.bbox[1]+a.bbox[3]] : [])];
+                    cx = snapCoord(cx, xCands);
+                    cy = snapCoord(cy, yCands);
+                }
+                // Shift 锁正方形：取较大的边长，保持宽高相等
+                if (e.shiftKey) {
+                    const dx = cx - drawingBox.x0, dy = cy - drawingBox.y0;
+                    const side = Math.max(Math.abs(dx), Math.abs(dy));
+                    cx = drawingBox.x0 + (dx >= 0 ? side : -side);
+                    cy = drawingBox.y0 + (dy >= 0 ? side : -side);
+                    cx = Math.max(0, Math.min(imgW, cx));
+                    cy = Math.max(0, Math.min(imgH, cy));
+                }
+                setDrawingBox(prev => prev ? { ...prev, x1: cx, y1: cy } : null);
+                return;
+            }
+            // B2: 更新框选矩形
+            if (selRect) {
+                setSelRect(prev => prev ? { ...prev, x1: imgX, y1: imgY } : null);
+                return;
+            }
+
+            // 没有拖拽操作时：更新 cursor（hover 在控制点上显示方向箭头）
+            if (!dragOp && annoToolRef.current === 'select') {
+                let cursor = 'default';
+                for (let i = localAnnsRef.current.length - 1; i >= 0; i--) {
+                    const ann = localAnnsRef.current[i];
+                    if (!ann.bbox) continue;
+                    if (i === selectedAnnIdx) {
+                        const hid = hitTestHandles(ann.bbox, e.clientX, e.clientY);
+                        if (hid) { cursor = HANDLE_CURSORS[hid] || 'nw-resize'; break; }
+                    }
+                    if (hitTestBox(ann.bbox, imgX, imgY)) { cursor = 'move'; break; }
+                }
+                setEditCursor(cursor);
+            }
+
+            if (dragOp && annoEditRef.current) {
+                const { imgX0, imgY0, origBbox, annIdx } = annoEditRef.current;
+                const dx = imgX - imgX0, dy = imgY - imgY0;
+                let [bx, by, bw, bh] = origBbox;
+                if (dragOp === 'move') {
+                    bx += dx; by += dy;
+                } else if (dragOp === 'resize-nw') { bx += dx; by += dy; bw -= dx; bh -= dy; }
+                else if (dragOp === 'resize-n')  { by += dy; bh -= dy; }
+                else if (dragOp === 'resize-ne') { by += dy; bw += dx; bh -= dy; }
+                else if (dragOp === 'resize-e')  { bw += dx; }
+                else if (dragOp === 'resize-se') { bw += dx; bh += dy; }
+                else if (dragOp === 'resize-s')  { bh += dy; }
+                else if (dragOp === 'resize-sw') { bx += dx; bw -= dx; bh += dy; }
+                else if (dragOp === 'resize-w')  { bx += dx; bw -= dx; }
+                // 最小尺寸
+                if (bw < 1) { if (dragOp.includes('w')) bx = bx + bw - 1; bw = 1; }
+                if (bh < 1) { if (dragOp.includes('n')) by = by + bh - 1; bh = 1; }
+                // ★ clamp 到图片边界
+                bx = Math.max(0, Math.min(imgW - bw, bx));
+                by = Math.max(0, Math.min(imgH - bh, by));
+                bw = Math.min(bw, imgW - bx);
+                bh = Math.min(bh, imgH - by);
+                setLocalAnns(prev => {
+                    const next = prev.map(a => ({ ...a, bbox: [...a.bbox] }));
+                    next[annIdx].bbox = [bx, by, bw, bh];
+                    return next;
+                });
+            }
+        };
+
+        const onUp = () => {
+            if (drawingBox) {
+                const { x0, y0, x1, y1 } = drawingBox;
+                const bw = Math.abs(x1 - x0), bh = Math.abs(y1 - y0);
+                setDrawingBox(null);
+                if (bw < 5 || bh < 5) return;
+                const newBbox = [
+                    Math.round(Math.max(0, Math.min(x0, x1))),
+                    Math.round(Math.max(0, Math.min(y0, y1))),
+                    Math.round(Math.min(bw, imgW)),
+                    Math.round(Math.min(bh, imgH)),
+                ];
+                // ★ 快速标注：有上次类别则直接使用，否则弹窗
+                if (quickMode && lastCategoryRef.current) {
+                    const cat = lastCategoryRef.current;
+                    const snap = localAnnsRef.current.map(a => ({ ...a, bbox: [...a.bbox] }));
+                    undoStack.current = [...undoStack.current, snap];
+                    redoStack.current = [];
+                    const newAnn = { category: cat, bbox: newBbox, area: newBbox[2] * newBbox[3], iscrowd: 0 };
+                    setLocalAnns(prev => [...prev, newAnn]);
+                    setSelectedAnnIdx(localAnnsRef.current.length);
+                    setDirty(true);
+                    scheduleAutoSave(); // 画框后自动保存
+                } else {
+                    setCategoryPickerBbox(newBbox);
+                }
+                return;
+            }
+            if (dragOp) {
+                setDirty(true);
+                setDragOp(null);
+                annoEditRef.current = null;
+            }
+            // B2: 完成框选 → 将矩形内的框加入多选集
+            if (selRect) {
+                const sx0 = Math.min(selRect.x0, selRect.x1), sx1 = Math.max(selRect.x0, selRect.x1);
+                const sy0 = Math.min(selRect.y0, selRect.y1), sy1 = Math.max(selRect.y0, selRect.y1);
+                if (sx1 - sx0 > 4 && sy1 - sy0 > 4) {
+                    const hit = new Set();
+                    localAnnsRef.current.forEach((a, i) => {
+                        if (!a.bbox) return;
+                        const [bx, by, bw, bh] = a.bbox;
+                        // 框内任意部分重叠即选中
+                        if (bx < sx1 && bx+bw > sx0 && by < sy1 && by+bh > sy0) hit.add(i);
+                    });
+                    if (hit.size > 0) setSelectedAnnIdxSet(hit);
+                }
+                setSelRect(null);
+            }
+        };
+
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+        return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+    }, [annotateMode, drawingBox, dragOp, selectedAnnIdx, quickMode, selRect, currentImage.width, currentImage.height]); // eslint-disable-line
+
+    // 键盘快捷键（标注模式专属 + 通用）
     const navigate = (dir) => {
         if (onUpdateNote && noteInput !== currentNote) onUpdateNote(currentImage.image_id, noteInput);
         const newIdx = imageIdx + dir;
-        if (newIdx >= 0 && newIdx < images.length) {
+        if (newIdx < 0 || newIdx >= images.length) return;
+        // 在切图前捕获当前图的 ID 和标注，确保保存正确的图
+        if (annotateModeRef.current && dirtyRef.current) {
+            pendingSaveRef.current = {
+                imageId: currentImage.image_id,
+                anns: localAnnsRef.current.map(a => ({ ...a, bbox: [...(a.bbox || [])] })),
+            };
+        }
+        // 标注模式导航后保持标注模式
+        if (annotateModeRef.current) keepAnnotateModeRef.current = true;
             setCurrentImage(images[newIdx]);
             setHiddenAnns(new Set());
             onNavigate(images[newIdx]);
-        }
     };
 
     const toggleAnn = (idx) => {
@@ -3016,13 +4844,28 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
 
     const handleCategoryChange = (e) => {
         const cat = e.target.value;
-        const next = [cat, ...currentCategories.filter(c => c !== cat)];
+        const unclassified = catList[0] || '未分类';
+        if (multiSelectCat && cat !== unclassified) {
+            // 多选模式且非"未分类"：提到首位，同时去掉"未分类"
+            const next = [cat, ...currentCategories.filter(c => c !== cat && c !== unclassified)];
         if (onUpdateCategories) onUpdateCategories(currentImage.image_id, next); else if (onUpdateCategory) onUpdateCategory(currentImage.image_id, cat);
+        } else {
+            // 单选模式，或选了"未分类"（互斥，清空其它）：只保留该分类
+            if (onUpdateCategories) onUpdateCategories(currentImage.image_id, [cat]); else if (onUpdateCategory) onUpdateCategory(currentImage.image_id, cat);
+        }
     };
     const toggleCategory = (cat) => {
+        // 仅多选模式下使用；"未分类"与其它分类互斥
+        const unclassified = catList[0] || '未分类';
         const has = currentCategories.includes(cat);
-        const next = has ? currentCategories.filter(c => c !== cat) : [...currentCategories, cat];
-        if (next.length === 0) next.push(catList[0] || '未分类');
+        // 去掉"未分类"再操作（选了具体分类就不应留"未分类"）
+        let next = currentCategories.filter(c => c !== unclassified);
+        if (has) {
+            next = next.filter(c => c !== cat);
+        } else {
+            next = [...next, cat];
+        }
+        if (next.length === 0) next = [unclassified]; // 全取消时回退"未分类"
         if (onUpdateCategories) onUpdateCategories(currentImage.image_id, next);
     };
 
@@ -3031,8 +4874,101 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     };
 
     useEffect(() => {
-        const handleKey = (e) => {
+        const handleKeyDown = (e) => {
             const inInput = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+
+            // 标注模式快捷键
+            if (annotateModeRef.current) {
+                // 空格：临时切换平移模式
+                if (e.key === ' ' && !inInput) {
+                    e.preventDefault();
+                    spaceRef.current = true;
+                    setEditCursor('grab');
+                    return;
+                }
+                if (e.key === 'Escape') { setSelectedAnnIdx(null); setSelectedAnnIdxSet(new Set()); setDrawingBox(null); setSelRect(null); return; }
+                if ((e.key === 'Delete' || e.key === 'Backspace') && !inInput) {
+                    e.preventDefault();
+                    const toDelete = selectedAnnIdxSet.size > 0 ? selectedAnnIdxSet : (selectedAnnIdx !== null ? new Set([selectedAnnIdx]) : new Set());
+                    if (toDelete.size > 0) {
+                        const next = localAnnsRef.current.filter((_, i) => !toDelete.has(i));
+                        commitChange(next);
+                        setSelectedAnnIdx(null);
+                        setSelectedAnnIdxSet(new Set());
+                    }
+                    return;
+                }
+                if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+                if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); return; }
+                if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveAnnotations(); return; }
+                // B1: 复制粘贴
+                if ((e.ctrlKey || e.metaKey) && e.key === 'c' && !inInput) {
+                    e.preventDefault();
+                    if (selectedAnnIdx !== null && localAnns[selectedAnnIdx]) {
+                        copiedAnnRef.current = { ...localAnns[selectedAnnIdx], bbox: [...localAnns[selectedAnnIdx].bbox] };
+                    }
+                    return;
+                }
+                if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !inInput) {
+                    e.preventDefault();
+                    const src = copiedAnnRef.current;
+                    if (src) {
+                        const newBbox = [src.bbox[0]+10, src.bbox[1]+10, src.bbox[2], src.bbox[3]];
+                        const newAnn = { ...src, bbox: newBbox };
+                        commitChange([...localAnns, newAnn]);
+                        setSelectedAnnIdx(localAnns.length);
+                    }
+                    return;
+                }
+                // B9: 帮助面板
+                if (!inInput && e.key === '?') { setShowHelp(prev => !prev); return; }
+                if (!inInput && e.key.toLowerCase() === 'v') { setAnnoTool('select'); setEditCursor('default'); return; }
+                if (!inInput && e.key.toLowerCase() === 'b') { setAnnoTool('draw'); setEditCursor('crosshair'); return; }
+                if (!inInput && e.key.toLowerCase() === 'q') { setQuickMode(prev => !prev); return; }
+                // 数字键1-9：有选中框时切换该框类别，否则切换图片主分类
+                if (!inInput && e.key >= '1' && e.key <= '9') {
+                    const catIdx = parseInt(e.key) - 1;
+                    if (selectedAnnIdx !== null && categories.length > 0 && categories[catIdx]) {
+                        e.preventDefault();
+                        const newCat = categories[catIdx];
+                        lastCategoryRef.current = newCat;
+                        commitChange(localAnnsRef.current.map((a, i) => i === selectedAnnIdx ? { ...a, category: newCat } : a));
+                        return;
+                    }
+                }
+                // 方向键微调选中框（1px 或 Shift+10px）
+                // 无选中框时：左/右方向键切换图片（会自动保存）
+                if (!inInput && selectedAnnIdx === null && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+                    e.preventDefault();
+                    navigate(e.key === 'ArrowLeft' ? -1 : 1);
+                    return;
+                }
+                if (!inInput && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key) && selectedAnnIdx !== null) {
+                    e.preventDefault();
+                    const step = e.shiftKey ? 10 : 1;
+                    const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+                    const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+                    setLocalAnns(prev => {
+                        const cur = prev[selectedAnnIdx];
+                        if (!cur || !cur.bbox) return prev;
+                        if (!e.repeat) {
+                            undoStack.current = [...undoStack.current, prev.map(a=>({...a,bbox:[...a.bbox]}))];
+                            redoStack.current = [];
+                        }
+                        const imgW = currentImage.width || 1e6;
+                        const imgH = currentImage.height || 1e6;
+                        const [bx, by, bw, bh] = cur.bbox;
+                        const nx = Math.max(0, Math.min(imgW - bw, bx + dx));
+                        const ny = Math.max(0, Math.min(imgH - bh, by + dy));
+                        const next = prev.map((a,i) => i === selectedAnnIdx ? {...a, bbox:[nx,ny,bw,bh]} : a);
+                        setDirty(true);
+                        if (!e.repeat) scheduleAutoSave(); // 松手后保存（repeat时防抖已处理）
+                        return next;
+                    });
+                    return;
+                }
+                return; // 标注模式不响应其他键
+            }
 
             if (e.key === 'Escape') {
                 if (onUpdateNote && noteInput !== currentNote) onUpdateNote(currentImage.image_id, noteInput);
@@ -3046,6 +4982,23 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
             }
             if (inInput) return;
 
+            if (e.key === '?') { setShowHelp(prev => !prev); return; }
+            // C4: 全屏
+            if (e.key.toLowerCase() === 'f') { e.preventDefault(); toggleFullscreen(); return; }
+            // C8: 快捷缩放 0=适应窗口
+            if (e.key === '0') { e.preventDefault(); setZoom(fitZoom()); setPanX(0); setPanY(0); return; }
+            // C2: Tab 键循环切换高亮框
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const anns = currentImage.annotations.filter((ann, i) => ann.bbox && !hiddenAnns.has(i) && !hiddenCats.has(ann.category) && passesConfThreshold(ann, confThreshold));
+                if (!anns.length) return;
+                const visIdxs = currentImage.annotations.map((ann, i) => ({ ann, i })).filter(({ ann, i }) => ann.bbox && !hiddenAnns.has(i) && !hiddenCats.has(ann.category) && passesConfThreshold(ann, confThreshold)).map(({ i }) => i);
+                const curPos = hoveredAnnIdx !== null ? visIdxs.indexOf(hoveredAnnIdx) : -1;
+                const nextPos = e.shiftKey ? (curPos - 1 + visIdxs.length) % visIdxs.length : (curPos + 1) % visIdxs.length;
+                setHoveredAnnIdx(visIdxs[nextPos]);
+                return;
+            }
+            if (e.key === 'Escape') { setLockedAnn(null); setShowHelp(false); }
             if (e.key === 'ArrowLeft' || e.key === 'a') navigate(-1);
             else if (e.key === 'ArrowRight' || e.key === 'd') navigate(1);
             else if (e.key.toLowerCase() === 'n') {
@@ -3056,25 +5009,39 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                 if (catList[idx]) {
                     e.preventDefault();
                     const cat = catList[idx];
-                    if (onUpdateCategories) onUpdateCategories(currentImage.image_id, [cat, ...currentCategories.filter(c => c !== cat)]);
+                    const unclassified = catList[0] || '未分类';
+                    let next;
+                    if (multiSelectCat && cat !== unclassified) {
+                        // 多选且非"未分类"：提到首位并去掉"未分类"
+                        next = [cat, ...currentCategories.filter(c => c !== cat && c !== unclassified)];
+                    } else {
+                        // 单选或选了"未分类"：清空其它
+                        next = [cat];
+                    }
+                    if (onUpdateCategories) onUpdateCategories(currentImage.image_id, next);
                     else if (onUpdateCategory) onUpdateCategory(currentImage.image_id, cat);
                 }
             }
         };
-        window.addEventListener('keydown', handleKey);
-        return () => window.removeEventListener('keydown', handleKey);
-    // images 必须参与依赖：否则筛选后列表变短但 imageIdx/当前图 id 未变时，键盘仍沿用旧的「全量」images 闭包
-    }, [imageIdx, currentImage.image_id, noteInput, currentNote, catList, currentCategories, onUpdateCategories, onUpdateCategory, images]);
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [imageIdx, currentImage.image_id, noteInput, currentNote, catList, currentCategories, onUpdateCategories, onUpdateCategory, images, selectedAnnIdx, localAnns, confThreshold, hiddenAnns, hiddenCats, hoveredAnnIdx]); // eslint-disable-line
 
-    // 跟踪 Ctrl/Cmd 按下状态（部分浏览器/系统在 wheel 事件中不设置 ctrlKey/metaKey）
+    // 跟踪 Ctrl/Cmd 和 Space 按键松开
     useEffect(() => {
         const onKeyDown = (e) => {
             if (e.key === 'Control' || e.key === 'Meta') modifierKeyRef.current = true;
         };
         const onKeyUp = (e) => {
             if (e.key === 'Control' || e.key === 'Meta') modifierKeyRef.current = false;
+            if (e.key === ' ') {
+                spaceRef.current = false;
+                dragStartRef.current = null; // 释放空格时终止平移
+                // 恢复工具对应的光标
+                setEditCursor(annoToolRef.current === 'draw' ? 'crosshair' : 'default');
+            }
         };
-        const onBlur = () => { modifierKeyRef.current = false; };
+        const onBlur = () => { modifierKeyRef.current = false; spaceRef.current = false; };
         window.addEventListener('keydown', onKeyDown);
         window.addEventListener('keyup', onKeyUp);
         window.addEventListener('blur', onBlur);
@@ -3089,8 +5056,8 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     useEffect(() => {
         const el = containerRef.current;
         if (!el) return;
-        const zoomMin = viewer.zoomMin ?? 0.02;
-        const zoomMax = viewer.zoomMax ?? 100;
+        const zoomMin = viewer.zoomMin ?? 0.01;
+        const zoomMax = viewer.zoomMax ?? 9999;
         const factorOut = viewer.wheelZoomFactorOut ?? 0.9;
         const factorIn = viewer.wheelZoomFactorIn ?? 1.1;
         const noModifier = viewer.wheelZoomWithoutModifier === true;
@@ -3140,12 +5107,60 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         return () => el.removeEventListener('wheel', onWheel, { capture: true });
     }, [viewer.zoomMin, viewer.zoomMax, viewer.wheelZoomFactorOut, viewer.wheelZoomFactorIn, viewer.wheelZoomWithoutModifier]);
 
-    // 左键按下即开始拖动平移（无其他限制）
+    // 左键按下：标注模式下禁用平移（由 editCanvas 接管），查看模式下拖拽平移
     const handleMouseDown = (e) => {
-        if (e.button !== 0) return; // 仅响应左键
+        if (e.button !== 0) return;
+        if (annotateModeRef.current) return;
         e.preventDefault();
         e.stopPropagation();
         dragStartRef.current = { clientX: e.clientX, clientY: e.clientY, panX, panY };
+        // C1: 记录点击起点，用于 mouseup 时判断是否是点击（非拖拽）
+        clickStartRef.current = { clientX: e.clientX, clientY: e.clientY };
+    };
+
+    // C1: 查看模式点击检测（mouseup 时比较位移）
+    const handleViewClick = (e) => {
+        if (annotateModeRef.current) return;
+        const cs = clickStartRef.current;
+        if (!cs) return;
+        const dist = Math.hypot(e.clientX - cs.clientX, e.clientY - cs.clientY);
+        if (dist > 6) return; // 拖拽，不是点击
+        clickStartRef.current = null;
+        const { x: imgX, y: imgY } = viewClientToImage(e.clientX, e.clientY);
+        // 检测命中 GT 框（从后往前）
+        const anns = currentImage.annotations;
+        for (let i = anns.length - 1; i >= 0; i--) {
+            const ann = anns[i];
+            if (!ann.bbox || hiddenAnns.has(i) || hiddenCats.has(ann.category)) continue;
+            if (!passesConfThreshold(ann, confThreshold)) continue;
+            const [x, y, bw, bh] = ann.bbox;
+            if (imgX >= x && imgX <= x + bw && imgY >= y && imgY <= y + bh) {
+                if (lockedAnn && lockedAnn.type === 'gt' && lockedAnn.idx === i) {
+                    setLockedAnn(null); // 再次点击同一框 → 解锁
+                } else {
+                    setLockedAnn({ type: 'gt', idx: i, ann, sx: e.clientX, sy: e.clientY });
+                }
+                return;
+            }
+        }
+        // 检测命中预测框
+        const predAnns = currentImage.pred_annotations || [];
+        for (let i = predAnns.length - 1; i >= 0; i--) {
+            const ann = predAnns[i];
+            if (!ann.bbox || hiddenPredAnns.has(i) || hiddenCats.has(ann.category)) continue;
+            if (visiblePredModels && !visiblePredModels.has(ann._pred_source)) continue;
+            if (!passesConfThreshold(ann, confThreshold)) continue;
+            const [x, y, bw, bh] = ann.bbox;
+            if (imgX >= x && imgX <= x + bw && imgY >= y && imgY <= y + bh) {
+                if (lockedAnn && lockedAnn.type === 'pred' && lockedAnn.idx === i) {
+                    setLockedAnn(null);
+                } else {
+                    setLockedAnn({ type: 'pred', idx: i, ann, sx: e.clientX, sy: e.clientY });
+                }
+                return;
+            }
+        }
+        setLockedAnn(null);
     };
 
     useEffect(() => {
@@ -3156,8 +5171,9 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
             setPanX(px0 + e.clientX - x0);
             setPanY(py0 + e.clientY - y0);
         };
-        const handleMouseUp = () => {
+        const handleMouseUp = (e) => {
             dragStartRef.current = null;
+            handleViewClick(e);
         };
         window.addEventListener('mousemove', handleMouseMove, { passive: false });
         window.addEventListener('mouseup', handleMouseUp);
@@ -3165,75 +5181,553 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
         };
+    }, [lockedAnn, currentImage, hiddenAnns, hiddenCats, hiddenPredAnns, visiblePredModels, confThreshold]); // eslint-disable-line
+
+    // C4: 全屏状态同步
+    useEffect(() => {
+        const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+        document.addEventListener('fullscreenchange', onChange);
+        return () => document.removeEventListener('fullscreenchange', onChange);
     }, []);
 
     return (
-        <div className="viewer-modal">
+        <div className="viewer-modal" ref={viewerModalRef}>
             <div className="viewer-header">
                 <div className="viewer-nav">
                     <button className="viewer-nav-btn" disabled={imageIdx <= 0} onClick={() => navigate(-1)}>‹ 上一张</button>
-                    <span className="viewer-info">{imageIdx + 1} / {images.length}</span>
+                    <span className="viewer-info" style={{display:'flex', alignItems:'center', gap:'4px'}}>
+                        <input
+                            type="number" min={1} max={images.length}
+                            defaultValue={imageIdx + 1}
+                            key={imageIdx}
+                            onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                    const n = parseInt(e.target.value, 10);
+                                    if (!isNaN(n) && n >= 1 && n <= images.length) {
+                                        const diff = n - 1 - imageIdx;
+                                        if (diff !== 0) navigate(diff);
+                                    }
+                                    e.target.blur();
+                                }
+                            }}
+                            className="viewer-mini-input" style={{width:'44px'}}
+                            title="输入序号后回车跳转"
+                        />
+                        <span style={{color:'var(--text-muted)', fontSize:'12px'}}>/ {images.length}</span>
+                    </span>
                     <button className="viewer-nav-btn" disabled={imageIdx >= images.length - 1} onClick={() => navigate(1)}>下一张 ›</button>
                 </div>
-                <div className="viewer-info">
-                    {currentImage.file_name.split('/').pop()}
+                <div className="viewer-info" style={{display:'flex', alignItems:'center', gap:'6px'}}>
+                    <span title={currentImage.file_name}>{currentImage.file_name.split('/').pop()}</span>
                     {currentImage.source_path != null && currentImage.source_path !== '' && (
                         <span className="viewer-dir" title={currentImage.source_path}> · 目录: {currentImage.source_path}</span>
                     )}
+                    <button
+                        title="复制文件名"
+                        onClick={() => navigator.clipboard.writeText(currentImage.file_name.split('/').pop()).then(() => {}).catch(()=>{})}
+                        className="vbtn-neutral" style={{borderRadius:'3px', fontSize:'11px', padding:'1px 5px', cursor:'pointer', flexShrink:0}}
+                    >⎘</button>
                 </div>
                 <div className="viewer-controls">
-                    <button type="button" className="viewer-nav-btn" onClick={() => setZoom(z => Math.min(viewer?.zoomMax ?? 100, z * 1.2))}>+</button>
-                    <span className="viewer-zoom-text">{Math.round(zoom * 100)}%</span>
-                    <button type="button" className="viewer-nav-btn" onClick={() => setZoom(z => Math.max(viewer?.zoomMin ?? 0.02, z / 1.2))}>−</button>
-                    <button type="button" className="viewer-nav-btn" onClick={() => { setZoom(fitZoom()); setPanX(0); setPanY(0); }}>适应窗口</button>
-                    <span style={{margin: '0 10px', color: '#888', fontSize: '12px'}}>{viewer.lineWidthLabel}</span>
-                    <select className="viewer-linewidth-select" value={lineWidth} onChange={(e) => setLineWidth(Number(e.target.value))} title="线宽 0.1～1">
-                        {lineWidthOpts.map(v => <option key={v} value={v}>{v}</option>)}
-                    </select>
-                    <button className="viewer-nav-btn" onClick={onClose} style={{background: '#dc3545', marginLeft: '20px'}}>✕</button>
+                    {!annotateMode ? (
+                        <>
+                            <div className="viewer-toolbar-group">
+                                <button type="button" className="viewer-nav-btn" onClick={() => setZoom(z => Math.min(viewer?.zoomMax ?? 9999, z * 1.2))}>+</button>
+                                <input
+                                    type="number" min={Math.round((viewer?.zoomMin??0.01)*100)} max={Math.round((viewer?.zoomMax??9999)*100)}
+                                    value={Math.round(zoom * 100)}
+                                    onChange={e => {
+                                        const v = parseInt(e.target.value, 10);
+                                        if (!isNaN(v) && v >= 1) {
+                                            const newZ = Math.max(viewer?.zoomMin??0.01, Math.min(viewer?.zoomMax??9999, v/100));
+                                            setZoom(newZ);
+                                            zoomPanRef.current = { ...zoomPanRef.current, zoom: newZ };
+                                        }
+                                    }}
+                                    onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                                    className="viewer-mini-input" style={{width:'52px'}}
+                                    title="输入缩放百分比后回车"
+                                />
+                                <span style={{fontSize:'11px', color:'var(--text-muted)'}}>%</span>
+                                <button type="button" className="viewer-nav-btn" onClick={() => setZoom(z => Math.max(viewer?.zoomMin ?? 0.01, z / 1.2))}>−</button>
+                                <button type="button" className="viewer-nav-btn" onClick={() => { setZoom(fitZoom()); setPanX(0); setPanY(0); }}>适应窗口</button>
+                            </div>
+                            <div className="viewer-toolbar-group">
+                                <span style={{color: 'var(--text-muted)', fontSize: 'var(--font-sm)'}}>线宽:</span>
+                                <select className="viewer-linewidth-select" value={lineWidth} onChange={(e) => setLineWidth(Number(e.target.value))} title="线宽 0.1～1">
+                                    {lineWidthOpts.map(v => <option key={v} value={v}>{v}</option>)}
+                                </select>
+                            </div>
+                            <div className="viewer-toolbar-group">
+                                <button
+                                    className={`viewer-nav-btn vbtn ${annFill ? 'vbtn-on-cyan' : 'vbtn-off'}`}
+                                    title={`标注填充 (${annFill ? '开' : '关'})`}
+                                    onClick={() => setAnnFill(f => !f)}
+                                >▦</button>
+                                <button
+                                    className={`viewer-nav-btn vbtn ${showLabels ? 'vbtn-on-green' : 'vbtn-off'}`}
+                                    title={`类别标签 (${showLabels ? '开' : '关'})`}
+                                    onClick={() => setShowLabels(s => !s)}
+                                >Aa</button>
+                                <button
+                                    className={`viewer-nav-btn vbtn ${showBoxIndex ? 'vbtn-on-yellow' : 'vbtn-off'}`}
+                                    title={`序号 (${showBoxIndex ? '开' : '关'})`}
+                                    onClick={() => setShowBoxIndex(s => !s)}
+                                >#</button>
+                                <button
+                                    className={`viewer-nav-btn vbtn ${confOpacity ? 'vbtn-on-purple' : 'vbtn-off'}`}
+                                    title={`置信度透明 (${confOpacity ? '开' : '关'})`}
+                                    onClick={() => setConfOpacity(c => !c)}
+                                >∿</button>
+                            </div>
+                            <div className="viewer-toolbar-group">
+                                <button
+                                    className="viewer-nav-btn vbtn vbtn-info"
+                                    title="截图（含标注框信息）"
+                                    onClick={exportAnnotatedImage}
+                                >📷</button>
+                                <button
+                                    className={`viewer-nav-btn vbtn ${compareMode ? 'vbtn-on-blue' : 'vbtn-neutral'}`}
+                                    title="GT vs 预测对比 (C)"
+                                    onClick={() => setCompareMode(m => !m)}
+                                >⊞ 对比</button>
+                            </div>
+                            <div className="viewer-toolbar-group">
+                                <button
+                                    className="viewer-nav-btn vbtn vbtn-neutral"
+                                    title={`全屏 (F) ${isFullscreen ? '退出' : ''}`}
+                                    onClick={toggleFullscreen}
+                                >{isFullscreen ? '⊡' : '⊞'}</button>
+                                <button
+                                    className="viewer-nav-btn vbtn vbtn-neutral"
+                                    title="快捷键帮助 (?)"
+                                    onClick={() => setShowHelp(h => !h)}
+                                >?</button>
+                            </div>
+                            <button className="viewer-nav-btn vbtn vbtn-annotate" onClick={enterAnnotateMode} title="进入标注编辑模式 (双击图片)">✏️ 标注</button>
+                        </>
+                    ) : (
+                        // 标注模式工具栏
+                        <>
+                            <span style={{fontSize:'12px', color:'var(--warning)', fontWeight:'bold', marginRight:'2px'}}>✏️ 标注</span>
+                            <div className="viewer-toolbar-group">
+                                <button
+                                    className={`viewer-nav-btn vbtn ${annoTool === 'draw' ? 'vbtn-on-green' : 'vbtn-off'}`}
+                                    title="画框 (B)"
+                                    onClick={() => setAnnoTool('draw')}
+                                >⬛ 画框</button>
+                                <button
+                                    className={`viewer-nav-btn vbtn ${annoTool === 'select' ? 'vbtn-on-blue' : 'vbtn-off'}`}
+                                    title="选择/移动/调整 (V)"
+                                    onClick={() => setAnnoTool('select')}
+                                >⬡ 选择</button>
+                                <button
+                                    className={`viewer-nav-btn vbtn ${quickMode ? 'vbtn-on-lime' : 'vbtn-off'}`}
+                                    title={`快速模式${quickMode ? '开启' : '关闭'}: 画完框直接使用上次类别 (Q)`}
+                                    onClick={() => setQuickMode(q => !q)}
+                                >{quickMode ? '⚡快速' : '⚡'}</button>
+                            </div>
+                            <div className="viewer-toolbar-group">
+                                <button className="viewer-nav-btn" title="撤销 Ctrl+Z" onClick={undo} style={{fontSize:'15px', padding:'1px 6px'}}>↩</button>
+                                <button className="viewer-nav-btn" title="重做 Ctrl+Y" onClick={redo} style={{fontSize:'15px', padding:'1px 6px'}}>↪</button>
+                                <button
+                                    className="viewer-nav-btn"
+                                    style={{ background: saveStatus === 'saved' ? 'rgba(62,207,142,0.2)' : 'rgba(111,140,255,0.2)', color: saveStatus === 'error' ? 'var(--danger)' : saveStatus === 'saved' ? 'var(--success)' : 'var(--accent)', border: `1px solid ${saveStatus === 'error' ? 'var(--danger)' : saveStatus === 'saved' ? 'var(--success)' : 'var(--accent)'}`, minWidth: '70px' }}
+                                    onClick={saveAnnotations}
+                                    disabled={saveStatus === 'saving'}
+                                    title="保存 Ctrl+S"
+                                >
+                                    {saveStatus === 'saving' ? '保存中…' : saveStatus === 'saved' ? '✓ 已保存' : saveStatus === 'error' ? '✗ 失败' : `💾 保存${dirty ? ' *' : ''}`}
+                                </button>
+                            </div>
+                            <div className="viewer-toolbar-group">
+                                <button
+                                    className={`viewer-nav-btn vbtn ${annFill ? 'vbtn-on-cyan' : 'vbtn-off'}`}
+                                    title={`半透明填充 (${annFill ? '开' : '关'})`}
+                                    onClick={() => setAnnFill(f => !f)}
+                                >▦</button>
+                                <button
+                                    className={`viewer-nav-btn vbtn ${snapEnabled ? 'vbtn-on-purple' : 'vbtn-off'}`}
+                                    title={`贴边吸附 (${snapEnabled ? '开' : '关'})`}
+                                    onClick={() => setSnapEnabled(s => !s)}
+                                >⊕</button>
+                            </div>
+                            <div className="viewer-toolbar-group">
+                                <button
+                                    className="viewer-nav-btn vbtn vbtn-neutral"
+                                    title="复制全部标注到跨图剪贴板"
+                                    onClick={copyAnnotationsToClipboard}
+                                >⎘ 跨图</button>
+                                {crossImageClipboardRef.current && crossImageClipboardRef.current.length > 0 && (
+                                    <button
+                                        className="viewer-nav-btn vbtn vbtn-on-teal"
+                                        title={`粘贴跨图标注 (${crossImageClipboardRef.current.length} 个框)`}
+                                        onClick={pasteAnnotationsFromClipboard}
+                                    >⎘ 粘贴</button>
+                                )}
+                            </div>
+                            <div className="viewer-toolbar-group">
+                                <button
+                                    className="viewer-nav-btn vbtn vbtn-neutral"
+                                    title="快捷键帮助 (?)"
+                                    onClick={() => setShowHelp(h => !h)}
+                                >?</button>
+                                <button className="viewer-nav-btn btn-danger" style={{border:'none'}} title="退出标注模式" onClick={() => exitAnnotateMode(false)}>✕ 退出</button>
+                            </div>
+                        </>
+                    )}
+                    {!annotateMode && <button className="viewer-nav-btn btn-danger" onClick={onClose} style={{border:'none', marginLeft: '8px'}}>✕</button>}
                 </div>
             </div>
+            {/* 标注模式：缩放操作栏 */}
+            {annotateMode && (
+                <div style={{ display:'flex', alignItems:'center', gap:'6px', padding:'4px 12px', background:'var(--bg-soft)', borderBottom:'1px solid var(--border)', fontSize:'12px', color:'var(--text-muted)' }}>
+                    <span>缩放:</span>
+                    <button type="button" className="viewer-nav-btn" style={{padding:'2px 8px',fontSize:'13px'}} onClick={() => setZoom(z => Math.min(viewer?.zoomMax ?? 9999, z * 1.2))}>+</button>
+                    <span style={{color:'var(--text-secondary)'}}>{Math.round(zoom * 100)}%</span>
+                    <button type="button" className="viewer-nav-btn" style={{padding:'2px 8px',fontSize:'13px'}} onClick={() => setZoom(z => Math.max(viewer?.zoomMin ?? 0.01, z / 1.2))}>−</button>
+                    <button type="button" className="viewer-nav-btn" style={{padding:'2px 8px',fontSize:'13px'}} onClick={() => { setZoom(fitZoom()); setPanX(0); setPanY(0); }}>适应</button>
+                    <span style={{width:'1px', height:'14px', background:'var(--border)', margin:'0 8px'}}></span>
+                    <span style={{color:'var(--text-muted)', fontSize:'11px'}}>亮度</span>
+                    <input type="range" min="30" max="200" value={brightness} onChange={e=>setBrightness(Number(e.target.value))}
+                        style={{width:'70px', accentColor:'#ffaa00'}} title={`亮度 ${brightness}%`} />
+                    <span style={{color: brightness!==100?'#ffaa00':'var(--text-muted)', fontSize:'10px', minWidth:'30px'}}>{brightness}%</span>
+                    <span style={{color:'var(--text-muted)', fontSize:'11px'}}>对比度</span>
+                    <input type="range" min="30" max="300" value={contrast} onChange={e=>setContrast(Number(e.target.value))}
+                        style={{width:'70px', accentColor:'#7af'}} title={`对比度 ${contrast}%`} />
+                    <span style={{color: contrast!==100?'#7af':'var(--text-muted)', fontSize:'10px', minWidth:'30px'}}>{contrast}%</span>
+                    <button onClick={() => { setBrightness(100); setContrast(100); }}
+                        title="重置亮度和对比度"
+                        style={{fontSize:'10px', padding:'1px 5px', background: (brightness!==100||contrast!==100)?'rgba(255,200,0,0.1)':'transparent', border:`1px solid ${(brightness!==100||contrast!==100)?'var(--text-muted)':'var(--border)'}`, color:(brightness!==100||contrast!==100)?'var(--text-secondary)':'var(--text-muted)', borderRadius:'3px', cursor:'pointer'}}>↺</button>
+                    <span style={{marginLeft:'auto', color:'var(--text-secondary)'}}>{localAnns.length} 个框{selectedAnnIdxSet.size > 0 ? ` | 已多选 ${selectedAnnIdxSet.size}` : ''}</span>
+                </div>
+            )}
 
             <div className="viewer-body">
+                {/* C10: 对比模式 */}
+                {compareMode && !annotateMode ? (
+                    <CompareLayout 
+                        currentImage={currentImage} 
+                        imageUrl={imageUrl} 
+                        palette={palette} 
+                        lineWidth={lineWidth} 
+                        annFill={annFill} 
+                        hiddenCats={hiddenCats} 
+                        brightness={brightness} 
+                        contrast={contrast} 
+                        visiblePredModels={visiblePredModels} 
+                        confOpacity={confOpacity} 
+                        confThreshold={confThreshold} 
+                    />
+                ) : (
                 <div
                     className={`viewer-canvas-area ${(viewer.backgroundStyle || 'checkerboard') === 'checkerboard' ? 'viewer-bg-checkerboard' : 'viewer-bg-solid'}`}
                     ref={containerRef}
                     onMouseDown={handleMouseDown}
+                    onDoubleClick={() => { if (!annotateMode) enterAnnotateMode(); }}
+                    onContextMenu={!annotateMode ? (e) => {
+                        e.preventDefault();
+                        const wrapper = wrapperRef.current;
+                        if (!wrapper) return;
+                        const rect = wrapper.getBoundingClientRect();
+                        const imgX = (e.clientX - rect.left) / zoom, imgY = (e.clientY - rect.top) / zoom;
+                        const tol = Math.max(4, 8 / zoom);
+                        // 检测 GT 框
+                        const anns = currentImage.annotations;
+                        for (let i = anns.length - 1; i >= 0; i--) {
+                            const ann = anns[i];
+                            if (!ann.bbox || hiddenAnns.has(i) || hiddenCats.has(ann.category)) continue;
+                            if (!passesConfThreshold(ann, confThreshold)) continue;
+                            const [x, y, bw, bh] = ann.bbox;
+                            if (imgX >= x - tol && imgX <= x + bw + tol && imgY >= y - tol && imgY <= y + bh + tol) {
+                                setCtxMenu({ x: e.clientX, y: e.clientY, ann, type: 'gt', annIdx: i });
+                                return;
+                            }
+                        }
+                        // 检测预测框
+                        const predAnns = currentImage.pred_annotations || [];
+                        for (let i = predAnns.length - 1; i >= 0; i--) {
+                            const ann = predAnns[i];
+                            if (!ann.bbox || hiddenPredAnns.has(i) || hiddenCats.has(ann.category)) continue;
+                            if (visiblePredModels && !visiblePredModels.has(ann._pred_source)) continue;
+                            if (!passesConfThreshold(ann, confThreshold)) continue;
+                            const [x, y, bw, bh] = ann.bbox;
+                            if (imgX >= x - tol && imgX <= x + bw + tol && imgY >= y - tol && imgY <= y + bh + tol) {
+                                setCtxMenu({ x: e.clientX, y: e.clientY, ann, type: 'pred', annIdx: i });
+                                return;
+                            }
+                        }
+                        setCtxMenu(null);
+                    } : undefined}
+                    onMouseMove={(e) => {
+                        if (annotateMode) {
+                            if (crosshairXRef.current && crosshairYRef.current) {
+                                const rect = containerRef.current.getBoundingClientRect();
+                                crosshairXRef.current.style.top = (e.clientY - rect.top) + 'px';
+                                crosshairYRef.current.style.left = (e.clientX - rect.left) + 'px';
+                                crosshairXRef.current.style.display = 'block';
+                                crosshairYRef.current.style.display = 'block';
+                            }
+                        } else {
+                            if (crosshairXRef.current && crosshairYRef.current) {
+                                crosshairXRef.current.style.display = 'none';
+                                crosshairYRef.current.style.display = 'none';
+                            }
+                            // 查看模式：鼠标在框线上时高亮并显示 tooltip
+                            const wrapper = wrapperRef.current;
+                            if (!wrapper) return;
+                            const rect = wrapper.getBoundingClientRect();
+                            const imgX = (e.clientX - rect.left) / zoom, imgY = (e.clientY - rect.top) / zoom;
+                            const tol = Math.max(4, 6 / zoom); // 容差（图片像素）
+                            // 检测 GT 框线
+                            const anns = currentImage.annotations;
+                            for (let i = anns.length - 1; i >= 0; i--) {
+                                const ann = anns[i];
+                                if (!ann.bbox || hiddenAnns.has(i) || hiddenCats.has(ann.category)) continue;
+                                if (!passesConfThreshold(ann, confThreshold)) continue;
+                                const [x, y, bw, bh] = ann.bbox;
+                                const onBorder = imgX >= x - tol && imgX <= x + bw + tol && imgY >= y - tol && imgY <= y + bh + tol
+                                    && !(imgX > x + tol && imgX < x + bw - tol && imgY > y + tol && imgY < y + bh - tol);
+                                if (onBorder) { setHoveredAnnIdx(i); setHoveredPredAnnIdx(null); return; }
+                            }
+                            // 检测预测框线
+                            const predAnns = currentImage.pred_annotations || [];
+                            for (let i = predAnns.length - 1; i >= 0; i--) {
+                                const ann = predAnns[i];
+                                if (!ann.bbox || hiddenPredAnns.has(i) || hiddenCats.has(ann.category)) continue;
+                                if (visiblePredModels && !visiblePredModels.has(ann._pred_source)) continue;
+                                if (!passesConfThreshold(ann, confThreshold)) continue;
+                                const [x, y, bw, bh] = ann.bbox;
+                                const onBorder = imgX >= x - tol && imgX <= x + bw + tol && imgY >= y - tol && imgY <= y + bh + tol
+                                    && !(imgX > x + tol && imgX < x + bw - tol && imgY > y + tol && imgY < y + bh - tol);
+                                if (onBorder) { setHoveredPredAnnIdx(i); setHoveredAnnIdx(null); return; }
+                            }
+                            setHoveredAnnIdx(null);
+                            setHoveredPredAnnIdx(null);
+                        }
+                    }}
+                    onMouseLeave={() => {
+                        if (crosshairXRef.current && crosshairYRef.current) {
+                            crosshairXRef.current.style.display = 'none';
+                            crosshairYRef.current.style.display = 'none';
+                        }
+                        if (!annotateMode) {
+                            setHoveredAnnIdx(null);
+                            setHoveredPredAnnIdx(null);
+                        }
+                    }}
                     style={(viewer.backgroundStyle || 'checkerboard') === 'checkerboard'
                         ? { '--checkerboard-1': viewer.checkerboardColor1 || '#2d2d44', '--checkerboard-2': viewer.checkerboardColor2 || '#252548' }
                         : { background: viewer.backgroundColor || '#1a1a2e' }
                     }
                 >
+                    {/* 十字辅助线 (仅标注模式显示) */}
+                    <div ref={crosshairXRef} style={{ display: 'none', position: 'absolute', left: 0, right: 0, height: '1px', borderTop: '1px dashed rgba(255,255,255,0.7)', pointerEvents: 'none', zIndex: 100 }} />
+                    <div ref={crosshairYRef} style={{ display: 'none', position: 'absolute', top: 0, bottom: 0, width: '1px', borderLeft: '1px dashed rgba(255,255,255,0.7)', pointerEvents: 'none', zIndex: 100 }} />
+                    
                     <div className="viewer-image-wrapper" ref={wrapperRef} style={{ transform: `translate(${panX}px, ${panY}px)` }}>
-                        <img ref={imgRef} src={imageUrl} alt="" onLoad={handleImageLoad} draggable={false} />
+                        <img ref={imgRef} src={imageUrl} alt="" onLoad={handleImageLoad} draggable={false}
+                            style={brightness !== 100 || contrast !== 100 ? { filter: `brightness(${brightness}%) contrast(${contrast}%)` } : undefined} />
                         <canvas ref={canvasRef} className="viewer-canvas"></canvas>
+                        {/* 标注交互层 Canvas */}
+                        <canvas
+                            ref={editCanvasRef}
+                            className="viewer-canvas"
+                            style={{
+                                pointerEvents: annotateMode ? 'all' : 'none',
+                                cursor: annotateMode ? editCursor : 'none',
+                            }}
+                            onMouseDown={annotateMode ? handleEditMouseDown : undefined}
+                        ></canvas>
+                        {/* opt6: 右键菜单 */}
+                        {ctxMenu && !annotateMode && (() => {
+                            const { x, y, ann, type, annIdx } = ctxMenu;
+                            const containerRect = containerRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+                            const menuX = x - containerRect.left, menuY = y - containerRect.top;
+                            const infoLines = type === 'gt'
+                                ? [`GT · ${ann.category}`, `位置 [${Math.round(ann.bbox[0])}, ${Math.round(ann.bbox[1])}]`, `大小 ${Math.round(ann.bbox[2])}×${Math.round(ann.bbox[3])}`]
+                                : [`预测 · ${ann.category}`, ann.score != null ? `置信度 ${(ann.score*100).toFixed(1)}%` : null, `位置 [${Math.round(ann.bbox[0])}, ${Math.round(ann.bbox[1])}]`, `大小 ${Math.round(ann.bbox[2])}×${Math.round(ann.bbox[3])}`].filter(Boolean);
+                            return (
+                                <div
+                                    style={{ position:'absolute', left: menuX, top: menuY, zIndex: 9900, background:'var(--bg-surface)', border:'1px solid var(--border-strong)', borderRadius:'8px', boxShadow:'0 8px 28px rgba(0,0,0,0.55)', minWidth:'180px', fontSize:'12px', overflow:'hidden' }}
+                                    onMouseLeave={() => setCtxMenu(null)}
+                                >
+                                    <div style={{ padding:'6px 10px', background:'var(--bg-raised)', borderBottom:'1px solid var(--border)', color:'var(--text-muted)' }}>
+                                        {infoLines.map((l, i) => <div key={i}>{l}</div>)}
                     </div>
+                                    <div style={{ padding:'4px 0' }}>
+                                        <div className="ctx-menu-item" onClick={() => {
+                                            const bbox = ann.bbox;
+                                            const info = `${ann.category} [${bbox.map(v => Math.round(v)).join(', ')}]${ann.score != null ? ` conf=${(ann.score*100).toFixed(1)}%` : ''}`;
+                                            navigator.clipboard.writeText(info).catch(() => {});
+                                            setCtxMenu(null);
+                                        }}>📋 复制框信息</div>
+                                        <div className="ctx-menu-item" onClick={() => {
+                                            setHiddenCats(prev => { const n = new Set(prev); n.add(ann.category); return n; });
+                                            setCtxMenu(null);
+                                        }}>🚫 隐藏此类别</div>
+                                        {type === 'gt' && (
+                                            <div className="ctx-menu-item" onClick={() => {
+                                                centerOnAnnotation(ann.bbox);
+                                                setCtxMenu(null);
+                                            }}>🎯 居中到此框</div>
+                                        )}
+                                        <div className="ctx-menu-item" onClick={() => {
+                                            enterAnnotateMode();
+                                            setCtxMenu(null);
+                                        }}>✏ 进入标注模式</div>
                 </div>
+                                </div>
+                            );
+                        })()}
+                        {/* opt9: Undo/Redo toast */}
+                        {undoToast && (
+                            <div key={undoToast.id} style={{
+                                position:'absolute', bottom:'60px', left:'50%', transform:'translateX(-50%)',
+                                background:'rgba(0,0,0,0.75)', color:'#fff', fontSize:'12px',
+                                padding:'5px 14px', borderRadius:'16px', pointerEvents:'none',
+                                whiteSpace:'nowrap', zIndex:9000,
+                                animation:'fadeInOut 1.5s ease forwards'
+                            }}>{undoToast.msg}</div>
+                        )}
+                        {/* B8: 小地图 */}
+                        <canvas
+                            ref={minimapCanvasRef}
+                            style={{
+                                position:'absolute', bottom:'8px', right:'8px',
+                                border:'1px solid var(--border-strong)', borderRadius:'6px',
+                                opacity: 0.88, pointerEvents:'none',
+                                display: zoom > 1.5 ? 'block' : 'none',
+                                background:'var(--bg-raised)',
+                            }}
+                        ></canvas>
+                    </div>
+                    {/* 类别选择弹窗（画完框后弹出）— 在 wrapper 外，不受 pan/zoom transform 影响 */}
+                    {annotateMode && categoryPickerBbox && (
+                        <CategoryPicker
+                            categories={categories.length > 0 ? categories : ['目标']}
+                            lastCategory={lastCategoryRef.current}
+                            onConfirm={(cat) => {
+                                lastCategoryRef.current = cat;
+                                const newAnn = { category: cat, bbox: categoryPickerBbox, area: categoryPickerBbox[2] * categoryPickerBbox[3], iscrowd: 0 };
+                                commitChange([...localAnns, newAnn]);
+                                setSelectedAnnIdx(localAnns.length);
+                                setCategoryPickerBbox(null);
+                                scheduleAutoSave(); // 选完类别后自动保存
+                            }}
+                            onCancel={() => setCategoryPickerBbox(null)}
+                        />
+                    )}
+                    {/* C1: 锁定信息面板 */}
+                    {lockedAnn && !annotateMode && (() => {
+                        const { type, ann, sx, sy } = lockedAnn;
+                        const container = containerRef.current;
+                        const cr = container ? container.getBoundingClientRect() : { left:0, top:0, right:800, bottom:600 };
+                        const relX = sx - cr.left + 12, relY = sy - cr.top + 12;
+                        const lines = type === 'gt' ? [
+                            ann.category,
+                            `位置: [${Math.round(ann.bbox[0])}, ${Math.round(ann.bbox[1])}]`,
+                            `大小: ${Math.round(ann.bbox[2])} × ${Math.round(ann.bbox[3])}`,
+                            `面积: ${Math.round(ann.bbox[2] * ann.bbox[3]).toLocaleString()} px²`,
+                        ] : [
+                            `[预测] ${ann._pred_source || ''}`,
+                            ann.category,
+                            ann.score != null ? `置信度: ${(Number(ann.score) * 100).toFixed(1)}%` : null,
+                            `位置: [${Math.round(ann.bbox[0])}, ${Math.round(ann.bbox[1])}]`,
+                            `大小: ${Math.round(ann.bbox[2])} × ${Math.round(ann.bbox[3])}`,
+                            `面积: ${Math.round(ann.bbox[2] * ann.bbox[3]).toLocaleString()} px²`,
+                        ].filter(Boolean);
+                        const color = getCategoryColor(palette, ann.category);
+                        const panelW = 190;
+                        const left = relX + panelW > cr.right - cr.left ? relX - panelW - 24 : relX;
+                        const top = relY;
+                        return (
+                            <div style={{
+                                position:'absolute', left, top, zIndex:10, pointerEvents:'auto',
+                                background:'rgba(10,10,30,0.95)', border:`1px solid ${color}`,
+                                borderRadius:'7px', padding:'10px 13px', minWidth:'160px', maxWidth:`${panelW}px`,
+                                boxShadow:'0 4px 20px rgba(0,0,0,0.6)', backdropFilter:'blur(4px)',
+                            }}>
+                                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'6px'}}>
+                                    <span style={{fontSize:'11px', color: type === 'gt' ? '#5d5' : '#7af', fontWeight:'bold'}}>
+                                        {type === 'gt' ? '● GT' : '⋯ 预测'}
+                                    </span>
+                                    <button onClick={() => setLockedAnn(null)} style={{background:'none', border:'none', color:'var(--text-muted)', cursor:'pointer', fontSize:'14px', padding:'0 2px'}}>✕</button>
+                                </div>
+                                {lines.map((l, i) => (
+                                    <div key={i} style={{fontSize:'12px', color: i === 0 ? '#fff' : '#aaa', padding:'1px 0', fontWeight: i === 0 ? 'bold' : 'normal'}}>{l}</div>
+                                ))}
+                                <div style={{marginTop:'6px', fontSize:'10px', color:'var(--text-muted)'}}>再次点击框解锁</div>
+                            </div>
+                        );
+                    })()}
+                    {/* 双击提示（查看模式无标注时） */}
+                    {!annotateMode && !lockedAnn && (
+                        <div style={{position:'absolute', bottom:'8px', left:'50%', transform:'translateX(-50%)', fontSize:'11px', color:'var(--text-muted)', pointerEvents:'none', userSelect:'none'}}>
+                            双击图片进入标注模式 · Tab 切换框 · 0=适应窗口
+                        </div>
+                    )}
+                </div>
+                )}
 
                 <div className="viewer-sidebar">
+                    {!annotateMode ? (
+                        <>
                     <div className="viewer-sidebar-header">
                         <span>图片信息</span>
                     </div>
+                        {/* C5: 类别筛选 */}
+                        {(() => {
+                            const allCats = [...new Set([
+                                ...currentImage.annotations.map(a => a.category),
+                                ...(currentImage.pred_annotations || []).map(a => a.category)
+                            ].filter(Boolean))];
+                            if (allCats.length === 0) return null;
+                            return (
+                                <div style={{padding:'6px 10px', borderBottom:'1px solid var(--border)', background:'var(--bg-raised)'}}>
+                                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'4px'}}>
+                                        <span style={{fontSize:'11px', color:'var(--text-muted)'}}>类别显隐</span>
+                                        <div style={{display:'flex', gap:'4px'}}>
+                                            <button onClick={() => setHiddenCats(new Set())} className="vbtn-neutral" style={{fontSize:'10px',padding:'1px 5px',borderRadius:'3px',cursor:'pointer'}}>全显</button>
+                                            <button onClick={() => setHiddenCats(new Set(allCats))} className="vbtn-neutral" style={{fontSize:'10px',padding:'1px 5px',borderRadius:'3px',cursor:'pointer'}}>全隐</button>
+                                        </div>
+                                    </div>
+                                    <div style={{display:'flex', flexWrap:'wrap', gap:'4px'}}>
+                                        {allCats.map(cat => {
+                                            const hidden = hiddenCats.has(cat);
+                                            const color = getCategoryColor(palette, cat);
+                                            return (
+                                                <button key={cat} onClick={() => setHiddenCats(prev => { const n = new Set(prev); if (n.has(cat)) n.delete(cat); else n.add(cat); return n; })}
+                                                    style={{fontSize:'11px', padding:'2px 7px', borderRadius:'12px', cursor:'pointer', border:`1px solid ${hidden ? 'var(--border)' : color}`, background: hidden ? 'transparent' : color + '22', color: hidden ? 'var(--text-muted)' : color, textDecoration: hidden ? 'line-through' : 'none', transition:'all 0.15s'}}
+                                                >{cat}</button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            );
+                        })()}
                     <div className="viewer-sidebar-form">
-                        <label className="viewer-form-label">主分类 (1–9 快捷键)</label>
+                            <label className="viewer-form-label">{multiSelectCat ? '主分类 (1–9 快捷键)' : '图片分类 (1–9 快捷键)'}</label>
                         <select className="viewer-form-select" value={currentCategory} onChange={handleCategoryChange}>
                             {catList.map((cat, i) => (
                                 <option key={cat} value={cat}>{i < 9 ? `${i + 1}. ${cat}` : cat}</option>
                             ))}
                         </select>
+                            {multiSelectCat && (<>
                         <label className="viewer-form-label">也属于（多选）</label>
                         {currentCategory === (catList[0] || '未分类') ? (
-                            <div style={{ fontSize: '12px', color: '#888', marginBottom: '10px' }}>请先选择主分类后再设置多选</div>
+                            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '10px' }}>请先选择主分类后再设置多选</div>
                         ) : (
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
                                 {catList.filter(c => c !== currentCategory && c !== (catList[0] || '未分类')).map(cat => (
-                                    <label key={cat} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', cursor: 'pointer' }}>
+                                    <label key={cat} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--font-sm)', cursor: 'pointer' }}>
                                         <input type="checkbox" checked={currentCategories.includes(cat)} onChange={() => toggleCategory(cat)} />
                                         <span style={{ background: (config.imageCategoryColors || {})[cat] || '#666', padding: '2px 6px', borderRadius: '4px', color: '#fff' }}>{cat}</span>
                                     </label>
                                 ))}
                             </div>
                         )}
+                            </>)}
                         <label className="viewer-form-label">备注 (N 聚焦)</label>
                         <textarea
                             ref={noteInputRef}
@@ -3245,45 +5739,334 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                             rows={3}
                         />
                     </div>
+                        </>
+                    ) : (
+                        // 标注模式侧边栏
+                        <div className="viewer-sidebar-form" style={{paddingBottom:'4px'}}>
+                            <div style={{fontSize:'12px', color:'var(--text-muted)', padding:'6px 12px', borderBottom:'1px solid var(--border)'}}>
+                                <div>文件: {currentImage.file_name.split('/').pop()}</div>
+                                <div>尺寸: {currentImage.width} × {currentImage.height}</div>
+                                <div style={{marginTop:'3px'}}>
+                                    <span style={{color:'#52c41a'}}>GT {localAnns.length}</span>
+                                    {(currentImage.pred_annotations || []).length > 0 && (
+                                        <span style={{color:'var(--accent)', marginLeft:'8px'}}>预测 {(currentImage.pred_annotations || []).length}</span>
+                                    )}
+                                </div>
+                                <div style={{marginTop:'4px', color: dirty ? 'var(--warning)' : 'var(--text-muted)'}}>{dirty ? '● 有未保存修改' : '○ 已保存'}</div>
+                            </div>
+                        </div>
+                    )}
                     <div className="viewer-sidebar-header" style={{marginTop: '10px'}}>
-                        <span>标注列表</span>
-                        <span>{currentImage.annotations.length}</span>
+                        <span>{annotateMode ? '编辑中的标注' : '标注列表'}</span>
+                        <span>{annotateMode ? localAnns.length : (confThreshold > 0 && currentImage.annotations.some(a => a.score != null) ? `${currentImage.annotations.filter(a => passesConfThreshold(a, confThreshold)).length}/${currentImage.annotations.length}` : currentImage.annotations.length)}</span>
                     </div>
-                    <div style={{padding: '8px 12px', borderBottom: '1px solid #3d3d5c', fontSize: '11px', color: '#888'}}>
+                    {/* B6: 类别搜索 */}
+                    <div style={{padding:'5px 10px', borderBottom:'1px solid var(--border)'}}>
+                        <input
+                            type="text"
+                            placeholder="搜索类别…"
+                            value={annSearchText}
+                            onChange={e => setAnnSearchText(e.target.value)}
+                            className="viewer-mini-input" style={{width:'100%', boxSizing:'border-box', padding:'3px 7px', fontSize:'12px'}}
+                        />
+                    </div>
+                    <div style={{padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: 'var(--font-xs)', color: 'var(--text-muted)'}}>
+                        {!annotateMode && <>
                         <div>文件: {currentImage.file_name.split('/').pop()}</div>
                         <div>尺寸: {currentImage.width} × {currentImage.height}</div>
+                            <div style={{marginTop:'3px', display:'flex', gap:'10px', flexWrap:'wrap'}}>
+                                <span><span style={{color:'#52c41a', fontWeight:'bold'}}>
+                                    {confThreshold > 0 && currentImage.annotations.some(a => a.score != null)
+                                        ? `${currentImage.annotations.filter(a => passesConfThreshold(a, confThreshold)).length}/${currentImage.annotations.length}`
+                                        : currentImage.annotations.length}
+                                </span> GT 标注</span>
+                                {(currentImage.pred_annotations || []).length > 0 && (
+                                    <span><span style={{color:'var(--accent)', fontWeight:'bold'}}>{(currentImage.pred_annotations || []).length}</span> 预测框</span>
+                                )}
                     </div>
+                        </>}
+                    </div>
+                    {!annotateMode && (currentImage.annotations.some(a => a.score != null) || (currentImage.pred_annotations || []).some(a => a.score != null)) && (
+                        <div style={{padding: '6px 12px', background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '8px'}}>
+                            <span style={{fontSize: 'var(--font-xs)', color: 'var(--text-muted)', whiteSpace: 'nowrap'}} title="同时作用于带置信度的 GT 与预测框">置信度 ≥</span>
+                            <input
+                                type="range"
+                                min="0" max="1" step="0.05"
+                                value={confThreshold}
+                                onChange={e => setConfThreshold(Number(e.target.value))}
+                                style={{flex: 1, accentColor: 'var(--accent)'}}
+                            />
+                            <span style={{fontSize: 'var(--font-xs)', color: confThreshold > 0 ? 'var(--accent)' : 'var(--text-muted)', fontFamily: 'monospace', minWidth: '32px', textAlign: 'right'}}>
+                                {confThreshold > 0 ? (confThreshold * 100).toFixed(0) + '%' : 'off'}
+                            </span>
+                            {confThreshold > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={() => setConfThreshold(0)}
+                                    style={{background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 'var(--font-xs)', padding: '0 2px'}}
+                                    title="重置过滤"
+                                >✕</button>
+                            )}
+                        </div>
+                    )}
+                    {/* 选中框坐标精确输入面板 */}
+                    {annotateMode && selectedAnnIdx !== null && localAnns[selectedAnnIdx]?.bbox && (
+                        <div style={{padding:'8px 12px', borderBottom:'1px solid var(--border)', background:'var(--bg-raised)'}}>
+                            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'5px'}}>
+                            <span style={{fontSize:'11px', color:'var(--text-muted)'}}>精确坐标 (像素)</span>
+                            <span style={{fontSize:'10px', color: getCategoryColor(palette, localAnns[selectedAnnIdx]?.category), fontWeight:'bold'}}>{localAnns[selectedAnnIdx]?.category}</span>
+                        </div>
+                            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'5px'}}>
+                                {['X','Y','W','H'].map((field, fi) => {
+                                    const bbox = localAnns[selectedAnnIdx].bbox;
+                                    return (
+                                        <label key={field} style={{display:'flex', alignItems:'center', gap:'4px', fontSize:'12px'}}>
+                                            <span style={{color:'var(--text-secondary)', width:'16px', flexShrink:0}}>{field}:</span>
+                                            <input
+                                                type="number"
+                                                value={Math.round(bbox[fi])}
+                                                onFocus={() => {
+                                                    if (!bboxFocusedRef.current) {
+                                                        bboxFocusedRef.current = true;
+                                                        undoStack.current = [...undoStack.current, localAnns.map(a=>({...a,bbox:[...a.bbox]}))];
+                                                        redoStack.current = [];
+                                                    }
+                                                }}
+                                                onChange={e => {
+                                                    const n = parseFloat(e.target.value);
+                                                    if (isNaN(n)) return;
+                                                    setLocalAnns(prev => {
+                                                        const next = prev.map((a,i) => i === selectedAnnIdx ? {...a, bbox:[...a.bbox]} : a);
+                                                        next[selectedAnnIdx].bbox[fi] = n;
+                                                        return next;
+                                                    });
+                                                    setDirty(true);
+                                                }}
+                                                onBlur={() => {
+                                                    bboxFocusedRef.current = false;
+                                                    // blur 时做边界 clamp 并通过 commitChange 触发自动保存
+                                                    const cur = localAnnsRef.current[selectedAnnIdx];
+                                                    if (!cur?.bbox) return;
+                                                    const imgW = currentImage.width || 1e6;
+                                                    const imgH = currentImage.height || 1e6;
+                                                    let [bx,by,bw,bh] = cur.bbox;
+                                                    bw = Math.max(1, Math.min(imgW, bw));
+                                                    bh = Math.max(1, Math.min(imgH, bh));
+                                                    bx = Math.max(0, Math.min(imgW - bw, bx));
+                                                    by = Math.max(0, Math.min(imgH - bh, by));
+                                                    const clamped = localAnnsRef.current.map((a,i) => i === selectedAnnIdx ? {...a, bbox:[bx,by,bw,bh]} : a);
+                                                    setLocalAnns(clamped);
+                                                    setDirty(true);
+                                                    scheduleAutoSave();
+                                                }}
+                                                className="viewer-mini-input" style={{flex:1, minWidth:0, padding:'2px 4px', fontSize:'12px'}}
+                                            />
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                                <div style={{fontSize:'10px', color:'var(--text-muted)', marginTop:'4px'}}>方向键微调 · Shift+方向键×10 · 数字键1-9切换类别</div>
+                        </div>
+                    )}
+                    {/* 多选批量改类别 */}
+                    {annotateMode && selectedAnnIdxSet.size > 1 && categories.length > 0 && (
+                        <div style={{padding:'6px 10px', borderBottom:'1px solid var(--border)', background:'var(--bg-raised)'}}>
+                            <div style={{fontSize:'11px', color:'#faad14', marginBottom:'5px'}}>批量改类别 ({selectedAnnIdxSet.size} 个框)</div>
+                            <div style={{display:'flex', flexWrap:'wrap', gap:'4px'}}>
+                                {categories.map(cat => (
+                                    <button key={cat} onClick={() => {
+                                        commitChange(localAnns.map((a, i) => selectedAnnIdxSet.has(i) ? { ...a, category: cat } : a));
+                                        lastCategoryRef.current = cat;
+                                    }} style={{
+                                        padding:'2px 8px', fontSize:'11px', borderRadius:'4px', cursor:'pointer',
+                                        border:`1px solid ${getCategoryColor(palette, cat)}`,
+                                        background: getCategoryColor(palette, cat) + '22',
+                                        color: getCategoryColor(palette, cat),
+                                    }}>{cat}</button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {/* 标注模式：类别统计 + 清空按钮 */}
+                    {annotateMode && (
+                        <div style={{padding:'5px 10px', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:'4px'}}>
+                            <div style={{display:'flex', flexWrap:'wrap', gap:'3px'}}>
+                                {Object.entries(localAnns.reduce((acc, a) => { acc[a.category] = (acc[a.category]||0)+1; return acc; }, {})).map(([cat, cnt]) => (
+                                    <span key={cat} style={{fontSize:'10px', padding:'1px 5px', borderRadius:'3px', background: getCategoryColor(palette, cat)+'33', color: getCategoryColor(palette, cat), border:`1px solid ${getCategoryColor(palette, cat)}66`}}>
+                                        {cat} {cnt}
+                                    </span>
+                                ))}
+                                {localAnns.length === 0 && <span style={{fontSize:'10px', color:'var(--text-muted)'}}>暂无标注</span>}
+                            </div>
+                            {localAnns.length > 0 && (
+                                <button onClick={() => { if(window.confirm(`清空本图全部 ${localAnns.length} 个标注？`)) { commitChange([]); setSelectedAnnIdx(null); setSelectedAnnIdxSet(new Set()); } }}
+                                    title="清空本图所有标注（可撤销）"
+                                    style={{fontSize:'10px', padding:'1px 6px', background:'transparent', border:`1px solid var(--danger)`, color:'var(--danger)', borderRadius:'3px', cursor:'pointer', whiteSpace:'nowrap', flexShrink:0}}>
+                                    🗑 清空
+                                </button>
+                            )}
+                        </div>
+                    )}
                     <div className="viewer-sidebar-list">
-                        {currentImage.annotations.map((ann, idx) => (
+                        {annotateMode ? (
+                            // 标注模式：显示 localAnns，支持选中/删除/改类别
+                            localAnns.map((ann, idx) => {
+                                // B6: 搜索过滤
+                                if (annSearchText && !ann.category?.toLowerCase().includes(annSearchText.toLowerCase())) return null;
+                                const isSelected = selectedAnnIdx === idx;
+                                const isMultiSel = selectedAnnIdxSet.has(idx);
+                                return (
+                                    <div key={idx} style={{ borderLeft: `3px solid ${isMultiSel && !isSelected ? '#ffaa00' : getCategoryColor(palette, ann.category)}`, background: isSelected ? '#1a2a3a' : isMultiSel ? '#1a1a30' : 'transparent' }}>
+                                        <div
+                                            className={`viewer-ann-item ${isSelected ? 'viewer-ann-item-hovered' : ''}`}
+                                            style={{ borderLeftColor: 'transparent', background: 'transparent' }}
+                                            onClick={() => { setSelectedAnnIdx(isSelected ? null : idx); setSelectedAnnIdxSet(new Set()); }}
+                                        >
+                                            <div className="viewer-ann-color" style={{ background: getCategoryColor(palette, ann.category) }}></div>
+                                            <span className="viewer-ann-text" title={ann.category}>{ann.category}</span>
+                                            {ann.bbox && <span style={{fontSize:'10px', color:'var(--text-muted)', marginLeft:'4px'}}>{Math.round(ann.bbox[2])}×{Math.round(ann.bbox[3])}</span>}
+                                            <button
+                                                title="删除此框"
+                                                onClick={e => { e.stopPropagation(); commitChange(localAnns.filter((_,i)=>i!==idx)); if(selectedAnnIdx===idx) setSelectedAnnIdx(null); }}
+                                                style={{marginLeft:'auto', background:'transparent', border:'none', color:'#f55', cursor:'pointer', fontSize:'13px', padding:'0 4px'}}
+                                            >✕</button>
+                                        </div>
+                                        {/* 选中时展开类别修改行 */}
+                                        {isSelected && (
+                                            <div style={{ padding: '4px 8px 6px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                                {(categories.length > 0 ? categories : [ann.category]).map(cat => (
+                                                    <button
+                                                        key={cat}
+                                                        onClick={() => {
+                                                            if (cat === ann.category) return;
+                                                            commitChange(localAnns.map((a, i) => i === idx ? { ...a, category: cat } : a));
+                                                        }}
+                                                        style={{
+                                                            padding: '2px 8px', fontSize: 'var(--font-xs)', borderRadius: '4px', cursor: 'pointer',
+                                                            border: `1px solid ${cat === ann.category ? getCategoryColor(palette, cat) : 'var(--border)'}`,
+                                                            background: cat === ann.category ? getCategoryColor(palette, cat) + '33' : 'transparent',
+                                                            color: cat === ann.category ? getCategoryColor(palette, cat) : '#888',
+                                                        }}
+                                                    >{cat}</button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })
+                        ) : (
+                        // 查看模式
+                        currentImage.annotations.map((ann, idx) => {
+                            if (annSearchText && !ann.category?.toLowerCase().includes(annSearchText.toLowerCase())) return null;
+                            const belowThreshold = !passesConfThreshold(ann, confThreshold);
+                            if (belowThreshold) return (
+                                <div
+                                    key={idx}
+                                    className="viewer-ann-item hidden"
+                                    style={{ borderLeftColor: getCategoryColor(palette, ann.category), opacity: 0.35 }}
+                                    title={ann.score != null ? `置信度 ${(Number(ann.score)*100).toFixed(1)}% 低于阈值 ${(confThreshold*100).toFixed(0)}%` : undefined}
+                                >
+                                    <div className="viewer-ann-color" style={{ background: getCategoryColor(palette, ann.category) }}></div>
+                                    <span className="viewer-ann-text">{ann.category}</span>
+                                    {ann.score != null && <span className="viewer-ann-score" style={{textDecoration: 'line-through'}}>{(Number(ann.score) * 100).toFixed(0)}%</span>}
+                                    <span style={{marginLeft: 'auto', color: 'var(--text-muted)'}}>⊘</span>
+                                </div>
+                            );
+                            return (
                             <div
                                 key={idx}
                                 className={`viewer-ann-item ${hiddenAnns.has(idx) ? 'hidden' : ''} ${hoveredAnnIdx === idx ? 'viewer-ann-item-hovered' : ''}`}
                                 style={{ borderLeftColor: getCategoryColor(palette, ann.category) }}
-                                onClick={() => toggleAnn(idx)}
+                                onClick={() => { if (!hiddenAnns.has(idx)) centerOnAnnotation(ann.bbox); toggleAnn(idx); }}
                                 onMouseEnter={() => setHoveredAnnIdx(idx)}
                                 onMouseLeave={() => setHoveredAnnIdx(null)}
                             >
                                 <div className="viewer-ann-color" style={{ background: getCategoryColor(palette, ann.category) }}></div>
                                 <span className="viewer-ann-text">{ann.category}</span>
-                                {ann.score !== undefined && <span className="viewer-ann-score">{(ann.score * 100).toFixed(0)}%</span>}
-                                <span style={{marginLeft: 'auto', color: '#666'}}>{hiddenAnns.has(idx) ? '○' : '●'}</span>
+                                {ann.score != null && <span className="viewer-ann-score">{(Number(ann.score) * 100).toFixed(0)}%</span>}
+                                <button 
+                                    className="vbtn vbtn-neutral" 
+                                    title="点击居中并隐藏/显示此框" 
+                                    style={{marginLeft: 'auto', padding: '0 4px', fontSize: '10px'}}
+                                    onClick={(e) => { e.stopPropagation(); toggleAnn(idx); }}
+                                >
+                                    {hiddenAnns.has(idx) ? '○ 显示' : '● 隐藏'}
+                                </button>
                             </div>
-                        ))}
+                            );
+                        })
+                        )}
                     </div>
-                    <div style={{padding: '10px', background: '#2d2d44', display: 'flex', gap: '8px'}}>
-                        <button className="tool-btn" style={{flex: 1}} onClick={() => setHiddenAnns(new Set())}>全部显示</button>
-                        <button className="tool-btn" style={{flex: 1}} onClick={() => setHiddenAnns(new Set(currentImage.annotations.map((_, i) => i)))}>全部隐藏</button>
+                    {!annotateMode && (
+                    <div style={{padding: '10px', background: 'var(--bg-raised)', borderTop: '1px solid var(--border)', display: 'flex', gap: '8px'}}>
+                        <button className="tool-btn" style={{flex: 1}} onClick={() => {
+                            if (hiddenAnns.size > 0) {
+                                setHiddenAnns(new Set()); // 全部显示
+                            } else {
+                                const allIdxs = new Set();
+                                currentImage.annotations.forEach((a, i) => { if(a.bbox) allIdxs.add(i); });
+                                setHiddenAnns(allIdxs); // 全部隐藏
+                            }
+                        }}>
+                            {hiddenAnns.size > 0 ? '显示全部' : '隐藏全部'}
+                        </button>
                     </div>
+                    )}
+                    {annotateMode && (
+                    <div style={{padding: '8px 10px', background: 'rgba(26,80,26,0.25)', borderTop: '1px solid var(--border)', display: 'flex', gap: '6px'}}>
+                        <button className="tool-btn" style={{flex:1, color:'var(--danger)', borderColor:'var(--danger)'}} onClick={() => { if(localAnns.length > 0 && window.confirm('清空所有标注框？')) commitChange([]); setSelectedAnnIdx(null); }}>清空全部</button>
+                </div>
+                    )}
 
-                    {/* 预测标注列表（交互与 GT 完全一致，按模型分组） */}
-                    {(() => {
+                    {/* 标注模式：预测框参考列表（可点击接受为 GT） */}
+                    {annotateMode && (() => {
+                        const predAnns = (currentImage.pred_annotations || []).filter(a =>
+                            !visiblePredModels || visiblePredModels.has(a._pred_source)
+                        );
+                        if (predAnns.length === 0) return null;
+                        return (
+                            <div>
+                                <div className="viewer-sidebar-header" style={{marginTop:'4px'}}>
+                                    <span style={{color:'#7ab'}}><span style={{opacity:0.5}}>⋯</span> 预测参考框</span>
+                                    <button
+                                        title="全部接受为 GT"
+                                        onClick={() => {
+                                            const toAdd = predAnns.map(a => ({ category: a.category, category_id: null, bbox: [...a.bbox], iscrowd: 0, _from_pred: a._pred_source || true }));
+                                            commitChange([...localAnns, ...toAdd]);
+                                        }}
+                                        className="vbtn vbtn-on-teal" style={{fontSize:'11px', padding:'1px 8px', borderRadius:'4px', cursor:'pointer'}}
+                                    >全部接受</button>
+                                </div>
+                                <div style={{maxHeight:'180px', overflowY:'auto'}}>
+                                    {predAnns.map((ann, idx) => (
+                                        <div key={idx} className="viewer-ann-item" style={{borderLeftColor: getCategoryColor(palette, ann.category)}}>
+                                            <div className="viewer-ann-color" style={{background: getCategoryColor(palette, ann.category)}}></div>
+                                            <span className="viewer-ann-text" title={ann.category}>{ann.category}</span>
+                                            {ann.score !== undefined && <span className="viewer-ann-score">{(ann.score*100).toFixed(0)}%</span>}
+                                            <button
+                                                title="接受为 GT 标注"
+                                                onClick={() => {
+                                                    const newAnn = { category: ann.category, category_id: null, bbox: [...ann.bbox], iscrowd: 0, _from_pred: ann._pred_source || true };
+                                                    commitChange([...localAnns, newAnn]);
+                                                }}
+                                                className="vbtn vbtn-on-teal" style={{marginLeft:'auto', cursor:'pointer', fontSize:'11px', padding:'1px 6px', borderRadius:'3px', flexShrink:0}}
+                                            >+GT</button>
+                                        </div>
+                                    ))}
+            </div>
+                            </div>
+                        );
+                    })()}
+
+                    {/* 预测标注列表（交互与 GT 完全一致，按模型分组），标注模式下隐藏 */}
+                    {!annotateMode && (() => {
                         const allPredAnns = currentImage.pred_annotations || [];
                         if (allPredAnns.length === 0) return null;
                         const PRED_DASH_DESCS = ['— — —', '-- --', '· · ·', '—·—·', '——— '];
                         const allPredModels = [...new Set(allPredAnns.map(a => a._pred_source))];
-                        // 保留全部模型的原始索引，但在渲染时区分可见/隐藏
                         const predAnns = allPredAnns;
                         const predModels = allPredModels;
+                        const visibleCount = predAnns.filter(a => passesConfThreshold(a, confThreshold)).length;
                         const togglePredAnn = (globalIdx) => {
                             setHiddenPredAnns(prev => {
                                 const next = new Set(prev);
@@ -3303,9 +6086,9 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                         };
                         return (
                             <>
-                                <div className="viewer-sidebar-header" style={{marginTop: '10px', background: '#2a2a4a'}}>
+                                <div className="viewer-sidebar-header" style={{marginTop: '10px'}}>
                                     <span>预测标注</span>
-                                    <span>{predAnns.length}</span>
+                                    <span>{confThreshold > 0 ? `${visibleCount}/${predAnns.length}` : predAnns.length}</span>
                                 </div>
                                 {predModels.map((model, modelIdx) => {
                                     const modelIdxs = predAnns.map((a, i) => a._pred_source === model ? i : -1).filter(i => i >= 0);
@@ -3320,35 +6103,51 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                                 title={globallyHidden ? '该模型已在工具栏中关闭，点击可在工具栏重新开启' : undefined}
                                                 style={{
                                                     padding: '5px 12px',
-                                                    background: globallyHidden ? '#1a1a2a' : '#252545',
-                                                    fontSize: '11px',
-                                                    color: (allHidden || globallyHidden) ? '#444' : '#bbb',
+                                                    background: globallyHidden ? 'var(--bg-surface)' : 'var(--bg-raised)',
+                                                    fontSize: 'var(--font-xs)',
+                                                    color: (allHidden || globallyHidden) ? 'var(--border-strong)' : 'var(--text-secondary)',
                                                     display: 'flex',
                                                     alignItems: 'center',
                                                     gap: '6px',
                                                     cursor: globallyHidden ? 'default' : 'pointer',
                                                     userSelect: 'none',
-                                                    borderBottom: '1px solid #333355',
+                                                    borderBottom: '1px solid var(--border)',
                                                     opacity: globallyHidden ? 0.5 : 1,
                                                 }}
                                             >
-                                                <span style={{fontFamily: 'monospace', fontSize: '13px', letterSpacing: '1px', color: globallyHidden ? '#444' : '#7af'}}>{dashDesc}</span>
+                                                <span style={{fontFamily: 'monospace', fontSize: 'var(--font-md)', letterSpacing: '1px', color: globallyHidden ? 'var(--border-strong)' : '#7af'}}>{dashDesc}</span>
                                                 <span style={{fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{model}</span>
                                                 {globallyHidden && <span style={{fontSize:'10px', color:'#f55', marginLeft:'2px'}}>[已关闭]</span>}
-                                                <span style={{marginLeft: 'auto', color: '#666'}}>{modelIdxs.length}</span>
-                                                <span style={{color: '#666'}}>{globallyHidden ? '✕' : (allHidden ? '○' : '●')}</span>
+                                                <span style={{marginLeft: 'auto', color: 'var(--text-muted)'}}>
+                                                    {confThreshold > 0 ? `${modelIdxs.filter(i => passesConfThreshold(predAnns[i], confThreshold)).length}/` : ''}{modelIdxs.length}
+                                                </span>
+                                                <span style={{color: 'var(--text-muted)'}}>{globallyHidden ? '✕' : (allHidden ? '○' : '●')}</span>
                                             </div>
                                             {/* 逐条标注列表（全局隐藏时折叠） */}
                                             {!globallyHidden && modelIdxs.map(globalIdx => {
                                                 const ann = predAnns[globalIdx];
                                                 const isHidden = hiddenPredAnns.has(globalIdx);
                                                 const isHovered = hoveredPredAnnIdx === globalIdx;
+                                                const belowThreshold = !passesConfThreshold(ann, confThreshold);
+                                                if (belowThreshold) return (
+                                                    <div
+                                                        key={globalIdx}
+                                                        className="viewer-ann-item hidden"
+                                                        style={{ borderLeftColor: getCategoryColor(palette, ann.category), opacity: 0.35 }}
+                                                        title={`置信度 ${(Number(ann.score)*100).toFixed(1)}% 低于阈值 ${(confThreshold*100).toFixed(0)}%`}
+                                                    >
+                                                        <div className="viewer-ann-color" style={{ background: getCategoryColor(palette, ann.category) }}></div>
+                                                        <span className="viewer-ann-text">{ann.category}</span>
+                                                        <span className="viewer-ann-score" style={{textDecoration: 'line-through'}}>{(Number(ann.score) * 100).toFixed(1)}%</span>
+                                                        <span style={{marginLeft: 'auto', color: 'var(--text-muted)'}}>⊘</span>
+                                                    </div>
+                                                );
                                                 return (
                                                     <div
                                                         key={globalIdx}
                                                         className={`viewer-ann-item ${isHidden ? 'hidden' : ''} ${isHovered ? 'viewer-ann-item-hovered' : ''}`}
                                                         style={{ borderLeftColor: getCategoryColor(palette, ann.category) }}
-                                                        onClick={() => togglePredAnn(globalIdx)}
+                                                        onClick={() => { if (!isHidden) centerOnAnnotation(ann.bbox); togglePredAnn(globalIdx); }}
                                                         onMouseEnter={() => setHoveredPredAnnIdx(globalIdx)}
                                                         onMouseLeave={() => setHoveredPredAnnIdx(null)}
                                                     >
@@ -3357,7 +6156,14 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                                         {ann.score !== undefined && ann.score !== null && (
                                                             <span className="viewer-ann-score">{(Number(ann.score) * 100).toFixed(1)}%</span>
                                                         )}
-                                                        <span style={{marginLeft: 'auto', color: '#666'}}>{isHidden ? '○' : '●'}</span>
+                                                        <button 
+                                                            className="vbtn vbtn-neutral" 
+                                                            title="点击居中并隐藏/显示此框" 
+                                                            style={{marginLeft: 'auto', padding: '0 4px', fontSize: '10px'}}
+                                                            onClick={(e) => { e.stopPropagation(); togglePredAnn(globalIdx); }}
+                                                        >
+                                                            {isHidden ? '○ 显示' : '● 隐藏'}
+                                                        </button>
                                                     </div>
                                                 );
                                             })}
@@ -3365,26 +6171,178 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                     );
                                 })}
                                 {/* 底部全显/全隐按钮 */}
-                                <div style={{padding: '10px', background: '#2a2a44', display: 'flex', gap: '8px'}}>
-                                    <button className="tool-btn" style={{flex: 1}} onClick={() => setHiddenPredAnns(new Set())}>全部显示</button>
-                                    <button className="tool-btn" style={{flex: 1}} onClick={() => setHiddenPredAnns(new Set(predAnns.map((_, i) => i)))}>全部隐藏</button>
+                                <div style={{padding: '10px', background: 'var(--bg-raised)', borderTop: '1px solid var(--border)', display: 'flex', gap: '8px'}}>
+                                    <button className="tool-btn" style={{flex: 1}} onClick={() => {
+                                        if (hiddenPredAnns.size > 0) {
+                                            setHiddenPredAnns(new Set()); // 全部显示
+                                        } else {
+                                            const allIdxs = new Set();
+                                            predAnns.forEach((a, i) => { if(a.bbox) allIdxs.add(i); });
+                                            setHiddenPredAnns(allIdxs); // 全部隐藏
+                                        }
+                                    }}>
+                                        {hiddenPredAnns.size > 0 ? '显示全部' : '隐藏全部'}
+                                    </button>
                                 </div>
                             </>
                         );
                     })()}
                 </div>
             </div>
+            {/* C9: 导出弹窗 */}
+            {exportModal && (
+                <div style={{position:'absolute', inset:0, background:'rgba(0,0,0,0.75)', zIndex:1001, display:'flex', alignItems:'center', justifyContent:'center'}} onClick={() => setExportModal(null)}>
+                    <div style={{background:'var(--bg-surface)', border:'1px solid var(--border-strong)', borderRadius:'12px', padding:'16px', maxWidth:'90vw', maxHeight:'90vh', display:'flex', flexDirection:'column', gap:'12px', boxShadow:'0 16px 48px rgba(0,0,0,0.6)'}} onClick={e => e.stopPropagation()}>
+                        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                            <span style={{fontWeight:'bold', fontSize:'14px', color:'var(--text-primary)'}}>📷 截图预览</span>
+                            <button onClick={() => setExportModal(null)} style={{background:'none', border:'none', color:'var(--text-muted)', fontSize:'18px', cursor:'pointer'}}>✕</button>
+                        </div>
+                        <img src={exportModal.dataUrl} alt="预览" style={{maxWidth:'70vw', maxHeight:'60vh', objectFit:'contain', borderRadius:'8px', border:'1px solid var(--border)'}} />
+                        <div style={{display:'flex', gap:'10px'}}>
+                            <button
+                                onClick={() => {
+                                    const a = document.createElement('a');
+                                    a.href = exportModal.dataUrl;
+                                    a.download = exportModal.fileName;
+                                    a.click();
+                                }}
+                                className="btn btn-primary" style={{flex:1, padding:'8px 0', fontSize:'13px'}}
+                            >⬇ 下载 JPG</button>
+                            <button
+                                onClick={async () => {
+                                    try {
+                                        // 使用 PNG blob 写入剪贴板（浏览器仅支持 PNG）
+                                        const pngUrl = exportModal.canvas.toDataURL('image/png');
+                                        const res = await fetch(pngUrl);
+                                        const blob = await res.blob();
+                                        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+                                        alert('✓ 已复制到剪贴板，可直接粘贴到聊天窗口');
+                                    } catch(err) {
+                                        // 降级：复制 data URL
+                                        try {
+                                            await navigator.clipboard.writeText(exportModal.dataUrl);
+                                            alert('已复制图片 Data URL（需手动粘贴）');
+                                        } catch(e2) {
+                                            alert('复制失败，请手动右键图片另存为');
+                                        }
+                                    }
+                                }}
+                                className="btn btn-success" style={{flex:1, padding:'8px 0', fontSize:'13px'}}
+                            >⎘ 复制到剪贴板</button>
+                        </div>
+                        <div style={{fontSize:'11px', color:'var(--text-muted)', textAlign:'center'}}>点击空白处关闭</div>
+                    </div>
+                </div>
+            )}
+            {/* B7: 查看模式下的亮度/对比度控制条 */}
+            {!annotateMode && (brightness !== 100 || contrast !== 100) && (
+                <div style={{position:'fixed', bottom: '85px', left:'50%', transform:'translateX(-50%)', background:'rgba(15,17,23,0.94)', border:'1px solid var(--border-strong)', borderRadius:'10px', padding:'6px 16px', display:'flex', gap:'12px', alignItems:'center', fontSize:'12px', zIndex:999, backdropFilter:'blur(8px)', boxShadow:'0 8px 24px rgba(0,0,0,0.5)'}}>
+                    <span style={{color:'#ffaa00', fontWeight:'500'}}>图像调整</span>
+                    <span style={{color:'var(--text-muted)'}}>亮度</span>
+                    <input type="range" min="30" max="200" value={brightness} onChange={e=>setBrightness(Number(e.target.value))} style={{width:'80px', accentColor:'#ffaa00'}} />
+                    <span style={{color:'var(--text-secondary)', width:'34px'}}>{brightness}%</span>
+                    <span style={{color:'var(--text-muted)'}}>对比度</span>
+                    <input type="range" min="30" max="300" value={contrast} onChange={e=>setContrast(Number(e.target.value))} style={{width:'80px', accentColor:'#7af'}} />
+                    <span style={{color:'var(--text-secondary)', width:'34px'}}>{contrast}%</span>
+                    <button onClick={() => { setBrightness(100); setContrast(100); }} className="vbtn-neutral" style={{padding:'2px 8px', borderRadius:'4px', cursor:'pointer', fontSize:'11px'}}>重置</button>
+                </div>
+            )}
+            
+            {/* 缩略图导航带 (仅在查看模式显示) */}
+            {!annotateMode && (
+                <Filmstrip 
+                    images={images} 
+                    currentIndex={imageIdx} 
+                    datasetId={datasetId} 
+                    onNavigateTo={(idx) => navigate(idx - imageIdx)} 
+                />
+            )}
+
+            {/* B9: 快捷键帮助面板 */}
+            {showHelp && (
+                <div style={{position:'absolute', inset:0, background:'rgba(0,0,0,0.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center'}} onClick={() => setShowHelp(false)}>
+                    <div style={{background:'var(--bg-surface)', border:'1px solid var(--border-strong)', borderRadius:'12px', padding:'20px 28px', minWidth:'340px', maxWidth:'480px', maxHeight:'80vh', overflowY:'auto', boxShadow:'0 16px 48px rgba(0,0,0,0.55)'}} onClick={e => e.stopPropagation()}>
+                        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'14px'}}>
+                            <span style={{fontWeight:'bold', fontSize:'15px', color:'var(--text-primary)'}}>⌨ 快捷键一览</span>
+                            <button onClick={() => setShowHelp(false)} style={{background:'transparent', border:'none', color:'var(--text-muted)', fontSize:'18px', cursor:'pointer'}}>✕</button>
+                        </div>
+                        {[
+                            { group: '导航 & 通用', items: [
+                                ['← / A / → / D', '上/下一张图片'],
+                                ['Tab / Shift+Tab', '循环切换高亮标注框'],
+                                ['N', '聚焦到备注输入框'],
+                                ['1-9', '快速设置主分类'],
+                                ['0', '缩放适应窗口'],
+                                ['F', '全屏 / 退出全屏'],
+                                ['Esc', '关闭查看器 / 清除锁定'],
+                                ['?', '显示/隐藏帮助'],
+                                ['双击图片', '进入标注模式'],
+                                ['点击标注框', '锁定/解锁信息面板'],
+                            ]},
+                            { group: '标注工具', items: [
+                                ['B', '切换到画框工具'],
+                                ['V', '切换到选择工具'],
+                                ['Q', '快速模式（记住上次类别）'],
+                                ['Del / Backspace', '删除选中框（支持多选）'],
+                                ['Ctrl+C', '复制选中框'],
+                                ['Ctrl+V', '粘贴（偏移10px）'],
+                                ['Ctrl+Z', '撤销'],
+                                ['Ctrl+Y / Ctrl+Shift+Z', '重做'],
+                                ['Ctrl+S', '保存标注'],
+                            ]},
+                            { group: '移动 & 调整', items: [
+                                ['方向键', '微调选中框位置 (1px)'],
+                                ['Shift + 方向键', '快速微调 (10px)'],
+                                ['Shift + 画框', '锁定正方形（宽=高）'],
+                                ['Space + 拖拽', '临时平移视图'],
+                                ['Ctrl + 点击', '多选框'],
+                                ['拖拽空白区域', '框选多个框'],
+                            ]},
+                            { group: '图像显示', items: [
+                                ['滚轮 (Ctrl+滚轮)', '缩放'],
+                                ['▦ 填充按钮', '切换半透明填充'],
+                                ['# 序号按钮', '框序号显示'],
+                                ['∿ 置信度按钮', '置信度渐变透明'],
+                                ['⊕ 吸附按钮（标注模式）', '贴边吸附'],
+                                ['⊞ 对比按钮', 'GT vs 预测对比视图'],
+                                ['↓PNG 按钮', '导出带标注截图'],
+                                ['亮度/对比度滑块', '调整图像显示'],
+                            ]},
+                        ].map(({ group, items }) => (
+                            <div key={group} style={{marginBottom:'14px'}}>
+                                <div style={{fontSize:'11px', color:'var(--accent)', textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:'6px', borderBottom:'1px solid var(--border)', paddingBottom:'3px'}}>{group}</div>
+                                <table style={{width:'100%', borderCollapse:'collapse'}}>
+                                    <tbody>
+                                        {items.map(([key, desc]) => (
+                                            <tr key={key}>
+                                                <td style={{padding:'2px 8px 2px 0', color:'var(--text-secondary)', fontFamily:'monospace', fontSize:'12px', whiteSpace:'nowrap'}}>{key}</td>
+                                                <td style={{padding:'2px 0', color:'var(--text-secondary)', fontSize:'12px'}}>{desc}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ))}
+                        <div style={{textAlign:'center', color:'var(--text-muted)', fontSize:'11px', marginTop:'8px'}}>点击空白处或 Esc 关闭</div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
 
 // ==================== EDA可视化页面 ====================
-function EDAPage({ datasetData }) {
+function EDAPage({ datasetData, images, onJumpToGallery, onJumpToImage }) {
     const config = useConfig();
     const eda = config.eda || DEFAULT_CONFIG.eda;
     const palette = config.colorPalette || DEFAULT_CONFIG.colorPalette;
+    const onJumpToGalleryRef = useRef(onJumpToGallery);
+    useEffect(() => { onJumpToGalleryRef.current = onJumpToGallery; }, [onJumpToGallery]);
+    const onJumpToImageRef = useRef(onJumpToImage);
+    useEffect(() => { onJumpToImageRef.current = onJumpToImage; }, [onJumpToImage]);
     const pieRef = useRef(null);
     const barRef = useRef(null);
+    const dirCompareRef = useRef(null);
     const areaRef = useRef(null);
     const sqrtAreaRef = useRef(null);
     const maxSideRef = useRef(null);
@@ -3401,6 +6359,59 @@ function EDAPage({ datasetData }) {
     const [edaTab, setEdaTab] = useState('category');
     const [useNormalized, setUseNormalized] = useState(true);
 
+    const uiTheme = config.uiTheme || DEFAULT_CONFIG.uiTheme || 'dark';
+    const plotlyBase = React.useMemo(() => {
+        if (uiTheme === 'light') {
+            return {
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(244,247,252,0.86)',
+                font: { color: '#3d4c6b', family: 'system-ui, sans-serif', size: 12 },
+                title: { font: { color: '#1c2436', size: 13 } },
+                xaxis: { gridcolor: '#d4deef', linecolor: '#aebedb', tickcolor: '#667896', zerolinecolor: '#d4deef' },
+                yaxis: { gridcolor: '#d4deef', linecolor: '#aebedb', tickcolor: '#667896', zerolinecolor: '#d4deef' },
+                legend: { bgcolor: 'rgba(238,243,251,0.88)', bordercolor: '#c8d4ea', borderwidth: 1, font: { color: '#3d4c6b' } },
+                hoverlabel: { bgcolor: '#ffffff', bordercolor: '#aebedb', font: { color: '#1c2436' } },
+                margin: { t: 40, r: 16, b: 50, l: 50 },
+            };
+        }
+        if (uiTheme === 'dim') {
+            return {
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(26,31,44,0.86)',
+                font: { color: '#a8b6d4', family: 'system-ui, sans-serif', size: 12 },
+                title: { font: { color: '#dbe4f6', size: 13 } },
+                xaxis: { gridcolor: '#32405b', linecolor: '#44557a', tickcolor: '#7d8baa', zerolinecolor: '#32405b' },
+                yaxis: { gridcolor: '#32405b', linecolor: '#44557a', tickcolor: '#7d8baa', zerolinecolor: '#32405b' },
+                legend: { bgcolor: 'rgba(35,42,58,0.88)', bordercolor: '#32405b', borderwidth: 1, font: { color: '#a8b6d4' } },
+                hoverlabel: { bgcolor: '#232a3a', bordercolor: '#44557a', font: { color: '#dbe4f6' } },
+                margin: { t: 40, r: 16, b: 50, l: 50 },
+            };
+        }
+        return {
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(21,25,38,0.85)',
+            font: { color: '#b0b9d4', family: 'system-ui, sans-serif', size: 12 },
+            title: { font: { color: '#e6ebff', size: 13 } },
+            xaxis: { gridcolor: '#2b3550', linecolor: '#3a4870', tickcolor: '#7d88a8', zerolinecolor: '#2b3550' },
+            yaxis: { gridcolor: '#2b3550', linecolor: '#3a4870', tickcolor: '#7d88a8', zerolinecolor: '#2b3550' },
+            legend: { bgcolor: 'rgba(28,34,51,0.85)', bordercolor: '#2b3550', borderwidth: 1, font: { color: '#b0b9d4' } },
+            hoverlabel: { bgcolor: '#1c2233', bordercolor: '#3a4870', font: { color: '#e6ebff' } },
+            margin: { t: 40, r: 16, b: 50, l: 50 },
+        };
+    }, [uiTheme]);
+    const plotlyAccent = uiTheme === 'light' ? '#4569e0' : (uiTheme === 'dim' ? '#7f97ff' : '#6f8cff');
+    const plotlyPieText = uiTheme === 'light' ? '#1c2436' : '#e6ebff';
+    const dirComparePalette = uiTheme === 'light'
+        ? ['#4569e0','#c27e14','#1d9d66','#d14152','#7a56d8','#1996a0','#c37228','#3f7bd6']
+        : uiTheme === 'dim'
+            ? ['#7f97ff','#e2a644','#49c592','#f06c79','#9d82f5','#35bfc8','#ec9650','#58a0ec']
+            : ['#667eea','#f6a623','#50c878','#e74c3c','#9b59b6','#1abc9c','#e67e22','#3498db'];
+    const plotlyMerge = (specific) => ({ ...plotlyBase, ...specific,
+        xaxis: { ...plotlyBase.xaxis, ...(specific.xaxis || {}) },
+        yaxis: { ...plotlyBase.yaxis, ...(specific.yaxis || {}) },
+        title: { ...plotlyBase.title, ...(typeof specific.title === 'string' ? { text: specific.title } : specific.title || {}) },
+    });
+
     // 生成箱线图的通用函数
     const generateBoxPlot = (ref, data, title, yLabel) => {
         if (!ref.current || !data) return;
@@ -3410,7 +6421,7 @@ function EDAPage({ datasetData }) {
             name: cat,
             type: 'box'
         }));
-        Plotly.newPlot(ref.current, traces, { title, yaxis: { title: yLabel }, height: 400 }, { responsive: true });
+        Plotly.newPlot(ref.current, traces, plotlyMerge({ title, yaxis: { title: yLabel }, height: 400 }), { responsive: true });
     };
 
     useEffect(() => {
@@ -3428,8 +6439,13 @@ function EDAPage({ datasetData }) {
                 values: datasetData.class_distribution_pie.values,
                 type: 'pie',
                 textinfo: 'label+percent',
-                hole: 0.3
-            }], { title: '类别分布', height: 400 }, { responsive: true });
+                hole: 0.3,
+                textfont: { color: plotlyPieText },
+            }], plotlyMerge({ title: '类别分布（点击扇区跳转宫格）', height: 400 }), { responsive: true });
+            pieRef.current.on('plotly_click', (data) => {
+                const pt = data.points && data.points[0];
+                if (pt && pt.label && onJumpToGalleryRef.current) onJumpToGalleryRef.current(pt.label);
+            });
         }
 
         // 2. 类别数量柱状图
@@ -3438,8 +6454,12 @@ function EDAPage({ datasetData }) {
                 x: datasetData.class_counts.categories,
                 y: datasetData.class_counts.counts,
                 type: 'bar',
-                marker: { color: '#667eea' }
-            }], { title: '类别数量', xaxis: { title: '类别' }, yaxis: { title: '数量' }, height: 400 }, { responsive: true });
+                marker: { color: plotlyAccent }
+            }], plotlyMerge({ title: '类别数量（点击柱子跳转宫格）', xaxis: { title: '类别' }, yaxis: { title: '数量' }, height: 400 }), { responsive: true });
+            barRef.current.on('plotly_click', (data) => {
+                const pt = data.points && data.points[0];
+                if (pt && pt.x && onJumpToGalleryRef.current) onJumpToGalleryRef.current(pt.x);
+            });
         }
 
         const stats = useNormalized
@@ -3491,48 +6511,77 @@ function EDAPage({ datasetData }) {
                     type: 'box'
                 });
             });
-            Plotly.newPlot(whRef.current, traces, { title: whTitle, yaxis: { title: whY }, height: 400 }, { responsive: true });
+            Plotly.newPlot(whRef.current, traces, plotlyMerge({ title: whTitle, yaxis: { title: whY }, height: 400 }), { responsive: true });
         }
-        // 9. 中心点分布
+        // 9. 中心点分布（点击跳转对应图片）
         if (centerRef.current && stats.center) {
             const cats = [...new Set(stats.center.category)];
-            const traces = cats.map(cat => ({
-                x: stats.center.x.filter((_, i) => stats.center.category[i] === cat),
-                y: stats.center.y.filter((_, i) => stats.center.category[i] === cat),
+            const hasId = stats.center.image_id && stats.center.image_id.length > 0;
+            const centerTraces = cats.map(cat => {
+                const idxs = stats.center.category.map((c, i) => c === cat ? i : -1).filter(i => i >= 0);
+                return {
+                    x: idxs.map(i => stats.center.x[i]),
+                    y: idxs.map(i => stats.center.y[i]),
+                    customdata: hasId ? idxs.map(i => [stats.center.image_id[i], (stats.center.file_name || [])[i] || '']) : undefined,
+                    hovertemplate: hasId ? `%{customdata[1]}<br>X: %{x:.3f}<br>Y: %{y:.3f}<extra>${cat}</extra>` : undefined,
                 mode: 'markers',
                 type: 'scatter',
                 name: cat,
-                marker: { size: 5, opacity: 0.6 }
-            }));
-            Plotly.newPlot(centerRef.current, traces, { 
-                title: centerTitle, 
+                    marker: { size: 6, opacity: 0.7, color: getCategoryColor(palette, cat) }
+                };
+            });
+            Plotly.newPlot(centerRef.current, centerTraces, plotlyMerge({
+                title: centerTitle + (hasId ? '  ← 点击散点跳转图片' : ''),
                 xaxis: { title: '中心 X' + centerXY }, 
                 yaxis: { title: '中心 Y' + centerXY }, 
                 height: 500 
-            }, { responsive: true });
+            }), { responsive: true });
+            // purge 旧事件后重新绑定
+            centerRef.current.removeAllListeners && centerRef.current.removeAllListeners('plotly_click');
+            if (hasId) {
+                centerRef.current.on('plotly_click', (data) => {
+                    const pt = data.points && data.points[0];
+                    if (pt && pt.customdata != null && onJumpToImageRef.current) {
+                        onJumpToImageRef.current(pt.customdata[0]);
+                    }
+                });
+            }
         }
-        // 10. bbox分布
+        // 10. bbox分布（点击跳转对应图片）
         if (bboxRef.current && stats.width && stats.height) {
             const cats = [...new Set(stats.width.category)];
-            const traces = cats.map(cat => {
-                const x = stats.width.values.filter((_, i) => stats.width.category[i] === cat);
-                const y = stats.height.values.filter((_, i) => stats.height.category[i] === cat);
+            const hasId = stats.width.image_id && stats.width.image_id.length > 0;
+            const bboxTraces = cats.map(cat => {
+                const idxs = stats.width.category.map((c, i) => c === cat ? i : -1).filter(i => i >= 0);
                 return {
-                    x, y,
+                    x: idxs.map(i => stats.width.values[i]),
+                    y: idxs.map(i => stats.height.values[i]),
+                    customdata: hasId ? idxs.map(i => [stats.width.image_id[i], (stats.width.file_name || [])[i] || '']) : undefined,
+                    hovertemplate: hasId ? `%{customdata[1]}<br>宽: %{x:.4f}<br>高: %{y:.4f}<extra>${cat}</extra>` : undefined,
                     mode: 'markers',
                     type: 'scatter',
                     name: cat,
-                    marker: { size: 8, opacity: 0.6, color: getCategoryColor(palette, cat) }
+                    marker: { size: 8, opacity: 0.65, color: getCategoryColor(palette, cat) }
                 };
             });
-            Plotly.newPlot(bboxRef.current, traces, { 
-                title: bboxTitle, 
+            Plotly.newPlot(bboxRef.current, bboxTraces, plotlyMerge({
+                title: bboxTitle + (hasId ? '  ← 点击散点跳转图片' : ''),
                 xaxis: { title: '宽度' + bboxXY }, 
                 yaxis: { title: '高度' + bboxXY }, 
                 height: 500 
-            }, { responsive: true });
+            }), { responsive: true });
+            // purge 旧事件后重新绑定
+            bboxRef.current.removeAllListeners && bboxRef.current.removeAllListeners('plotly_click');
+            if (hasId) {
+                bboxRef.current.on('plotly_click', (data) => {
+                    const pt = data.points && data.points[0];
+                    if (pt && pt.customdata != null && onJumpToImageRef.current) {
+                        onJumpToImageRef.current(pt.customdata[0]);
+                    }
+                });
+            }
         }
-    }, [datasetData, useNormalized]);
+    }, [datasetData, useNormalized, uiTheme]);
 
     // 11. 密度分布图（可选类别和指标，随归一化/像素切换）
     useEffect(() => {
@@ -3571,39 +6620,39 @@ function EDAPage({ datasetData }) {
                 type: 'histogram',
                 nbinsx: densityMetric === 'score' ? 20 : 30,
                 marker: { color: getCategoryColor(palette, densityCategory) }
-            }], { 
+            }], plotlyMerge({ 
                 title: `${densityCategory} - ${metricLabel} ${eda.chartDensity || '密度分布'}`,
                 xaxis: { title: metricLabel, range: densityMetric === 'score' ? [0, 1] : undefined },
                 yaxis: { title: '频数' },
                 height: 400
-            }, { responsive: true });
+            }), { responsive: true });
         } else if (densityRef.current && typeof Plotly.purge === 'function') {
             Plotly.purge(densityRef.current);
         }
-    }, [densityCategory, densityMetric, datasetData, palette, eda.chartDensity, useNormalized]);
+    }, [densityCategory, densityMetric, datasetData, palette, eda.chartDensity, useNormalized, uiTheme]);
 
     return (
         <div className="main-content">
             <div className="top-toolbar">
                 <div className="toolbar-left">
-                    <h2 style={{fontSize: '16px', fontWeight: 500}}>{eda.pageTitle}</h2>
-                    <span style={{color: '#888', fontSize: '13px'}}>
+                    <h2 style={{fontSize: 'var(--font-xl)', fontWeight: 500}}>{eda.pageTitle}</h2>
+                    <span style={{color: 'var(--text-muted)', fontSize: 'var(--font-md)'}}>
                         图片: {datasetData.num_images} | 标注: {datasetData.num_annotations} | 类别: {datasetData.num_categories}
                     </span>
                 </div>
                 <div className="toolbar-right" style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
-                    <span style={{fontSize: '13px', color: '#888'}}>统计尺度:</span>
+                    <span style={{fontSize: 'var(--font-md)', color: 'var(--text-muted)'}}>统计尺度:</span>
                     <button
                         type="button"
                         className={`eda-tab ${useNormalized ? 'active' : ''}`}
                         onClick={() => setUseNormalized(true)}
-                        style={{padding: '6px 12px', fontSize: '13px'}}
+                        style={{padding: '6px 12px', fontSize: 'var(--font-md)'}}
                     >归一化</button>
                     <button
                         type="button"
                         className={`eda-tab ${!useNormalized ? 'active' : ''}`}
                         onClick={() => setUseNormalized(false)}
-                        style={{padding: '6px 12px', fontSize: '13px'}}
+                        style={{padding: '6px 12px', fontSize: 'var(--font-md)'}}
                     >像素值</button>
                 </div>
             </div>
@@ -3613,6 +6662,9 @@ function EDAPage({ datasetData }) {
                 <button type="button" className={`eda-tab ${edaTab === 'ratio' ? 'active' : ''}`} onClick={() => setEdaTab('ratio')}>{eda.sectionRatio}</button>
                 <button type="button" className={`eda-tab ${edaTab === 'space' ? 'active' : ''}`} onClick={() => setEdaTab('space')}>{eda.sectionSpace}</button>
                 <button type="button" className={`eda-tab ${edaTab === 'density' ? 'active' : ''}`} onClick={() => setEdaTab('density')}>{eda.sectionDensity}</button>
+                {images && [...new Set(images.map(i => i.source_path).filter(Boolean))].length > 1 && (
+                    <button type="button" className={`eda-tab ${edaTab === 'dircompare' ? 'active' : ''}`} onClick={() => setEdaTab('dircompare')}>目录对比</button>
+                )}
             </div>
             <div className="eda-page">
                 {/* 类别分布 */}
@@ -3727,6 +6779,93 @@ function EDAPage({ datasetData }) {
                         <div ref={densityRef} className="eda-chart"></div>
                     </div>
                 </div>
+
+                {/* 目录对比（opt12） */}
+                {images && edaTab === 'dircompare' && (() => {
+                    const dirs = [...new Set(images.map(i => i.source_path).filter(Boolean))].sort();
+                    if (dirs.length < 2) return <div style={{padding:'20px', color:'var(--text-muted)'}}>只有一个目录时无对比数据。</div>;
+                    const palette2 = dirComparePalette;
+                    const categories = datasetData.categories || [];
+                    // 每个目录下各类别的标注数
+                    const dirCatCount = {};
+                    dirs.forEach(d => { dirCatCount[d] = {}; categories.forEach(c => { dirCatCount[d][c] = 0; }); });
+                    images.forEach(img => {
+                        const d = img.source_path;
+                        if (!d || !dirCatCount[d]) return;
+                        (img.annotations || []).forEach(ann => {
+                            if (ann.category && dirCatCount[d][ann.category] !== undefined)
+                                dirCatCount[d][ann.category] = (dirCatCount[d][ann.category] || 0) + 1;
+                        });
+                    });
+                    // 每个目录的图片数
+                    const dirImgCount = {};
+                    dirs.forEach(d => { dirImgCount[d] = images.filter(i => i.source_path === d).length; });
+                    // 每个目录的总标注数
+                    const dirAnnTotal = {};
+                    dirs.forEach(d => { dirAnnTotal[d] = Object.values(dirCatCount[d]).reduce((a,b)=>a+b,0); });
+                    return (
+                        <div className="eda-section">
+                            <h3 className="eda-section-title">目录对比</h3>
+                            {/* 汇总表 */}
+                            <div className="eda-card" style={{overflowX:'auto'}}>
+                                <div className="eda-card-title">各目录概况</div>
+                                <table style={{width:'100%', borderCollapse:'collapse', fontSize:'13px'}}>
+                                    <thead>
+                                        <tr style={{background:'var(--bg-raised)', borderBottom:'1px solid var(--border)'}}>
+                                            <th style={{padding:'8px 12px', textAlign:'left', color:'var(--text-secondary)'}}>目录</th>
+                                            <th style={{padding:'8px 12px', textAlign:'right', color:'var(--text-secondary)'}}>图片数</th>
+                                            <th style={{padding:'8px 12px', textAlign:'right', color:'var(--text-secondary)'}}>标注数</th>
+                                            <th style={{padding:'8px 12px', textAlign:'right', color:'var(--text-secondary)'}}>每图平均标注</th>
+                                            {categories.map(cat => <th key={cat} style={{padding:'8px 12px', textAlign:'right', color:'var(--text-secondary)'}}>{cat}</th>)}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {dirs.map((d, i) => (
+                                            <tr key={d} style={{borderBottom:'1px solid var(--border)', background: i%2===0?'transparent':'var(--bg-soft)'}}>
+                                                <td style={{padding:'7px 12px', color:'var(--text-secondary)', fontFamily:'monospace', fontSize:'12px'}}>{d || '（根目录）'}</td>
+                                                <td style={{padding:'7px 12px', textAlign:'right', color:'var(--accent)'}}>{dirImgCount[d]}</td>
+                                                <td style={{padding:'7px 12px', textAlign:'right', color:'var(--success)'}}>{dirAnnTotal[d]}</td>
+                                                <td style={{padding:'7px 12px', textAlign:'right', color:'var(--warning)'}}>{dirImgCount[d] > 0 ? (dirAnnTotal[d]/dirImgCount[d]).toFixed(1) : '—'}</td>
+                                                {categories.map(cat => (
+                                                    <td key={cat} style={{padding:'7px 12px', textAlign:'right', color:'var(--text-secondary)'}}>{dirCatCount[d][cat] || 0}</td>
+                                                ))}
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {/* 各类别在各目录的分布柱状图 */}
+                            <div style={{display:'flex', flexWrap:'wrap', gap:'16px', marginTop:'8px'}}>
+                                {categories.map((cat, ci) => {
+                                    const counts = dirs.map(d => dirCatCount[d][cat] || 0);
+                                    const maxCount = Math.max(...counts, 1);
+                                    return (
+                                        <div key={cat} className="eda-card" style={{minWidth:'200px', flex:'1'}}>
+                                            <div className="eda-card-title" style={{fontSize:'13px'}}>{cat}</div>
+                                            <div style={{display:'flex', flexDirection:'column', gap:'5px', padding:'6px 0'}}>
+                                                {dirs.map((d, di) => {
+                                                    const cnt = dirCatCount[d][cat] || 0;
+                                                    const pct = dirImgCount[d] > 0 ? (cnt / dirImgCount[d] * 100).toFixed(1) : 0;
+                                                    return (
+                                                        <div key={d}>
+                                                            <div style={{fontSize:'11px', color:'var(--text-muted)', marginBottom:'2px'}} title={d}>{d || '根目录'}</div>
+                                                            <div style={{display:'flex', alignItems:'center', gap:'6px'}}>
+                                                                <div style={{flex:1, background:'var(--bg-hover)', borderRadius:'3px', height:'12px', position:'relative'}}>
+                                                                    <div style={{width:`${cnt/maxCount*100}%`, background:palette2[ci%palette2.length], borderRadius:'3px', height:'100%', transition:'width 0.3s'}} />
+                                                                </div>
+                                                                <span style={{fontSize:'11px', color:'var(--text-secondary)', minWidth:'50px', textAlign:'right'}}>{cnt} ({pct}%)</span>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    );
+                })()}
             </div>
         </div>
     );
