@@ -190,7 +190,7 @@ html, body, #root {
 .top-toolbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     padding: 12px 20px;
     background: var(--bg-surface);
     border-bottom: 1px solid var(--border);
@@ -207,6 +207,9 @@ html, body, #root {
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    width: 100%;
 }
 
 /* 标签页 */
@@ -876,6 +879,11 @@ html, body, #root {
     border-left: 1px solid var(--border);
     display: flex;
     flex-direction: column;
+}
+
+.viewer-sidebar-left {
+    border-left: none;
+    border-right: 1px solid var(--border);
 }
 
 .viewer-sidebar-header {
@@ -1582,6 +1590,70 @@ html, body, #root {
     gap: 10px;
     padding: 16px 20px;
     border-top: 1px solid var(--border);
+}
+
+.settings-modal {
+    width: min(920px, 94vw);
+    max-width: 94vw !important;
+}
+
+.settings-layout {
+    display: flex;
+    gap: 14px;
+    min-height: 520px;
+}
+
+.settings-nav {
+    width: 170px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-right: 1px solid var(--border);
+    padding-right: 12px;
+}
+
+.settings-nav-item {
+    border: 1px solid var(--border);
+    background: var(--bg-soft);
+    color: var(--text-secondary);
+    border-radius: 8px;
+    padding: 8px 10px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.settings-nav-item.active {
+    background: var(--accent-soft);
+    color: var(--text-primary);
+    border-color: var(--accent);
+}
+
+.settings-panel {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    max-height: calc(90vh - 210px);
+    padding-right: 4px;
+}
+
+@media (max-width: 760px) {
+    .settings-layout {
+        flex-direction: column;
+        min-height: 0;
+    }
+    .settings-nav {
+        width: 100%;
+        flex-direction: row;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        padding-right: 0;
+        padding-bottom: 10px;
+        overflow-x: auto;
+    }
+    .settings-nav-item {
+        white-space: nowrap;
+    }
 }
 
 /* 帮助模态框 */
@@ -3265,6 +3337,9 @@ html, body, #root {
         gap: 8px;
         flex-wrap: wrap;
     }
+    .toolbar-right {
+        justify-content: flex-start;
+    }
     .chat-topbar {
         padding: 8px 10px;
         gap: 8px;
@@ -3367,6 +3442,13 @@ html, body, #root {
 @media (max-width: 480px) {
     .top-toolbar {
         padding: 8px;
+    }
+    .toolbar-right {
+        align-items: stretch;
+    }
+    .top-toolbar .filter-select,
+    .top-toolbar .filter-input {
+        min-height: 34px;
     }
     .chat-model-badge {
         padding: 2px 7px;

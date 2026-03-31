@@ -1,103 +1,103 @@
 {
   "dataset_3": {
-    "coco_json_path": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/merged_dataset_a4a7f5e2bffa3301.json",
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/延锋门板-缺陷集/images"
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
   },
   "dataset_0": {
-    "coco_json_path": "/Users/rookie/Desktop/线上训练集漏检/merged_dataset_beae543b32da568e.json",
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Desktop/线上训练集漏检/miss_20260330_2026-03-29"
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
   },
   "dataset_1": {
-    "coco_json_path": "/Users/rookie/Desktop/误检统计/0320_v21-3plus_sampled_images/merged_dataset_37fc080421ac9244.json",
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Desktop/误检统计/0320_v21-3plus_sampled_images"
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
   },
   "dataset_2": {
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
+  },
+  "dataset_4": {
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
+  },
+  "dataset_5": {
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
+  },
+  "dataset_6": {
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
+  },
+  "dataset_7": {
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
+  },
+  "dataset_8": {
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
+  },
+  "dataset_9": {
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
+  },
+  "dataset_10": {
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
+  },
+  "dataset_11": {
+    "coco_json_path": "/Users/rookie/Desktop/线上训练集漏检/merged_dataset_beae543b32da568e.json",
+    "dataset_name": "dataset",
+    "image_dir": "/Users/rookie/Desktop/线上训练集漏检/miss_20260330_2026-03-29"
+  },
+  "dataset_12": {
     "coco_json_path": "/Users/rookie/Desktop/误检统计/0320_v21-3plus_sampled_images/merged_dataset_37fc080421ac9244.json",
     "dataset_name": "dataset",
     "image_dir": "/Users/rookie/Desktop/误检统计/0320_v21-3plus_sampled_images"
   },
-  "dataset_4": {
-    "coco_json_path": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/merged_dataset_a4a7f5e2bffa3301.json",
-    "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/延锋门板-缺陷集/images"
-  },
-  "dataset_5": {
-    "coco_json_path": "/Users/rookie/Desktop/线上训练集漏检/merged_dataset_beae543b32da568e.json",
-    "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Desktop/线上训练集漏检/miss_20260330_2026-03-29"
-  },
-  "dataset_6": {
-    "coco_json_path": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/merged_dataset_a4a7f5e2bffa3301.json",
-    "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/延锋门板-缺陷集/images"
-  },
-  "dataset_7": {
-    "coco_json_path": "/Users/rookie/Desktop/线上训练集漏检/merged_dataset_beae543b32da568e.json",
-    "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Desktop/线上训练集漏检/miss_20260330_2026-03-29"
-  },
-  "dataset_8": {
-    "coco_json_path": "/Users/rookie/Desktop/线上训练集漏检/merged_dataset_beae543b32da568e.json",
-    "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Desktop/线上训练集漏检/miss_20260330_2026-03-29"
-  },
-  "dataset_9": {
-    "coco_json_path": "/Users/rookie/Desktop/线上训练集漏检/merged_dataset_beae543b32da568e.json",
-    "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Desktop/线上训练集漏检/miss_20260330_2026-03-29"
-  },
-  "dataset_10": {
-    "coco_json_path": "/Users/rookie/Desktop/线上训练集漏检/merged_dataset_beae543b32da568e.json",
-    "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Desktop/线上训练集漏检/miss_20260330_2026-03-29"
-  },
-  "dataset_11": {
-    "coco_json_path": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/merged_dataset_a4a7f5e2bffa3301.json",
-    "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/延锋门板-缺陷集/images"
-  },
-  "dataset_12": {
-    "coco_json_path": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/merged_dataset_a4a7f5e2bffa3301.json",
-    "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/延锋门板-缺陷集/images"
-  },
   "dataset_13": {
-    "coco_json_path": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/merged_dataset_a4a7f5e2bffa3301.json",
+    "coco_json_path": "/Users/rookie/Desktop/误检统计/0320_v21-3plus_sampled_images/merged_dataset_37fc080421ac9244.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/延锋门板-缺陷集/images"
+    "image_dir": "/Users/rookie/Desktop/误检统计/0320_v21-3plus_sampled_images"
   },
   "dataset_14": {
-    "coco_json_path": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/merged_dataset_a4a7f5e2bffa3301.json",
+    "coco_json_path": "/Users/rookie/Desktop/误检统计/0320_v21-3plus_sampled_images/merged_dataset_37fc080421ac9244.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/延锋门板-缺陷集/images"
+    "image_dir": "/Users/rookie/Desktop/误检统计/0320_v21-3plus_sampled_images"
   },
   "dataset_15": {
-    "coco_json_path": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/merged_dataset_a4a7f5e2bffa3301.json",
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/延锋门板-缺陷集/images"
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
   },
   "dataset_16": {
-    "coco_json_path": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/merged_dataset_a4a7f5e2bffa3301.json",
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/延锋门板-缺陷集/images"
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
   },
   "dataset_17": {
-    "coco_json_path": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/merged_dataset_a4a7f5e2bffa3301.json",
+    "coco_json_path": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_829716309f07bf6b.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-压痕/延锋门板-缺陷集/images"
+    "image_dir": "/Users/rookie/Desktop/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-缺陷集/images"
   },
   "dataset_18": {
-    "coco_json_path": "/Users/rookie/Desktop/历史漏检图片/merged_dataset_20260326_230719.json",
+    "coco_json_path": "/Users/rookie/Desktop/线上训练集漏检/merged_dataset_beae543b32da568e.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Desktop/历史漏检图片"
+    "image_dir": "/Users/rookie/Desktop/线上训练集漏检/miss_20260330_2026-03-29"
   },
   "dataset_19": {
-    "coco_json_path": "/Users/rookie/Downloads/coco_train5602_20260327_131038/merged_dataset_20260327_131119.json",
+    "coco_json_path": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/merged_dataset_fcca5f3677c8ccd8.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Downloads/coco_train5602_20260327_131038"
+    "image_dir": "/Users/rookie/Downloads/延锋门板问题跟踪 - 样本复核跟踪记录-每日漏检/延锋门板-极限集/images"
   },
   "dataset_20": {
     "coco_json_path": "/Users/rookie/Downloads/coco_train5623_20260328_095636/merged_dataset_20260328_095726.json",
