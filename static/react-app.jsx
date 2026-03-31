@@ -582,8 +582,205 @@ function App() {
     const [showHelpModal, setShowHelpModal] = useState(false);
     // EDA → 宫格联动：点击图表类别后跳转宫格并过滤
     const [galleryJumpCategory, setGalleryJumpCategory] = useState(null);
+    const [agentFilterIds, setAgentFilterIds] = useState(null);
+    const [agentFilterMsg, setAgentFilterMsg] = useState('');
     // EDA → 宫格联动：点击散点后跳转并打开对应图片
     const [galleryJumpImageId, setGalleryJumpImageId] = useState(null);
+
+    // ── 聊天会话持久化 ──────────────────────────────────────
+    const [chatSessions, setChatSessions] = useState(() => {
+        try {
+            const raw = localStorage.getItem('cocovis_chat_sessions');
+            return raw ? JSON.parse(raw) : [];
+        } catch { return []; }
+    });
+    const [activeChatId, setActiveChatId] = useState(() => {
+        try { return localStorage.getItem('cocovis_active_chat_id') || null; }
+        catch { return null; }
+    });
+
+    // 任何会话变更时持久化
+    useEffect(() => {
+        try { localStorage.setItem('cocovis_chat_sessions', JSON.stringify(chatSessions)); }
+        catch {}
+    }, [chatSessions]);
+    useEffect(() => {
+        try {
+            if (activeChatId) localStorage.setItem('cocovis_active_chat_id', activeChatId);
+            else localStorage.removeItem('cocovis_active_chat_id');
+        } catch {}
+    }, [activeChatId]);
+
+    // ── 流式状态（App 层，切页不丢）────────────────────────
+    const [streamingInfo, setStreamingInfo] = useState(null); // {sessionId, msgId} | null
+
+    // 会话管理回调
+    const newChatSession = useCallback(() => {
+        const id = `chat_${Date.now()}`;
+        const sess = { id, title: '新对话', messages: [], createdAt: Date.now(), updatedAt: Date.now() };
+        setChatSessions(prev => [sess, ...prev]);
+        setActiveChatId(id);
+        return id;
+    }, []);
+
+    const updateChatMessages = useCallback((id, messages) => {
+        setChatSessions(prev => prev.map(s => s.id !== id ? s : {
+            ...s, messages,
+            title: messages.find(m => m.role === 'user')?.content?.slice(0, 28) || s.title,
+            updatedAt: Date.now(),
+        }));
+    }, []);
+
+    const deleteChatSession = useCallback((id) => {
+        setChatSessions(prev => prev.filter(s => s.id !== id));
+        setActiveChatId(prev => {
+            if (prev !== id) return prev;
+            const remaining = chatSessions.filter(s => s.id !== id);
+            return remaining[0]?.id || null;
+        });
+    }, [chatSessions]);
+
+    // ── sendChatMessage：在 App 层执行，切页不中断 ─────────
+    const sendChatMessage = useCallback(async (content, attachments = [], sessionIdHint, systemPromptOverride, forcedSkillIds = []) => {
+        const apiUrl = (configRef.current?.llm?.apiUrl || 'https://api.openai.com/v1/chat/completions').replace(/\/$/, '');
+        const apiKey = configRef.current?.llm?.apiKey || '';
+        const model = configRef.current?.llm?.model || 'gpt-4o-mini';
+        const maxTokens = configRef.current?.llm?.maxTokens || 2000;
+        const customSystemPrompt = systemPromptOverride !== undefined
+            ? systemPromptOverride
+            : (configRef.current?.llm?.systemPrompt || '');
+
+        // 确保有会话
+        let sessionId = sessionIdHint || activeChatId;
+        if (!sessionId || !chatSessions.find(s => s.id === sessionId)) {
+            sessionId = newChatSession();
+        }
+
+        // 获取当前会话的 messages（快照）
+        const currentMsgs = chatSessions.find(s => s.id === sessionId)?.messages || [];
+
+        const userMsg = { role: 'user', content, id: Date.now(), attachments };
+        const aId = Date.now() + 1;
+        const aMsg = { role: 'assistant', id: aId, steps: [], conclusion: '' };
+
+        // 先写入用户消息 + 空 assistant 占位
+        updateChatMessages(sessionId, [...currentMsgs, userMsg, aMsg]);
+        setStreamingInfo({ sessionId, msgId: aId });
+
+        // 函数式更新 assistant 消息（不依赖 stale ref）
+        const updateMsg = (updater) => {
+            setChatSessions(prev => prev.map(s => s.id !== sessionId ? s : {
+                ...s,
+                messages: s.messages.map(m => m.id === aId ? updater(m) : m),
+                updatedAt: Date.now(),
+            }));
+        };
+
+        // 历史消息（供 LLM 上下文）
+        const history = currentMsgs.flatMap(m => {
+            if (m.role === 'user') return [{ role: 'user', content: m.content }];
+            if (m.role === 'assistant' && m.conclusion) return [{ role: 'assistant', content: m.conclusion }];
+            return [];
+        });
+
+        try {
+            const res = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    messages: [...history, { role: 'user', content }],
+                    api_url: apiUrl, api_key: apiKey, model,
+                    max_tokens: maxTokens,
+                    dataset_id: datasetData?.dataset_id,
+                    attachments,
+                    custom_system_prompt: customSystemPrompt,
+                    forced_skill_ids: Array.isArray(forcedSkillIds) ? forcedSkillIds : [],
+                })
+            });
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buf = '';
+
+            const processEvent = (evt) => {
+                if (!evt?.type) return;
+                switch (evt.type) {
+                    case 'status':
+                        updateMsg(m => ({ ...m, steps: [...(m.steps || []), { type: 'status', msg: evt.msg }] }));
+                        break;
+                    case 'code':
+                        updateMsg(m => ({ ...m, steps: [...(m.steps || []), { type: 'code', code: evt.code, index: evt.index }] }));
+                        break;
+                    case 'search_result':
+                        updateMsg(m => ({ ...m, steps: [...(m.steps || []), { type: 'search_result', query: evt.query, result: evt.result }] }));
+                        break;
+                    case 'code_result':
+                        updateMsg(m => ({ ...m, steps: [...(m.steps || []), { type: 'code_result', result: evt.result, index: evt.index }] }));
+                        break;
+                    case 'ui_action': {
+                        const action = evt.action || {};
+                        if (action.type === 'navigate') {
+                            setPage(action.page);
+                        } else if (action.type === 'filter_gallery') {
+                            setAgentFilterIds(action.image_ids || []);
+                            setAgentFilterMsg(action.description || 'Agent 筛选结果');
+                        } else if (action.type === 'show_chart') {
+                            updateMsg(m => ({ ...m, steps: [...(m.steps || []), { type: 'chart', chart: action.chart }] }));
+                        } else if (action.type === 'show_table') {
+                            updateMsg(m => ({ ...m, steps: [...(m.steps || []), { type: 'table', table: action.table }] }));
+                        } else if (action.type === 'load_dataset') {
+                            // 触发数据集加载
+                            fetch('/api/load_dataset', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    coco_path: action.coco_json_path,
+                                    image_dir: action.image_dir || '',
+                                    dataset_name: action.dataset_name || '',
+                                })
+                            }).then(r => r.json()).then(d => {
+                                if (d.error) {
+                                    updateMsg(m => ({ ...m, conclusion: (m.conclusion || '') + `\n\n⚠️ 加载数据集失败：${d.error}` }));
+                                }
+                            }).catch(() => {});
+                        }
+                        break;
+                    }
+                    case 'conclusion_start':
+                        updateMsg(m => ({ ...m, steps: (m.steps || []).filter(s => s.type !== 'status') }));
+                        break;
+                    case 'conclusion':
+                        updateMsg(m => ({ ...m, conclusion: (m.conclusion || '') + evt.content }));
+                        break;
+                    case 'error':
+                        updateMsg(m => ({ ...m, conclusion: (m.conclusion || '') + `\n\n⚠️ **错误：** ${evt.msg}` }));
+                        break;
+                }
+            };
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += decoder.decode(value, { stream: true });
+                const parts = buf.split('\n');
+                buf = parts.pop();
+                for (const part of parts) {
+                    const line = part.trim();
+                    if (!line.startsWith('data:')) continue;
+                    const raw = line.slice(5).trim();
+                    if (raw === '[DONE]') break;
+                    try { processEvent(JSON.parse(raw)); } catch (_) {}
+                }
+            }
+        } catch (e) {
+            updateMsg(m => ({ ...m, conclusion: `⚠️ 请求失败：${e.message}` }));
+        }
+        setStreamingInfo(null);
+    }, [activeChatId, chatSessions, datasetData, newChatSession, updateChatMessages]);
+
+    // 用 ref 暴露最新 config 给 sendChatMessage 闭包（避免闭包过期）
+    const appConfig = useConfig();
+    const configRef = useRef(appConfig);
+    useEffect(() => { configRef.current = appConfig; }, [appConfig]);
 
     // 标注保存后同步更新内存中的 annotations（避免重新拉取整个列表）
     const updateAnnotationsLocal = useCallback((imageId, newAnns) => {
@@ -592,10 +789,36 @@ function App() {
         ));
     }, []);
 
+    const handleAgentFilter = useCallback((imageIds, message) => {
+        // Agent 过滤：跳转到图库并用 imageId 集合过滤
+        if (imageIds && imageIds.length > 0) {
+            setGalleryJumpImageId(null);
+            setGalleryJumpCategory(null);
+            setAgentFilterIds(imageIds);
+            setAgentFilterMsg(message || '');
+            setPage('gallery');
+        }
+    }, []);
+
     return (
         <div className="app-container">
             <SidebarNav page={page} setPage={setPage} datasetLoaded={!!datasetData} onOpenSettings={() => setShowSettingsModal(true)} onOpenHelp={() => setShowHelpModal(true)} />
             {page === 'load' && <LoadPage onLoad={loadDataset} onLoadMerged={loadDatasetMerged} loading={loading} />}
+            {page === 'chat' && (
+                <ChatPage
+                    datasetData={datasetData}
+                    images={images}
+                    onFilterByIds={handleAgentFilter}
+                    sessions={chatSessions}
+                    activeChatId={activeChatId}
+                    streamingInfo={streamingInfo}
+                    onSendMessage={sendChatMessage}
+                    onNewSession={newChatSession}
+                    onUpdateMessages={updateChatMessages}
+                    onDeleteSession={deleteChatSession}
+                    onSwitchSession={setActiveChatId}
+                />
+            )}
             {page === 'gallery' && datasetData && (
                 <GalleryPage
                     datasetData={datasetData}
@@ -620,6 +843,9 @@ function App() {
                     onJumpHandled={() => setGalleryJumpCategory(null)}
                     jumpToImageId={galleryJumpImageId}
                     onJumpImageHandled={() => setGalleryJumpImageId(null)}
+                    agentFilterIds={agentFilterIds}
+                    agentFilterMsg={agentFilterMsg}
+                    onClearAgentFilter={() => { setAgentFilterIds(null); setAgentFilterMsg(''); }}
                 />
             )}
             {page === 'eda' && datasetData && (
@@ -654,6 +880,7 @@ function SidebarNav({ page, setPage, datasetLoaded, onOpenSettings, onOpenHelp }
                     <div className={`nav-item ${page === 'eda' ? 'active' : ''}`} onClick={() => setPage('eda')} title={nav.edaTitle}>📊</div>
                 </>
             )}
+            <div className={`nav-item ${page === 'chat' ? 'active' : ''}`} onClick={() => setPage('chat')} title="AI 数据助手">🤖</div>
             <div className="nav-divider"></div>
             <div className="nav-item" onClick={() => onOpenSettings && onOpenSettings()} title="设置">⚙️</div>
             <div className="nav-item" onClick={() => onOpenHelp && onOpenHelp()} title="使用文档">📖</div>
@@ -1152,6 +1379,1411 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
         </div>
     );
 }
+
+// ==================== AI Chat 系统（Agent 模式） ====================
+
+// 解析消息文本，分割为「普通文本段」和「代码块段」
+function parseMessageBlocks(text) {
+    const blocks = [];
+    const codeRe = /```(\w*)\n?([\s\S]*?)```/g;
+    let lastIndex = 0;
+    let m;
+    while ((m = codeRe.exec(text)) !== null) {
+        if (m.index > lastIndex) {
+            blocks.push({ type: 'text', content: text.slice(lastIndex, m.index) });
+        }
+        blocks.push({ type: 'code', lang: m[1] || 'text', content: m[2] });
+        lastIndex = m.index + m[0].length;
+    }
+    if (lastIndex < text.length) {
+        blocks.push({ type: 'text', content: text.slice(lastIndex) });
+    }
+    return blocks;
+}
+
+// 内联 Markdown 渲染（粗体/斜体/行内代码/链接/删除线）
+function renderInlineMarkdown(text) {
+    return text
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/__(.*?)__/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/_(.*?)_/g, '<em>$1</em>')
+        .replace(/~~(.*?)~~/g, '<del>$1</del>')
+        .replace(/`([^`]+)`/g, '<code class="chat-inline-code">$1</code>')
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+}
+
+// 渲染一段普通文本（支持标题/有序列表/无序列表/引用/分隔线）
+function ChatTextBlock({ content }) {
+    const lines = content.split('\n');
+    const elements = [];
+    let listItems = null;
+    let listType = null; // 'ul' | 'ol'
+
+    const flushList = () => {
+        if (!listItems) return;
+        const Tag = listType;
+        elements.push(<Tag key={`list-${elements.length}`} className="chat-list">{listItems}</Tag>);
+        listItems = null;
+        listType = null;
+    };
+
+    lines.forEach((line, i) => {
+        const trimmed = line.trim();
+
+        // 分隔线
+        if (/^(-{3,}|={3,}|\*{3,})$/.test(trimmed)) {
+            flushList();
+            elements.push(<hr key={i} style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '8px 0' }} />);
+            return;
+        }
+        // 标题
+        if (/^#{1,6}\s/.test(line)) {
+            flushList();
+            const lvl = line.match(/^(#+)/)[1].length;
+            const txt = line.replace(/^#+\s*/, '');
+            const Tag = `h${Math.min(lvl + 2, 6)}`;
+            elements.push(<Tag key={i} className={`chat-heading chat-h${lvl}`}
+                dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(txt) }} />);
+            return;
+        }
+        // 引用块
+        if (/^>\s/.test(line)) {
+            flushList();
+            const txt = line.replace(/^>\s*/, '');
+            elements.push(
+                <blockquote key={i} style={{ borderLeft: '3px solid var(--accent)', paddingLeft: '10px', margin: '4px 0', color: 'var(--text-muted)', fontStyle: 'italic' }}
+                    dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(txt) }} />
+            );
+            return;
+        }
+        // 无序列表
+        if (/^[-*+]\s/.test(trimmed)) {
+            if (listType !== 'ul') { flushList(); listType = 'ul'; listItems = []; }
+            const txt = trimmed.replace(/^[-*+]\s/, '');
+            listItems.push(<li key={i} dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(txt) }} />);
+            return;
+        }
+        // 有序列表
+        if (/^\d+[.)]\s/.test(trimmed)) {
+            if (listType !== 'ol') { flushList(); listType = 'ol'; listItems = []; }
+            const txt = trimmed.replace(/^\d+[.)]\s/, '');
+            listItems.push(<li key={i} dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(txt) }} />);
+            return;
+        }
+        // 空行
+        if (trimmed === '') {
+            flushList();
+            if (elements.length > 0) elements.push(<div key={i} style={{ height: '5px' }} />);
+            return;
+        }
+        // 普通段落
+        flushList();
+        elements.push(<p key={i} className="chat-p"
+            dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(line) }} />);
+    });
+    flushList();
+    return <>{elements}</>;
+}
+
+// 代码块：带语言标签 + 复制 + 运行筛选按钮
+function ChatCodeBlock({ lang, code, datasetId, onFilterByIds }) {
+    const [copied, setCopied] = useState(false);
+    const [running, setRunning] = useState(false);
+    const [runResult, setRunResult] = useState(null);
+    const isPython = lang === 'python' || lang === 'py';
+
+    const copyCode = () => {
+        navigator.clipboard.writeText(code).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        });
+    };
+
+    const runFilter = async () => {
+        if (running) return;
+        setRunning(true);
+        setRunResult(null);
+        try {
+            const res = await fetch('/api/chat/run_code', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code, dataset_id: datasetId })
+            });
+            const d = await res.json();
+            if (d.success) {
+                if (d.type === 'filter') {
+                    // 筛选模式：跳转图库
+                    if (d.image_ids && d.image_ids.length > 0) {
+                        setRunResult({ ok: true, type: 'filter', count: d.count, output: d.output });
+                        onFilterByIds && onFilterByIds(d.image_ids, `AI 代码筛选结果（${d.count} 张）`);
+                    } else {
+                        setRunResult({ ok: true, type: 'filter', count: 0, msg: '没有符合条件的图片' });
+                    }
+                } else {
+                    // 报告/统计模式：展示输出文本
+                    setRunResult({ ok: true, type: 'report', output: d.output });
+                }
+            } else {
+                setRunResult({ ok: false, msg: d.error || '执行失败' });
+            }
+        } catch (e) {
+            setRunResult({ ok: false, msg: String(e) });
+        }
+        setRunning(false);
+    };
+
+    return (
+        <div className="chat-code-block">
+            <div className="chat-code-header">
+                <span className="chat-code-lang">{lang || 'code'}</span>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    {isPython && (
+                        <button className="chat-code-btn chat-code-btn-run" onClick={runFilter} disabled={running} title="在图库中运行筛选">
+                            {running ? '⏳' : '▶'} {running ? '运行中' : '运行筛选'}
+                        </button>
+                    )}
+                    <button className="chat-code-btn" onClick={copyCode} title="复制代码">
+                        {copied ? '✓ 已复制' : '复制'}
+                    </button>
+                </div>
+            </div>
+            <pre className="chat-code-pre"><code>{code}</code></pre>
+            {runResult && (
+                <div className={`chat-code-result ${runResult.ok ? 'ok' : 'err'}`}>
+                    {!runResult.ok && <span>✗ {runResult.msg}</span>}
+                    {runResult.ok && runResult.type === 'filter' && (
+                        runResult.count > 0
+                            ? <span>✅ 已跳转图库，共 {runResult.count} 张图片{runResult.output ? `（${runResult.output}）` : ''}</span>
+                            : <span>ℹ️ {runResult.msg}</span>
+                    )}
+                    {runResult.ok && runResult.type === 'report' && (
+                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '12px' }}>
+                            {runResult.output}
+                        </pre>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+// 完整消息渲染器（文本 + 代码块混排）
+function ChatMessageRenderer({ content, datasetId, onFilterByIds }) {
+    const blocks = parseMessageBlocks(content);
+    return (
+        <div className="chat-msg-content">
+            {blocks.map((b, i) =>
+                b.type === 'code'
+                    ? <ChatCodeBlock key={i} lang={b.lang} code={b.content} datasetId={datasetId} onFilterByIds={onFilterByIds} />
+                    : <ChatTextBlock key={i} content={b.content} />
+            )}
+        </div>
+    );
+}
+
+// 快捷提问建议
+const CHAT_SUGGESTIONS = [
+    '按条件筛选并打包数据集（先预览，再导出 zip）',
+    '将筛选结果导出为 zip，标注文件固定为 _annotations.coco.json',
+    '把统计结果做成图表并显示明细表格',
+    '统计各类别的标注框数量',
+    '找出标注框数量超过10个的图片',
+    '筛选出没有任何标注的图片',
+    '找出包含面积小于100像素的目标的图片',
+    '分析数据集的类别分布是否均衡',
+    '找出宽高比大于5的细长框',
+];
+
+// Agent 消息气泡 — 渲染一条 assistant 消息（含思考步骤、代码执行、最终结论）
+// ── Chart 渲染组件（Chart.js via CDN）────────────────────────────────────────
+function AgentChart({ chart }) {
+    const canvasRef = useRef(null);
+    const chartRef = useRef(null);
+    const containerId = useRef('chart_' + Math.random().toString(36).slice(2));
+
+    useEffect(() => {
+        if (!chart || !canvasRef.current) return;
+
+        const COLORS = ['#4e79a7','#f28e2b','#e15759','#76b7b2','#59a14f',
+                         '#edc948','#b07aa1','#ff9da7','#9c755f','#bab0ac'];
+
+        const buildDatasets = () => {
+            return (chart.datasets || []).map((ds, di) => {
+                const bg = ds.backgroundColor || (
+                    ['pie','doughnut','radar'].includes(chart.chart_type)
+                        ? (chart.labels || []).map((_, li) => COLORS[li % COLORS.length])
+                        : COLORS[di % COLORS.length]
+                );
+                return { ...ds, backgroundColor: bg, borderColor: typeof bg === 'string' ? bg : undefined, borderWidth: 1 };
+            });
+        };
+
+        const loadChart = () => {
+            if (window.Chart) {
+                if (chartRef.current) { chartRef.current.destroy(); }
+                chartRef.current = new window.Chart(canvasRef.current, {
+                    type: chart.chart_type || 'bar',
+                    data: { labels: chart.labels || [], datasets: buildDatasets() },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            legend: { display: (chart.datasets || []).length > 1 || ['pie','doughnut'].includes(chart.chart_type) },
+                            title: chart.title ? { display: true, text: chart.title, font: { size: 13 } } : { display: false },
+                        },
+                        scales: ['pie','doughnut','radar'].includes(chart.chart_type) ? {} : {
+                            x: { ticks: { maxRotation: 45 } },
+                            y: { beginAtZero: true },
+                        },
+                    },
+                });
+            } else {
+                // 动态加载 Chart.js
+                const s = document.createElement('script');
+                s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js';
+                s.onload = loadChart;
+                document.head.appendChild(s);
+            }
+        };
+        loadChart();
+        return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; } };
+    }, [chart]);
+
+    if (!chart) return null;
+    return (
+        <div className="agent-chart-wrap">
+            <canvas ref={canvasRef} style={{ maxHeight: '280px' }} />
+        </div>
+    );
+}
+
+function AgentTable({ table }) {
+    const [open, setOpen] = useState(false);
+    const rows = Array.isArray(table?.rows) ? table.rows : [];
+    const cols = rows.length > 0 && typeof rows[0] === 'object'
+        ? Object.keys(rows[0])
+        : ['value'];
+    const previewRows = rows.slice(0, 8);
+
+    return (
+        <div className="agent-chart-wrap">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <strong>{table?.title || '数据预览'}</strong>
+                <button className="chat-code-btn" onClick={() => setOpen(true)}>
+                    查看详情 ({table?.total_rows || rows.length} 行)
+                </button>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                        <tr>{cols.map(c => <th key={c} style={{ textAlign: 'left', borderBottom: '1px solid var(--border)', padding: '6px 8px' }}>{c}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                        {previewRows.map((r, i) => (
+                            <tr key={i}>
+                                {cols.map(c => <td key={c} style={{ borderBottom: '1px solid var(--border)', padding: '6px 8px' }}>{String(r?.[c] ?? '')}</td>)}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+            {open && (
+                <div className="modal-overlay" onClick={() => setOpen(false)}>
+                    <div className="modal-content" style={{ maxWidth: '980px', width: '92vw', maxHeight: '85vh' }} onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>{table?.title || '数据预览'}（{table?.total_rows || rows.length} 行）</h3>
+                            <button className="modal-close" onClick={() => setOpen(false)}>✕</button>
+                        </div>
+                        <div style={{ padding: 12, overflow: 'auto', maxHeight: '72vh' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                                <thead>
+                                    <tr>{cols.map(c => <th key={c} style={{ textAlign: 'left', borderBottom: '1px solid var(--border)', padding: '8px 10px', position: 'sticky', top: 0, background: 'var(--bg-soft)' }}>{c}</th>)}</tr>
+                                </thead>
+                                <tbody>
+                                    {rows.map((r, i) => (
+                                        <tr key={i}>
+                                            {cols.map(c => <td key={c} style={{ borderBottom: '1px solid var(--border)', padding: '7px 10px' }}>{String(r?.[c] ?? '')}</td>)}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function AgentBubble({ msg, datasetId, onFilterByIds, onAdoptCodeTemplate, isStreaming }) {
+    const [codeExpanded, setCodeExpanded] = useState({});
+    const toggleCode = (i) => setCodeExpanded(p => ({ ...p, [i]: !p[i] }));
+    const getFilterActions = (result) => (
+        (result?.ui_actions || []).filter(
+            a => a?.type === 'filter_gallery' && Array.isArray(a.image_ids) && a.image_ids.length > 0
+        )
+    );
+
+    // 渲染执行结果内的文件下载列表
+    const renderFiles = (files) => {
+        if (!files || files.length === 0) return null;
+        return (
+            <div className="agent-file-list">
+                {files.map((f, fi) => (
+                    <a key={fi} href={`/api/chat/download/${f.file_id}`} download={f.filename}
+                        className="agent-file-chip" target="_blank" rel="noreferrer">
+                        📄 {f.filename}
+                    </a>
+                ))}
+            </div>
+        );
+    };
+
+    return (
+        <div className="agent-bubble">
+            {(msg.steps || []).map((step, i) => (
+                <div key={i} className={`agent-step ${step.type}`}>
+                    {step.type === 'status' && (
+                        <span className="agent-step-status">{step.msg}</span>
+                    )}
+                    {step.type === 'search_result' && (
+                        <div className="agent-search-wrap">
+                            <div className="agent-code-header">
+                                <span>🌐 搜索：{step.query}</span>
+                            </div>
+                            <pre className="agent-exec-output" style={{ maxHeight: '150px' }}>{step.result}</pre>
+                        </div>
+                    )}
+                    {step.type === 'code' && (
+                        <div className="agent-code-wrap">
+                            <div className="agent-code-header" onClick={() => toggleCode(i)} style={{ cursor: 'pointer' }}>
+                                <span>🐍 分析代码 {codeExpanded[i] ? '▾' : '▸'}</span>
+                                <div style={{ display: 'flex', gap: 6 }}>
+                                    <button
+                                        className="chat-code-btn"
+                                        onClick={e => {
+                                            e.stopPropagation();
+                                            onAdoptCodeTemplate?.(step.code || '', 'AI 生成代码模板');
+                                        }}>
+                                        采纳为模板
+                                    </button>
+                                    <button className="chat-code-btn" onClick={e => { e.stopPropagation(); navigator.clipboard?.writeText(step.code); }}>复制</button>
+                                </div>
+                            </div>
+                            {codeExpanded[i] && <pre className="chat-code-pre" style={{ margin: 0 }}><code>{step.code}</code></pre>}
+                        </div>
+                    )}
+                    {step.type === 'code_result' && (
+                        <div className={`agent-exec-result ${step.result?.type === 'error' ? 'err' : 'ok'}`}>
+                            {step.result?.type === 'filter' && (
+                                <div>
+                                    <span>✅ 找到 <strong>{step.result.image_ids?.length}</strong> 张图片</span>
+                                    {step.result.image_ids?.length > 0 && (
+                                        <button className="chat-code-btn chat-code-btn-run" style={{ marginLeft: '10px' }}
+                                            onClick={() => onFilterByIds?.(step.result.image_ids, `Agent 筛选（${step.result.image_ids.length} 张）`)}>
+                                            🔍 在图库查看
+                                        </button>
+                                    )}
+                                    {step.result.output && <pre className="agent-exec-output">{step.result.output}</pre>}
+                                    {renderFiles(step.result.files)}
+                                </div>
+                            )}
+                            {step.result?.type === 'report' && (
+                                <div>
+                                    {getFilterActions(step.result).map((a, ai) => (
+                                        <button
+                                            key={ai}
+                                            className="chat-code-btn chat-code-btn-run"
+                                            style={{ marginBottom: 8, marginRight: 8 }}
+                                            onClick={() => onFilterByIds?.(
+                                                a.image_ids,
+                                                a.description || `Agent 筛选（${a.image_ids.length} 张）`
+                                            )}>
+                                            🔍 在图库查看（{a.image_ids.length} 张）
+                                        </button>
+                                    ))}
+                                    <pre className="agent-exec-output">{step.result.output}</pre>
+                                    {renderFiles(step.result.files)}
+                                </div>
+                            )}
+                            {step.result?.type === 'error' && (
+                                <pre className="agent-exec-output err">{step.result.output}</pre>
+                            )}
+                        </div>
+                    )}
+                    {step.type === 'chart' && (
+                        <AgentChart chart={step.chart} />
+                    )}
+                    {step.type === 'table' && (
+                        <AgentTable table={step.table} />
+                    )}
+                </div>
+            ))}
+            {(msg.conclusion || isStreaming) && (
+                <div className="agent-conclusion">
+                    {msg.conclusion
+                        ? <ChatMessageRenderer content={msg.conclusion} datasetId={datasetId} onFilterByIds={onFilterByIds} />
+                        : <span className="chat-cursor-blink">▋</span>}
+                    {isStreaming && msg.conclusion && <span className="chat-cursor-blink"> ▋</span>}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function ChatPage({ datasetData, images, onFilterByIds,
+    sessions = [], activeChatId, streamingInfo, onSendMessage,
+    onNewSession, onUpdateMessages, onDeleteSession, onSwitchSession }) {
+
+    const config = useConfig();
+    const llmCfg = config.llm || {};
+    const apiKey = llmCfg.apiKey || '';
+    const model = llmCfg.model || 'gpt-4o-mini';
+
+    // 当前会话的 messages 来自 sessions props（持久化在 App 层）
+    const activeSession = sessions.find(s => s.id === activeChatId) || null;
+    const messages = activeSession?.messages || [];
+
+    // 当前 streaming 状态从 App 层 streamingInfo 读取
+    const streaming = streamingInfo !== null;
+    const activeStreamMsgId = streamingInfo?.msgId || null;
+
+    const [input, setInput] = useState('');
+    const [attachments, setAttachments] = useState([]);
+    const [uploading, setUploading] = useState(false);
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+    const [showSysPrompt, setShowSysPrompt] = useState(false);
+    const [localSysPrompt, setLocalSysPrompt] = useState(() => llmCfg.systemPrompt || '');
+    const [showCodeLibrary, setShowCodeLibrary] = useState(false);
+    const [showAgentRegistry, setShowAgentRegistry] = useState(false);
+    const [agentModules, setAgentModules] = useState([]);
+    const [agentSkills, setAgentSkills] = useState([]);
+    const [agentUploading, setAgentUploading] = useState(false);
+    const [pendingRegModal, setPendingRegModal] = useState(null); // { module, selected:Set<string> }
+    const [skillImportReport, setSkillImportReport] = useState([]);
+    const [pinnedSkillIds, setPinnedSkillIds] = useState(() => {
+        try {
+            const raw = localStorage.getItem('cocovis_pinned_skill_ids');
+            const a = raw ? JSON.parse(raw) : [];
+            return Array.isArray(a) ? a : [];
+        } catch (_) {
+            return [];
+        }
+    });
+    const [codeTemplates, setCodeTemplates] = useState(() => {
+        try {
+            const raw = localStorage.getItem('cocovis_chat_code_templates');
+            const parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (_) {
+            return [];
+        }
+    });
+    const [activeTemplateId, setActiveTemplateId] = useState('');
+    const [templateName, setTemplateName] = useState('');
+    const [templateCode, setTemplateCode] = useState('');
+    const [templateRunResult, setTemplateRunResult] = useState(null);
+    const [templateRunning, setTemplateRunning] = useState(false);
+
+    const messagesEndRef = useRef(null);
+    const inputRef = useRef(null);
+    const fileInputRef = useRef(null);
+    const agentFileInputRef = useRef(null);
+    const agentSkillZipInputRef = useRef(null);
+    
+
+    // 确保进入聊天页面时至少有一个会话
+    useEffect(() => {
+        if (!activeChatId || !sessions.find(s => s.id === activeChatId)) {
+            if (sessions.length > 0) {
+                onSwitchSession(sessions[0].id);
+            } else {
+                onNewSession();
+            }
+        }
+    }, []);
+
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('cocovis_chat_code_templates', JSON.stringify(codeTemplates));
+        } catch (_) {
+            // ignore quota errors
+        }
+    }, [codeTemplates]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('cocovis_pinned_skill_ids', JSON.stringify(pinnedSkillIds));
+        } catch (_) {
+            // ignore
+        }
+    }, [pinnedSkillIds]);
+
+    const togglePinSkill = useCallback((skillId) => {
+        if (!skillId) return;
+        setPinnedSkillIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(skillId)) next.delete(skillId);
+            else next.add(skillId);
+            return Array.from(next);
+        });
+    }, []);
+
+    // 更新当前会话 messages（供 clearCurrentChat 等本地操作使用）
+    const setMessages = useCallback((updater) => {
+        if (!activeChatId) return;
+        onUpdateMessages(activeChatId, typeof updater === 'function' ? updater(messages) : updater);
+    }, [activeChatId, messages, onUpdateMessages]);
+
+    // ── 文件上传处理 ──────────────────────────────────────
+    const handleFileSelect = async (e) => {
+        const files = Array.from(e.target.files || []);
+        if (!files.length) return;
+        setUploading(true);
+        const results = [];
+        for (const file of files) {
+            const fd = new FormData();
+            fd.append('file', file);
+            try {
+                const res = await fetch('/api/chat/upload', { method: 'POST', body: fd });
+                const data = await res.json();
+                if (data.error) {
+                    alert(`上传失败：${data.error}`);
+                } else {
+                    results.push(data);
+                }
+            } catch (err) {
+                alert(`上传失败：${err.message}`);
+            }
+        }
+        setAttachments(prev => [...prev, ...results]);
+        setUploading(false);
+        // 清空 input 值以允许重复选同一文件
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
+    const removeAttachment = (i) => setAttachments(prev => prev.filter((_, idx) => idx !== i));
+
+    // sendMessage 现在委托给 App 层的 onSendMessage
+    const sendMessage = (text) => {
+        const content = (text || input).trim();
+        if (!content || streaming) return;
+        setInput('');
+        const sentAttachments = [...attachments];
+        setAttachments([]);
+        onSendMessage(content, sentAttachments, activeChatId, localSysPrompt, pinnedSkillIds);
+    };
+
+    const handleInputChange = (e) => {
+        const val = e.target.value;
+        setInput(val);
+    };
+
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    };
+    const clearCurrentChat = () => {
+        if (messages.length === 0 || window.confirm('确定清空当前对话记录？')) {
+            if (activeChatId) onUpdateMessages(activeChatId, []);
+        }
+    };
+    const deleteCurrentSession = () => {
+        if (!activeChatId) return;
+        if (window.confirm('确定删除此对话？')) onDeleteSession(activeChatId);
+    };
+
+    const datasetId = datasetData?.dataset_id;
+    const activeTemplate = codeTemplates.find(t => t.id === activeTemplateId) || null;
+
+    const resetTemplateEditor = useCallback(() => {
+        setActiveTemplateId('');
+        setTemplateName('');
+        setTemplateCode('');
+        setTemplateRunResult(null);
+    }, []);
+
+    const chooseTemplate = useCallback((id) => {
+        const tpl = codeTemplates.find(t => t.id === id);
+        if (!tpl) return;
+        setActiveTemplateId(tpl.id);
+        setTemplateName(tpl.name || '');
+        setTemplateCode(tpl.code || '');
+        setTemplateRunResult(null);
+    }, [codeTemplates]);
+
+    const saveTemplate = useCallback(() => {
+        const code = (templateCode || '').trim();
+        if (!code) {
+            alert('代码不能为空');
+            return;
+        }
+        const name = (templateName || '').trim() || '未命名代码块';
+        const now = Date.now();
+        if (activeTemplate) {
+            setCodeTemplates(prev => prev.map(t => (
+                t.id === activeTemplate.id
+                    ? { ...t, name, code: templateCode, updatedAt: now }
+                    : t
+            )));
+        } else {
+            const id = `tpl_${now}_${Math.random().toString(36).slice(2, 7)}`;
+            const next = { id, name, code: templateCode, createdAt: now, updatedAt: now };
+            setCodeTemplates(prev => [next, ...prev]);
+            setActiveTemplateId(id);
+        }
+        setTemplateRunResult(null);
+    }, [activeTemplate, templateCode, templateName]);
+
+    const removeTemplate = useCallback(() => {
+        if (!activeTemplate) return;
+        if (!window.confirm(`确认删除模板「${activeTemplate.name}」？`)) return;
+        setCodeTemplates(prev => prev.filter(t => t.id !== activeTemplate.id));
+        resetTemplateEditor();
+    }, [activeTemplate, resetTemplateEditor]);
+
+    const runTemplateCode = useCallback(async () => {
+        const code = (templateCode || '').trim();
+        if (!code) {
+            alert('请先输入要执行的代码');
+            return;
+        }
+        if (!datasetId) {
+            alert('请先加载数据集');
+            return;
+        }
+        setTemplateRunning(true);
+        setTemplateRunResult(null);
+        try {
+            const res = await fetch('/api/chat/run_code', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code, dataset_id: datasetId }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error) {
+                setTemplateRunResult({ ok: false, error: data.error || `执行失败（${res.status}）` });
+                return;
+            }
+            setTemplateRunResult({ ok: true, data });
+        } catch (err) {
+            setTemplateRunResult({ ok: false, error: err?.message || '执行失败' });
+        } finally {
+            setTemplateRunning(false);
+        }
+    }, [datasetId, templateCode]);
+
+    const adoptAgentCodeTemplate = useCallback((code, defaultName) => {
+        const safeCode = String(code || '').trim();
+        if (!safeCode) return;
+        setShowCodeLibrary(true);
+        setActiveTemplateId('');
+        setTemplateName(defaultName || 'AI 采纳模板');
+        setTemplateCode(safeCode);
+        setTemplateRunResult(null);
+    }, []);
+
+    const loadAgentModules = useCallback(async () => {
+        try {
+            const [res1, res2] = await Promise.all([
+                fetch('/api/agent_modules'),
+                fetch('/api/agent_skills'),
+            ]);
+            const d1 = await res1.json().catch(() => ({}));
+            const d2 = await res2.json().catch(() => ({}));
+            if (!res1.ok || d1.error) throw new Error(d1.error || `加载模块失败（${res1.status}）`);
+            if (!res2.ok || d2.error) throw new Error(d2.error || `加载skills失败（${res2.status}）`);
+            setAgentModules(Array.isArray(d1.modules) ? d1.modules : []);
+            setAgentSkills(Array.isArray(d2.skills) ? d2.skills : []);
+        } catch (err) {
+            alert(`加载自定义 Agent 模块失败：${err?.message || err}`);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (showAgentRegistry) loadAgentModules();
+    }, [showAgentRegistry, loadAgentModules]);
+
+    useEffect(() => {
+        if (!agentSkills.length) return;
+        const valid = new Set(agentSkills.map((s) => s.id).filter(Boolean));
+        setPinnedSkillIds((prev) => {
+            const next = prev.filter((id) => valid.has(id));
+            return next.length === prev.length ? prev : next;
+        });
+    }, [agentSkills]);
+
+    const confirmRegisterAgentModule = useCallback(async (m) => {
+        const candidates = Array.isArray(m?.register_candidates) ? m.register_candidates : [];
+        if (!candidates.length) {
+            alert('未检测到可注册函数');
+            return;
+        }
+        const names = candidates.map(c => c?.name).filter(Boolean);
+        const selected = new Set(names);
+        setPendingRegModal({ module: m, selected });
+    }, []);
+
+    const submitPendingRegistration = useCallback(async () => {
+        if (!pendingRegModal?.module) return;
+        const selected = Array.from(pendingRegModal.selected || []);
+        if (!selected.length) {
+            alert('请至少选择一个方法');
+            return;
+        }
+        try {
+            const res = await fetch(`/api/agent_modules/${pendingRegModal.module.id}/register_functions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ functions: selected }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error) throw new Error(data.error || `注册失败（${res.status}）`);
+            setPendingRegModal(null);
+            await loadAgentModules();
+        } catch (err) {
+            alert(`注册失败：${err?.message || err}`);
+        }
+    }, [loadAgentModules, pendingRegModal]);
+
+    const uploadAgentModule = useCallback(async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        if (!String(file.name || '').toLowerCase().endsWith('.py')) {
+            alert('仅支持上传 .py 脚本');
+            e.target.value = '';
+            return;
+        }
+        setAgentUploading(true);
+        try {
+            const fd = new FormData();
+            fd.append('file', file);
+            const name = file.name.replace(/\.py$/i, '');
+            fd.append('name', name);
+            fd.append('enabled', 'true');
+            const res = await fetch('/api/agent_modules/upload', { method: 'POST', body: fd });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error) throw new Error(data.error || `上传失败（${res.status}）`);
+            if (data.need_registration && data.module) {
+                setShowAgentRegistry(true);
+                setTimeout(() => { confirmRegisterAgentModule(data.module); }, 50);
+            }
+            await loadAgentModules();
+        } catch (err) {
+            alert(`上传失败：${err?.message || err}`);
+        } finally {
+            setAgentUploading(false);
+            if (agentFileInputRef.current) agentFileInputRef.current.value = '';
+        }
+    }, [confirmRegisterAgentModule, loadAgentModules]);
+
+    const importSkillZip = useCallback(async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        if (!String(file.name || '').toLowerCase().endsWith('.zip')) {
+            alert('仅支持 .zip');
+            e.target.value = '';
+            return;
+        }
+        setAgentUploading(true);
+        try {
+            const fd = new FormData();
+            fd.append('file', file);
+            const res = await fetch('/api/agent_modules/import_skill_zip', { method: 'POST', body: fd });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error) throw new Error(data.error || `导入失败（${res.status}）`);
+            setSkillImportReport(Array.isArray(data.skill_reports) ? data.skill_reports : []);
+            await loadAgentModules();
+        } catch (err) {
+            alert(`导入 skills 失败：${err?.message || err}`);
+        } finally {
+            setAgentUploading(false);
+            if (agentSkillZipInputRef.current) agentSkillZipInputRef.current.value = '';
+        }
+    }, [loadAgentModules]);
+
+    const toggleAgentModule = useCallback(async (m) => {
+        try {
+            const res = await fetch(`/api/agent_modules/${m.id}/toggle`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: !m.enabled }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error) throw new Error(data.error || `操作失败（${res.status}）`);
+            await loadAgentModules();
+        } catch (err) {
+            alert(`切换失败：${err?.message || err}`);
+        }
+    }, [loadAgentModules]);
+
+    const removeAgentModule = useCallback(async (m) => {
+        if (!window.confirm(`确认删除模块「${m.name || m.id}」？`)) return;
+        try {
+            const res = await fetch(`/api/agent_modules/${m.id}`, { method: 'DELETE' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error) throw new Error(data.error || `删除失败（${res.status}）`);
+            await loadAgentModules();
+        } catch (err) {
+            alert(`删除失败：${err?.message || err}`);
+        }
+    }, [loadAgentModules]);
+
+    // 格式化会话时间
+    const fmtTime = (ts) => {
+        if (!ts) return '';
+        const d = new Date(ts);
+        const now = new Date();
+        const diff = now - d;
+        if (diff < 60000) return '刚刚';
+        if (diff < 3600000) return `${Math.floor(diff / 60000)} 分前`;
+        if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`;
+        return `${d.getMonth() + 1}/${d.getDate()}`;
+    };
+
+    return (
+        <div className="chat-page">
+            {/* ── 左侧会话列表 ── */}
+            <div className={`chat-sessions-panel ${sidebarCollapsed ? 'collapsed' : ''}`}>
+                <div className="chat-sessions-header">
+                    {!sidebarCollapsed && <span className="chat-sessions-title">💬 对话记录</span>}
+                    <button className="chat-session-icon-btn" title={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+                        onClick={() => setSidebarCollapsed(v => !v)}>
+                        {sidebarCollapsed ? '▶' : '◀'}
+                    </button>
+                </div>
+                {!sidebarCollapsed && (
+                    <>
+                        <button className="chat-new-session-btn" onClick={() => onNewSession()}
+                            disabled={streaming}>
+                            ✏️ 新建对话
+                        </button>
+                        <div className="chat-sessions-list">
+                            {sessions.length === 0 && (
+                                <div className="chat-sessions-empty">暂无对话记录</div>
+                            )}
+                            {sessions.map(sess => {
+                                const isBusy = streamingInfo?.sessionId === sess.id;
+                                return (
+                                    <div key={sess.id}
+                                        className={`chat-session-item ${sess.id === activeChatId ? 'active' : ''}`}
+                                        onClick={() => onSwitchSession(sess.id)}>
+                                        <div className="chat-session-title">
+                                            {isBusy && <span className="chat-session-busy">⏳ </span>}
+                                            {sess.title || '新对话'}
+                                        </div>
+                                        <div className="chat-session-meta">{fmtTime(sess.updatedAt)}</div>
+                                        <button className="chat-session-del"
+                                            onClick={e => { e.stopPropagation(); onDeleteSession(sess.id); }}
+                                            title="删除对话">×</button>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </>
+                )}
+            </div>
+
+            {/* ── 右侧聊天区域 ── */}
+            <div className="chat-main">
+                <div className="chat-topbar">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span className="chat-topbar-title">🤖 AI 数据 Agent</span>
+                        <span className="chat-model-badge">{model}</span>
+                        {datasetData && <span className="chat-model-badge" style={{ background: 'var(--success)', color: '#fff', borderColor: 'var(--success)', fontSize: '11px', opacity: 0.85 }}>📂 {datasetData.dataset_name}</span>}
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        {!apiKey && <span className="chat-warn-badge">⚠ 未配置 API Key</span>}
+                        <button className="vbtn vbtn-neutral" style={{ fontSize: '12px', padding: '3px 10px' }}
+                            onClick={() => setShowCodeLibrary(true)}>
+                            🧩 代码块库
+                        </button>
+                        <button className="vbtn vbtn-neutral" style={{ fontSize: '12px', padding: '3px 10px' }}
+                            onClick={() => setShowAgentRegistry(true)}>
+                            🧠 自定义Agent
+                        </button>
+                        {messages.length > 0 && (
+                            <button className="vbtn vbtn-neutral" style={{ fontSize: '12px', padding: '3px 10px' }}
+                                onClick={clearCurrentChat}>🗑 清空</button>
+                        )}
+                        {activeChatId && (
+                            <button className="vbtn vbtn-neutral" style={{ fontSize: '12px', padding: '3px 10px' }}
+                                onClick={deleteCurrentSession}>🗑 删除对话</button>
+                        )}
+                    </div>
+                </div>
+
+                <div className="chat-messages">
+                    {messages.length === 0 && (
+                        <div className="chat-empty">
+                            <div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.5 }}>🤖</div>
+                            <div className="chat-empty-title">AI 数据集分析 Agent</div>
+                            <div className="chat-empty-hint">
+                                {datasetData
+                                    ? `已加载「${datasetData.dataset_name}」— Agent 会自动执行代码并基于真实数据回答`
+                                    : '加载数据集后，Agent 可基于真实数据执行分析'}
+                            </div>
+                            <div className="chat-suggestions">
+                                {CHAT_SUGGESTIONS.map((s, i) => (
+                                    <button key={i} className="chat-suggestion-chip" onClick={() => sendMessage(s)}>{s}</button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {messages.map(msg => (
+                        <div key={msg.id} className={`chat-bubble-row ${msg.role}`}>
+                            <div className="chat-avatar">{msg.role === 'user' ? '🧑' : '🤖'}</div>
+                            <div className={`chat-bubble ${msg.role}`}>
+                                {msg.role === 'user'
+                                    ? <div className="chat-msg-content">
+                                        <ChatTextBlock content={msg.content} />
+                                        {(msg.attachments || []).length > 0 && (
+                                            <div className="chat-user-attachments">
+                                                {msg.attachments.map((a, i) => (
+                                                    <span key={i} className="chat-att-chip">
+                                                        {a.type === 'image' ? '🖼' : a.type === 'csv' ? '📊' : a.type === 'json' ? '📋' : '📄'} {a.name}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
+                                      </div>
+                        : <AgentBubble
+                            msg={msg}
+                            datasetId={datasetId}
+                            onFilterByIds={onFilterByIds}
+                            onAdoptCodeTemplate={adoptAgentCodeTemplate}
+                            isStreaming={msg.id === activeStreamMsgId}
+                        />
+                            }
+                        </div>
+                    </div>
+                ))}
+                    <div ref={messagesEndRef} />
+                </div>
+
+                {showAgentRegistry && (
+                    <div className="modal-overlay" onClick={() => setShowAgentRegistry(false)}>
+                        <div className="modal-content chat-agent-registry-modal" onClick={e => e.stopPropagation()}>
+                            <div className="modal-header">
+                                <h3>自定义 Agent 注册中心</h3>
+                                <button className="modal-close" onClick={() => setShowAgentRegistry(false)}>✕</button>
+                            </div>
+                            <div className="chat-agent-registry-body">
+                                <div className="chat-agent-registry-toolbar">
+                                    <input
+                                        ref={agentFileInputRef}
+                                        type="file"
+                                        accept=".py"
+                                        style={{ display: 'none' }}
+                                        onChange={uploadAgentModule}
+                                    />
+                                    <input
+                                        ref={agentSkillZipInputRef}
+                                        type="file"
+                                        accept=".zip"
+                                        style={{ display: 'none' }}
+                                        onChange={importSkillZip}
+                                    />
+                                    <button className="vbtn vbtn-primary" onClick={() => agentFileInputRef.current?.click()} disabled={agentUploading}>
+                                        {agentUploading ? '⏳ 上传中...' : '⬆ 导入 Python 脚本'}
+                                    </button>
+                                    <button className="vbtn vbtn-neutral" onClick={() => agentSkillZipInputRef.current?.click()} disabled={agentUploading}>
+                                        📦 导入 Skills(zip)
+                                    </button>
+                                    <button className="vbtn vbtn-neutral" onClick={loadAgentModules}>刷新</button>
+                                    <span className="chat-model-badge">.py 可注册函数；skills.zip 仅按 SKILL.md 标准导入</span>
+                                </div>
+                                <div className="chat-agent-registry-list">
+                                    {agentModules.length === 0 && <div className="chat-sessions-empty">暂无模块，先导入一个 .py 脚本</div>}
+                                    {agentModules.map((m) => (
+                                        <div key={m.id} className="chat-agent-module-card">
+                                            <div className="chat-agent-module-head">
+                                                <div>
+                                                    <strong>{m.name || m.id}</strong>
+                                                    <div className="chat-agent-module-meta">{m.path}</div>
+                                                </div>
+                                                <div style={{ display: 'flex', gap: 8 }}>
+                                                    <button className="chat-code-btn" onClick={() => toggleAgentModule(m)}>
+                                                        {m.enabled ? '停用' : '启用'}
+                                                    </button>
+                                                    <button className="chat-code-btn" onClick={() => removeAgentModule(m)}>删除</button>
+                                                </div>
+                                            </div>
+                                            {!!(m.tools || []).length && (
+                                                <div className="agent-file-list" style={{ marginTop: 8 }}>
+                                                    {(m.tools || []).map((t, i) => (
+                                                        <span key={i} className="agent-file-chip">🔧 {t}</span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {m.error && <pre className="agent-exec-output err" style={{ marginTop: 8 }}>{m.error}</pre>}
+                                            {m.pending_registration && !!(m.register_candidates || []).length && (
+                                                <div style={{ marginTop: 8 }}>
+                                                    <div className="chat-agent-module-meta" style={{ marginBottom: 6 }}>
+                                                        脚本未实现 register()，请确认要注册的方法：
+                                                    </div>
+                                                    <div className="agent-file-list">
+                                                        {(m.register_candidates || []).map((c, i) => (
+                                                            <span key={i} className="agent-file-chip">ƒ {c.name}</span>
+                                                        ))}
+                                                    </div>
+                                                    <button
+                                                        className="chat-code-btn chat-code-btn-run"
+                                                        style={{ marginTop: 8 }}
+                                                        onClick={() => confirmRegisterAgentModule(m)}>
+                                                        确认并注册方法
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="chat-agent-registry-list">
+                                    <div className="chat-agent-module-card">
+                                        <div className="chat-agent-module-head">
+                                            <strong>已导入 Skills（标准 SKILL.md）</strong>
+                                            <span className="chat-model-badge">{agentSkills.length} 个</span>
+                                        </div>
+                                        {agentSkills.length === 0 && (
+                                            <div className="chat-sessions-empty" style={{ marginTop: 8 }}>暂无 skills</div>
+                                        )}
+                                        {agentSkills.map((s, i) => (
+                                            <div key={s.id || i} className="chat-agent-skill-item">
+                                                <div>
+                                                    <strong>{s.name}</strong>
+                                                    {!!s.cursor_name && (
+                                                        <span className="chat-model-badge" style={{ marginLeft: 8 }}>id: {s.cursor_name}</span>
+                                                    )}
+                                                    <div className="chat-agent-module-meta">{s.path}</div>
+                                                    <div className="chat-agent-module-meta">
+                                                        匹配次数：{s.load_count || 0}
+                                                        {s.last_matched_at ? ` · 最近命中：${new Date(s.last_matched_at).toLocaleString()}` : ''}
+                                                    </div>
+                                                    <label className="chat-skill-pin-row">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={pinnedSkillIds.includes(s.id)}
+                                                            onChange={() => togglePinSkill(s.id)}
+                                                        />
+                                                        <span>固定到对话（每轮注入，对齐 Cursor 手动启用）</span>
+                                                    </label>
+                                                </div>
+                                                {!!(s.keywords || []).length && (
+                                                    <div className="agent-file-list">
+                                                        {(s.keywords || []).slice(0, 8).map((k, ki) => (
+                                                            <span key={ki} className="agent-file-chip">#{k}</span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                {!!(s.scripts || []).length && (
+                                                    <div className="agent-file-list" style={{ marginTop: 6 }}>
+                                                        {(s.scripts || []).slice(0, 6).map((sp, si) => (
+                                                            <span key={si} className="agent-file-chip">🐍 {sp.rel_path || sp.name}</span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                {!!(s.configs || []).length && (
+                                                    <div className="agent-file-list" style={{ marginTop: 6 }}>
+                                                        {(s.configs || []).slice(0, 8).map((c, ci) => (
+                                                            <span key={ci} className="agent-file-chip">
+                                                                ⚙ {typeof c === 'string' ? c : c.rel_path}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                {!!(s.warnings || []).length && (
+                                                    <pre className="agent-exec-output" style={{ marginTop: 6 }}>
+{`校验提示：\n- ${s.warnings.join('\n- ')}`}
+                                                    </pre>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {!!skillImportReport.length && (
+                                        <div className="chat-agent-module-card">
+                                            <strong>最近一次 Skills 导入报告</strong>
+                                            <div className="chat-agent-registry-list" style={{ marginTop: 8 }}>
+                                                {skillImportReport.map((r, i) => (
+                                                    <div key={i} className="chat-agent-skill-item">
+                                                        <div><strong>{r.name}</strong> {r.valid ? '✅' : '⚠️'}</div>
+                                                        {!!(r.keywords || []).length && (
+                                                            <div className="agent-file-list">
+                                                                {(r.keywords || []).map((k, ki) => (
+                                                                    <span key={ki} className="agent-file-chip">#{k}</span>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                        {!!(r.configs || []).length && (
+                                                            <div className="agent-file-list" style={{ marginTop: 6 }}>
+                                                                {(r.configs || []).map((cr, cri) => (
+                                                                    <span key={cri} className="agent-file-chip">⚙ {cr}</span>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                        {!!(r.warnings || []).length && (
+                                                            <pre className="agent-exec-output" style={{ marginTop: 6 }}>
+{`- ${r.warnings.join('\n- ')}`}
+                                                            </pre>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {pendingRegModal?.module && (
+                    <div className="modal-overlay" onClick={() => setPendingRegModal(null)}>
+                        <div className="modal-content chat-agent-registry-modal" onClick={e => e.stopPropagation()}>
+                            <div className="modal-header">
+                                <h3>确认注册方法：{pendingRegModal.module.name || pendingRegModal.module.id}</h3>
+                                <button className="modal-close" onClick={() => setPendingRegModal(null)}>✕</button>
+                            </div>
+                            <div className="chat-agent-registry-body">
+                                <div className="chat-agent-registry-list">
+                                    {(pendingRegModal.module.register_candidates || []).map((c, i) => {
+                                        const checked = pendingRegModal.selected.has(c.name);
+                                        return (
+                                            <label key={i} className="chat-agent-candidate-row">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    onChange={(e) => {
+                                                        setPendingRegModal(prev => {
+                                                            if (!prev) return prev;
+                                                            const next = new Set(prev.selected || []);
+                                                            if (e.target.checked) next.add(c.name);
+                                                            else next.delete(c.name);
+                                                            return { ...prev, selected: next };
+                                                        });
+                                                    }}
+                                                />
+                                                <span><strong>{c.name}</strong>{c.description ? ` — ${c.description}` : ''}</span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                                <div className="chat-code-library-actions">
+                                    <button className="vbtn vbtn-neutral" onClick={() => setPendingRegModal(null)}>取消</button>
+                                    <button className="vbtn vbtn-primary" onClick={submitPendingRegistration}>确认注册</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {showCodeLibrary && (
+                    <div className="modal-overlay" onClick={() => setShowCodeLibrary(false)}>
+                        <div className="modal-content chat-code-library-modal" onClick={e => e.stopPropagation()}>
+                            <div className="modal-header">
+                                <h3>代码功能块库（可编辑 + 可执行）</h3>
+                                <button className="modal-close" onClick={() => setShowCodeLibrary(false)}>✕</button>
+                            </div>
+                            <div className="chat-code-library-body">
+                                <div className="chat-code-library-left">
+                                    <div className="chat-code-library-left-header">
+                                        <strong>已保存模板</strong>
+                                        <button className="chat-code-btn" onClick={resetTemplateEditor}>+ 新建</button>
+                                    </div>
+                                    <div className="chat-code-template-list">
+                                        {codeTemplates.length === 0 && (
+                                            <div className="chat-sessions-empty" style={{ padding: '8px 6px' }}>暂无模板</div>
+                                        )}
+                                        {codeTemplates.map(t => (
+                                            <button
+                                                key={t.id}
+                                                className={`chat-code-template-item ${activeTemplateId === t.id ? 'active' : ''}`}
+                                                onClick={() => chooseTemplate(t.id)}>
+                                                <span className="chat-code-template-name">{t.name}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="chat-code-library-right">
+                                    <input
+                                        className="chat-code-template-title"
+                                        value={templateName}
+                                        onChange={e => setTemplateName(e.target.value)}
+                                        placeholder="模板名称（例如：Hard Case 导出）"
+                                    />
+                                    <textarea
+                                        className="chat-code-template-editor"
+                                        value={templateCode}
+                                        onChange={e => setTemplateCode(e.target.value)}
+                                        placeholder={'输入可执行 Python 代码。\n可直接调用内置函数，例如：\nids = hard_cases(0.3, 0.6, 1)\nfilter_gallery(ids, "Hard Cases")'}
+                                    />
+                                    <div className="chat-code-library-actions">
+                                        <button className="vbtn vbtn-neutral" onClick={saveTemplate}>💾 保存模板</button>
+                                        <button className="vbtn vbtn-primary" onClick={runTemplateCode} disabled={templateRunning || !datasetId}>
+                                            {templateRunning ? '⏳ 执行中...' : '▶ 执行代码'}
+                                        </button>
+                                        <button className="vbtn vbtn-danger" onClick={removeTemplate} disabled={!activeTemplate}>🗑 删除模板</button>
+                                    </div>
+                                    {templateRunResult && (
+                                        <div className={`chat-code-run-result ${templateRunResult.ok ? 'ok' : 'err'}`}>
+                                            {!templateRunResult.ok && (
+                                                <pre className="agent-exec-output err">{templateRunResult.error}</pre>
+                                            )}
+                                            {templateRunResult.ok && (
+                                                <div>
+                                                    {templateRunResult.data.type !== 'filter' && ((templateRunResult.data.ui_actions || []).filter(
+                                                        a => a?.type === 'filter_gallery' && Array.isArray(a.image_ids) && a.image_ids.length > 0
+                                                    )).map((a, ai) => (
+                                                        <button
+                                                            key={ai}
+                                                            className="chat-code-btn chat-code-btn-run"
+                                                            style={{ marginBottom: 8, marginRight: 8 }}
+                                                            onClick={() => onFilterByIds?.(
+                                                                a.image_ids,
+                                                                a.description || `代码模板筛选（${a.image_ids.length} 张）`
+                                                            )}>
+                                                            🔍 在图库查看（{a.image_ids.length} 张）
+                                                        </button>
+                                                    ))}
+                                                    {templateRunResult.data.type === 'filter' ? (
+                                                        <div>
+                                                            <div>✅ 筛选到 <strong>{templateRunResult.data.count || 0}</strong> 张图片</div>
+                                                            {(templateRunResult.data.image_ids || []).length > 0 && (
+                                                                <button
+                                                                    className="chat-code-btn chat-code-btn-run"
+                                                                    style={{ marginTop: 8 }}
+                                                                    onClick={() => onFilterByIds?.(
+                                                                        templateRunResult.data.image_ids,
+                                                                        `代码模板筛选（${templateRunResult.data.image_ids.length} 张）`
+                                                                    )}>
+                                                                    🔍 在图库查看
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    ) : (
+                                                        <div>✅ 执行完成</div>
+                                                    )}
+                                                    {templateRunResult.data.output && (
+                                                        <pre className="agent-exec-output">{templateRunResult.data.output}</pre>
+                                                    )}
+                                                    {!!(templateRunResult.data.files || []).length && (
+                                                        <div className="agent-file-list">
+                                                            {(templateRunResult.data.files || []).map((f, idx) => (
+                                                                <a
+                                                                    key={idx}
+                                                                    href={`/api/chat/download/${f.file_id}`}
+                                                                    download={f.filename}
+                                                                    className="agent-file-chip"
+                                                                    target="_blank"
+                                                                    rel="noreferrer">
+                                                                    📄 {f.filename}
+                                                                </a>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {showSysPrompt && (
+                    <div className="chat-sysprompt-panel">
+                        <div className="chat-sysprompt-header">
+                            <span>系统提示词覆盖（本次对话生效）</span>
+                            <button className="chat-sysprompt-close" onClick={() => setShowSysPrompt(false)}>✕</button>
+                        </div>
+                        <textarea
+                            className="chat-sysprompt-input"
+                            value={localSysPrompt}
+                            onChange={e => setLocalSysPrompt(e.target.value)}
+                            placeholder="留空则使用全局设置中的系统提示词。此处内容会附加在内置 Agent 提示词之前。"
+                            rows={4}
+                        />
+                    </div>
+                )}
+                <div className="chat-input-bar">
+                    {attachments.length > 0 && (
+                        <div className="chat-attachments-row">
+                            {attachments.map((a, i) => (
+                                <div key={i} className="chat-att-preview">
+                                    {a.type === 'image'
+                                        ? <img src={`data:${a.mime};base64,${a.data}`} alt={a.name} className="chat-att-img" />
+                                        : <span className="chat-att-icon">{a.type === 'csv' ? '📊' : a.type === 'json' ? '📋' : '📄'}</span>
+                                    }
+                                    <span className="chat-att-name">{a.name}</span>
+                                    <button className="chat-att-remove" onClick={() => removeAttachment(i)}>×</button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    {pinnedSkillIds.length > 0 && (
+                        <div className="chat-pinned-skills-row">
+                            <span className="chat-pinned-skills-label">固定 Skills</span>
+                            {pinnedSkillIds.map((pid) => {
+                                const sk = agentSkills.find((x) => x.id === pid);
+                                return (
+                                    <span key={pid} className="agent-file-chip chat-pinned-skill-chip">
+                                        {sk?.name || String(pid).slice(0, 10)}
+                                        <button type="button" className="chat-pinned-skill-unpin" onClick={() => togglePinSkill(pid)} title="取消固定">×</button>
+                                    </span>
+                                );
+                            })}
+                        </div>
+                    )}
+                    <div className="chat-input-row">
+                        <input ref={fileInputRef} type="file" style={{ display: 'none' }}
+                            multiple accept=".jpg,.jpeg,.png,.gif,.webp,.csv,.json,.txt,.md"
+                            onChange={handleFileSelect} />
+                        <button className="chat-attach-btn" title="系统提示词设置"
+                            onClick={() => setShowSysPrompt(v => !v)}
+                            style={{ opacity: localSysPrompt ? 1 : 0.6 }}>
+                            ⚙️
+                        </button>
+                        <button className="chat-attach-btn" title="上传文件/图片"
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={streaming || uploading}>
+                            {uploading ? '⏳' : '📎'}
+                        </button>
+                        <textarea
+                            ref={inputRef}
+                            className="chat-input"
+                            value={input}
+                            onChange={handleInputChange}
+                            onKeyDown={handleKeyDown}
+                            placeholder={streaming ? 'Agent 正在分析...' : '可输入 "搜索 xxx" 联网搜索 · Shift+Enter 换行 · Enter 发送'}
+                            rows={1}
+                            disabled={streaming}
+                            style={{ resize: 'none', overflow: 'hidden' }}
+                            onInput={e => {
+                                e.target.style.height = 'auto';
+                                e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
+                            }}
+                        />
+                        <button
+                            className={`chat-send-btn ${streaming ? 'loading' : ''}`}
+                            onClick={() => sendMessage()}
+                            disabled={streaming || (!input.trim() && attachments.length === 0)}
+                            title="发送 (Enter)">
+                            {streaming ? '⏳' : '↑'}
+                        </button>
+                    </div>
+                </div>
+            </div>{/* end .chat-main */}
+        </div>
+    );
+}
+
+// ==================== AI Chat 系统结束 ====================
 
 // ==================== 预测评估工具函数 ====================
 
@@ -1738,7 +3370,7 @@ function PredEvalModal({ predModelNames, initModel, initIou, initScore, onApply,
 }
 
 // ==================== 图片宫格页面 ====================
-function GalleryPage({ datasetData, images, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, onUpdateCategory, onUpdateCategories, onUpdateNote, onBatchUpdateCategory, onBatchClearAnnotations, onRollback, metaFilterOptions, onApplyMetaFilters, autoSaveStatus, onAnnotationsSaved, onReloadImages, jumpToCategory, onJumpHandled, jumpToImageId, onJumpImageHandled }) {
+function GalleryPage({ datasetData, images, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, onUpdateCategory, onUpdateCategories, onUpdateNote, onBatchUpdateCategory, onBatchClearAnnotations, onRollback, metaFilterOptions, onApplyMetaFilters, autoSaveStatus, onAnnotationsSaved, onReloadImages, jumpToCategory, onJumpHandled, jumpToImageId, onJumpImageHandled, agentFilterIds, agentFilterMsg, onClearAgentFilter }) {
     const config = useConfig();
     const gallery = config.gallery || DEFAULT_CONFIG.gallery;
     const [currentPage, setCurrentPage] = useState(1);
@@ -1880,7 +3512,12 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     }, [imageEvalResults, predEvalEnabled]);
 
     // 筛选图片（与宫格一致；大图查看器用同一份列表翻页，filteredImages 直接传入 ImageViewer）
+    // Agent 过滤 ID 集合
+    const agentFilterSet = React.useMemo(() => agentFilterIds ? new Set(agentFilterIds) : null, [agentFilterIds]);
+
     const _filteredImages = React.useMemo(() => images.filter(img => {
+        // Agent 筛选优先
+        if (agentFilterSet && !agentFilterSet.has(img.image_id)) return false;
         if (selectedDirectory !== 'all' && (img.source_path != null ? img.source_path : '') !== selectedDirectory) return false;
         if (selectedLabelCategory !== 'all' && !img.annotations.some(a => a.category === selectedLabelCategory)) return false;
         if (showUnannotatedOnly && img.annotations && img.annotations.length > 0) return false;
@@ -1931,7 +3568,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
             if (predEvalFilter === 'fn' && !r.hasFN) return false;
         }
         return true;
-    }), [images, selectedDirectory, selectedLabelCategory, selectedImageCategory, searchText, imageClassifications, defaultImageCat, scoreMin, scoreMax, gtCountMin, gtCountMax, predCountMin, predCountMax, areaMax, predEvalEnabled, predEvalFilter, imageEvalResults, showUnannotatedOnly]);
+    }), [images, selectedDirectory, selectedLabelCategory, selectedImageCategory, searchText, imageClassifications, defaultImageCat, scoreMin, scoreMax, gtCountMin, gtCountMax, predCountMin, predCountMax, areaMax, predEvalEnabled, predEvalFilter, imageEvalResults, showUnannotatedOnly, agentFilterSet]);
 
     // 排序
     const filteredImages = React.useMemo(() => {
@@ -2048,6 +3685,14 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     return (
         <>
             <div className="main-content">
+                {agentFilterIds && agentFilterIds.length > 0 && (
+                    <div style={{ padding: '8px 16px', background: 'var(--accent-dim, rgba(99,102,241,0.12))', borderBottom: '1px solid var(--accent)', display: 'flex', alignItems: 'center', gap: '12px', fontSize: '13px' }}>
+                        <span style={{ flex: 1, color: 'var(--text-primary)' }}>
+                            🤖 <strong>Agent 筛选：</strong>{agentFilterMsg || `已筛选 ${agentFilterIds.length} 张图片`}
+                        </span>
+                        <button className="vbtn vbtn-on-red" style={{ fontSize: '12px', padding: '3px 10px' }} onClick={onClearAgentFilter}>✕ 清除筛选</button>
+                    </div>
+                )}
                 {hasMetaFilterCapability && (
                     <div className="meta-filter-bar">
                         <span style={{ fontWeight: 600, marginRight: '4px' }}>元数据筛选:</span>
@@ -2712,6 +4357,74 @@ function SettingsModal({ onClose }) {
                         </div>
                     </div>
                 </div>
+                    {/* LLM 配置 */}
+                    <div className="form-group" style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
+                        <label className="form-label">🤖 AI 数据助手 — LLM 配置</label>
+                        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                            支持 OpenAI 及兼容接口（如本地 Ollama、Qwen、DeepSeek 等）。API Key 仅保存在本地。
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            <div>
+                                <label style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>API 地址</label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    value={(config.llm || {}).apiUrl || 'https://api.openai.com/v1/chat/completions'}
+                                    onChange={e => setSettings(prev => ({ ...prev, llm: { ...(prev.llm || {}), apiUrl: e.target.value } }))}
+                                    placeholder="https://api.openai.com/v1/chat/completions"
+                                />
+                            </div>
+                            <div>
+                                <label style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>API Key</label>
+                                <input
+                                    type="password"
+                                    className="form-input"
+                                    value={(config.llm || {}).apiKey || ''}
+                                    onChange={e => setSettings(prev => ({ ...prev, llm: { ...(prev.llm || {}), apiKey: e.target.value } }))}
+                                    placeholder="sk-..."
+                                />
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <div style={{ flex: 1 }}>
+                                    <label style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>模型</label>
+                                    <input
+                                        type="text"
+                                        className="form-input"
+                                        value={(config.llm || {}).model || 'gpt-4o-mini'}
+                                        onChange={e => setSettings(prev => ({ ...prev, llm: { ...(prev.llm || {}), model: e.target.value } }))}
+                                        placeholder="gpt-4o-mini"
+                                    />
+                                </div>
+                                <div style={{ width: '100px' }}>
+                                    <label style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>最大 Token</label>
+                                    <input
+                                        type="number"
+                                        className="form-input"
+                                        value={(config.llm || {}).maxTokens || 2000}
+                                        onChange={e => setSettings(prev => ({ ...prev, llm: { ...(prev.llm || {}), maxTokens: parseInt(e.target.value) || 2000 } }))}
+                                        placeholder="2000"
+                                    />
+                                </div>
+                            </div>
+                            <p style={{ fontSize: 'var(--font-xs)', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                                💡 本地模型示例：Ollama 地址填 <code style={{ background: 'var(--bg-soft)', padding: '1px 4px', borderRadius: '3px' }}>http://localhost:11434/v1/chat/completions</code>，API Key 填任意字符串，模型填 <code style={{ background: 'var(--bg-soft)', padding: '1px 4px', borderRadius: '3px' }}>qwen2.5</code> 等本地已拉取的模型名。
+                            </p>
+                            <div>
+                                <label style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>
+                                    自定义系统提示词
+                                    <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-muted)', marginLeft: '6px' }}>（会附加在内置提示词之前，留空则只用内置提示词）</span>
+                                </label>
+                                <textarea
+                                    className="form-input"
+                                    rows={5}
+                                    style={{ resize: 'vertical', fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.5' }}
+                                    value={(config.llm || {}).systemPrompt || ''}
+                                    onChange={e => setSettings(prev => ({ ...prev, llm: { ...(prev.llm || {}), systemPrompt: e.target.value } }))}
+                                    placeholder={'例如：\n你是一个专注于行人检测数据集的分析专家，回答请尽量简洁，数字保留两位小数。'}
+                                />
+                            </div>
+                        </div>
+                    </div>
                 <div className="modal-footer">
                     <button type="button" className="btn btn-primary" onClick={onClose}>{st.closeButtonText || '关闭'}</button>
                 </div>
@@ -3186,9 +4899,8 @@ function Filmstrip({ images, currentIndex, datasetId, onNavigateTo }) {
             style={{
                 position: 'absolute',
                 bottom: '12px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                maxWidth: '80%',
+                left: '12px',
+                right: 'calc(var(--viewer-sidebar-width, 260px) + 12px)',
                 display: 'flex',
                 gap: '8px',
                 padding: '8px 12px',
@@ -6065,8 +7777,12 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                         const PRED_DASH_DESCS = ['— — —', '-- --', '· · ·', '—·—·', '——— '];
                         const allPredModels = [...new Set(allPredAnns.map(a => a._pred_source))];
                         const predAnns = allPredAnns;
-                        const predModels = allPredModels;
-                        const visibleCount = predAnns.filter(a => passesConfThreshold(a, confThreshold)).length;
+                        // 置信度过滤后，侧边栏仅展示符合阈值的预测框（不显示“划掉”项）
+                        const predRows = predAnns
+                            .map((ann, idx) => ({ ann, idx }))
+                            .filter(({ ann }) => passesConfThreshold(ann, confThreshold));
+                        const predModels = [...new Set(predRows.map(r => r.ann._pred_source))];
+                        const visibleCount = predRows.length;
                         const togglePredAnn = (globalIdx) => {
                             setHiddenPredAnns(prev => {
                                 const next = new Set(prev);
@@ -6075,7 +7791,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                             });
                         };
                         const toggleModelAll = (model) => {
-                            const idxs = predAnns.map((a, i) => a._pred_source === model ? i : -1).filter(i => i >= 0);
+                            const idxs = predRows.filter(r => r.ann._pred_source === model).map(r => r.idx);
                             const allHidden = idxs.every(i => hiddenPredAnns.has(i));
                             setHiddenPredAnns(prev => {
                                 const next = new Set(prev);
@@ -6090,8 +7806,10 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                     <span>预测标注</span>
                                     <span>{confThreshold > 0 ? `${visibleCount}/${predAnns.length}` : predAnns.length}</span>
                                 </div>
+                                <div className="viewer-pred-list-fixed">
                                 {predModels.map((model, modelIdx) => {
-                                    const modelIdxs = predAnns.map((a, i) => a._pred_source === model ? i : -1).filter(i => i >= 0);
+                                    const modelRows = predRows.filter(r => r.ann._pred_source === model);
+                                    const modelIdxs = modelRows.map(r => r.idx);
                                     const dashDesc = PRED_DASH_DESCS[modelIdx % PRED_DASH_DESCS.length];
                                     const allHidden = modelIdxs.every(i => hiddenPredAnns.has(i));
                                     const globallyHidden = visiblePredModels && !visiblePredModels.has(model);
@@ -6119,29 +7837,14 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                                 <span style={{fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{model}</span>
                                                 {globallyHidden && <span style={{fontSize:'10px', color:'#f55', marginLeft:'2px'}}>[已关闭]</span>}
                                                 <span style={{marginLeft: 'auto', color: 'var(--text-muted)'}}>
-                                                    {confThreshold > 0 ? `${modelIdxs.filter(i => passesConfThreshold(predAnns[i], confThreshold)).length}/` : ''}{modelIdxs.length}
+                                                    {modelIdxs.length}
                                                 </span>
                                                 <span style={{color: 'var(--text-muted)'}}>{globallyHidden ? '✕' : (allHidden ? '○' : '●')}</span>
                                             </div>
                                             {/* 逐条标注列表（全局隐藏时折叠） */}
-                                            {!globallyHidden && modelIdxs.map(globalIdx => {
-                                                const ann = predAnns[globalIdx];
+                                            {!globallyHidden && modelRows.map(({ ann, idx: globalIdx }) => {
                                                 const isHidden = hiddenPredAnns.has(globalIdx);
                                                 const isHovered = hoveredPredAnnIdx === globalIdx;
-                                                const belowThreshold = !passesConfThreshold(ann, confThreshold);
-                                                if (belowThreshold) return (
-                                                    <div
-                                                        key={globalIdx}
-                                                        className="viewer-ann-item hidden"
-                                                        style={{ borderLeftColor: getCategoryColor(palette, ann.category), opacity: 0.35 }}
-                                                        title={`置信度 ${(Number(ann.score)*100).toFixed(1)}% 低于阈值 ${(confThreshold*100).toFixed(0)}%`}
-                                                    >
-                                                        <div className="viewer-ann-color" style={{ background: getCategoryColor(palette, ann.category) }}></div>
-                                                        <span className="viewer-ann-text">{ann.category}</span>
-                                                        <span className="viewer-ann-score" style={{textDecoration: 'line-through'}}>{(Number(ann.score) * 100).toFixed(1)}%</span>
-                                                        <span style={{marginLeft: 'auto', color: 'var(--text-muted)'}}>⊘</span>
-                                                    </div>
-                                                );
                                                 return (
                                                     <div
                                                         key={globalIdx}
@@ -6170,6 +7873,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                         </div>
                                     );
                                 })}
+                                </div>
                                 {/* 底部全显/全隐按钮 */}
                                 <div style={{padding: '10px', background: 'var(--bg-raised)', borderTop: '1px solid var(--border)', display: 'flex', gap: '8px'}}>
                                     <button className="tool-btn" style={{flex: 1}} onClick={() => {
@@ -6177,7 +7881,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                             setHiddenPredAnns(new Set()); // 全部显示
                                         } else {
                                             const allIdxs = new Set();
-                                            predAnns.forEach((a, i) => { if(a.bbox) allIdxs.add(i); });
+                                            predRows.forEach((r) => { if (r.ann.bbox) allIdxs.add(r.idx); });
                                             setHiddenPredAnns(allIdxs); // 全部隐藏
                                         }
                                     }}>
