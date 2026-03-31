@@ -55,6 +55,8 @@ const DEFAULT_CONFIG = {
         checkerboardColor1: '#2d2d44',
         checkerboardColor2: '#252548',
         crossSidebarIouThreshold: 0.5,
+        sidebarDock: 'right',
+        filmstripHiddenByDefault: true,
         metaFilterFieldMap: {
             c_time: 'c_time',
             product_id: 'product_id',
@@ -206,6 +208,9 @@ function getMetaFilterMapping(viewerCfg) {
         position: pick('position', 'position')
     };
 }
+
+/** 底部缩略图条占用高度（含下边距），适应窗口时从可视高度扣除，避免压住主图 */
+const VIEWER_FILMSTRIP_RESERVE_PX = 92;
 
 // ==================== 配置提供者（config.json + 本地设置） ====================
 function ConfigProvider({ children }) {
@@ -4370,6 +4375,20 @@ function SettingsModal({
                                         <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginTop: '4px' }}>0.1～1 共十档，查看器内可随时调整</p>
                                     </div>
                                     <div className="form-group">
+                                        <label className="form-label">底部缩略图导航</label>
+                                        <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', userSelect: 'none' }}>
+                                            <input
+                                                type="checkbox"
+                                                style={{ marginTop: '3px' }}
+                                                checked={viewer.filmstripHiddenByDefault !== true}
+                                                onChange={(e) => updateViewer('filmstripHiddenByDefault', !e.target.checked)}
+                                            />
+                                            <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                                                打开看图时显示底部缩略图（不勾选则默认隐藏，可在看图界面点击「🎞 缩略图」打开；显示时会为缩略条预留空间，避免「适应窗口」压住图片）
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <div className="form-group">
                                         <label className="form-label">元筛选字段映射</label>
                                         <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '8px' }}>
                                             用于指定 COCO images 里的字段名，例如时间字段、SN/产品号字段、位置字段。
@@ -4397,6 +4416,22 @@ function SettingsModal({
                                                 placeholder="例如 position / station"
                                             />
                                         </div>
+                                    </div>
+                                    <div className="form-group">
+                                        <label className="form-label">查看器侧栏停靠位置</label>
+                                        <div style={{ display: 'flex', gap: '16px', marginBottom: '8px' }}>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                                                <input type="radio" name="sidebarDock" checked={(viewer.sidebarDock || 'right') === 'left'} onChange={() => updateViewer('sidebarDock', 'left')} />
+                                                左侧
+                                            </label>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                                                <input type="radio" name="sidebarDock" checked={(viewer.sidebarDock || 'right') === 'right'} onChange={() => updateViewer('sidebarDock', 'right')} />
+                                                右侧
+                                            </label>
+                                        </div>
+                                        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginTop: '4px' }}>
+                                            默认右侧。查看器顶部也可一键切换。
+                                        </p>
                                     </div>
                                     <div className="form-group">
                                         <label className="form-label">GT/预测侧栏联动 IoU 阈值</label>
@@ -5645,6 +5680,7 @@ function CategoryPicker({ categories, lastCategory, onConfirm, onCancel }) {
 // ==================== 图片查看器（查看 + 标注编辑） ====================
 function ImageViewer({ image, images, datasetId, categories, imageClassifications, imageNotes, imageCategories, imageCategoryMultiSelect, visiblePredModels, onClose, onNavigate, onUpdateCategory, onUpdateCategories, onUpdateNote, onAnnotationsSaved }) {
     const config = useConfig();
+    const setSettings = useSettings();
     const viewer = config.viewer || DEFAULT_CONFIG.viewer;
     const catList = imageCategories || DEFAULT_CONFIG.imageCategories;
     const palette = config.colorPalette || DEFAULT_CONFIG.colorPalette;
@@ -5731,6 +5767,55 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     const [confThresholdGT, setConfThresholdGT] = useState(0);   // GT 置信度过滤阈值（0 = 不过滤）
     const [confThresholdPred, setConfThresholdPred] = useState(0); // 预测置信度过滤阈值（0 = 不过滤）
     const [compareMode, setCompareMode] = useState(false);   // C10: 对比模式
+    const [sidebarDock, setSidebarDock] = useState((viewer.sidebarDock === 'left') ? 'left' : 'right');
+    useEffect(() => { setSidebarDock((viewer.sidebarDock === 'left') ? 'left' : 'right'); }, [viewer.sidebarDock]);
+    const toggleSidebarDock = () => {
+        const next = sidebarDock === 'left' ? 'right' : 'left';
+        setSidebarDock(next);
+        setSettings(prev => ({ ...prev, viewer: { ...(prev.viewer || {}), sidebarDock: next } }));
+    };
+    const [showFilmstrip, setShowFilmstrip] = useState(() => viewer.filmstripHiddenByDefault !== true);
+    const [viewerLeftTab, setViewerLeftTab] = useState('annotate'); // 左侧栏：标注 | 属性
+    const [mainSidebarWidth, setMainSidebarWidth] = useState(() => {
+        try { const w = parseInt(localStorage.getItem('cocoViewerMainSidebarW'), 10); return !Number.isNaN(w) ? Math.min(560, Math.max(220, w)) : 280; } catch (e) { return 280; }
+    });
+    const [predSidebarWidth, setPredSidebarWidth] = useState(() => {
+        try { const w = parseInt(localStorage.getItem('cocoViewerPredSidebarW'), 10); return !Number.isNaN(w) ? Math.min(520, Math.max(160, w)) : 260; } catch (e) { return 260; }
+    });
+    const resizeDragRef = useRef(null);
+    const mainSidebarWRef = useRef(mainSidebarWidth);
+    const predSidebarWRef = useRef(predSidebarWidth);
+    useEffect(() => { mainSidebarWRef.current = mainSidebarWidth; }, [mainSidebarWidth]);
+    useEffect(() => { predSidebarWRef.current = predSidebarWidth; }, [predSidebarWidth]);
+    const beginResizePred = (e) => { e.preventDefault(); resizeDragRef.current = { which: 'pred', startX: e.clientX, startW: predSidebarWRef.current }; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'; };
+    const beginResizeMain = (e) => { e.preventDefault(); resizeDragRef.current = { which: 'main', startX: e.clientX, startW: mainSidebarWRef.current }; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'; };
+    useEffect(() => {
+        const onMove = (e) => {
+            const d = resizeDragRef.current;
+            if (!d) return;
+            e.preventDefault();
+            const dx = e.clientX - d.startX;
+            if (d.which === 'pred') {
+                setPredSidebarWidth(Math.min(520, Math.max(160, d.startW + dx)));
+            } else {
+                setMainSidebarWidth(Math.min(560, Math.max(220, d.startW + dx)));
+            }
+        };
+        const onUp = () => {
+            if (!resizeDragRef.current) return;
+            resizeDragRef.current = null;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            try {
+                localStorage.setItem('cocoViewerMainSidebarW', String(mainSidebarWRef.current));
+                localStorage.setItem('cocoViewerPredSidebarW', String(predSidebarWRef.current));
+            } catch (err) {}
+        };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+        return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+    }, []);
+    useEffect(() => { if (annotateMode) setViewerLeftTab('annotate'); }, [annotateMode]);
     const [showLabels, setShowLabels] = useState(true);       // 查看模式：常显类别标签
     const clickStartRef = useRef(null); // 用于 C1 点击检测（mousedown 位置）
     const [exportModal, setExportModal] = useState(null); // C9: 导出弹窗 { dataUrl, fileName }
@@ -5829,13 +5914,47 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     const currentCategory = currentCategories[0];
     const currentNote = imageNotes[currentImage.image_id] || '';
     const hasPredAnnotations = (currentImage.pred_annotations || []).length > 0;
-    const imageMetaEntries = React.useMemo(() => {
-        const raw = (currentImage && currentImage.image_meta && typeof currentImage.image_meta === 'object')
-            ? currentImage.image_meta
-            : {};
-        const entries = Object.entries(raw).filter(([k]) => k !== 'id');
-        return entries;
-    }, [currentImage]);
+    const sidebarsTotalInsetPx = React.useMemo(() => {
+        const handlePad = 6;
+        let w = 12 + mainSidebarWidth + handlePad;
+        if (hasPredAnnotations) w += predSidebarWidth + handlePad;
+        return w;
+    }, [hasPredAnnotations, mainSidebarWidth, predSidebarWidth]);
+    const filmstripLeftInsetPx = sidebarDock === 'left' ? sidebarsTotalInsetPx : 12;
+    const filmstripRightInsetPx = sidebarDock === 'right' ? sidebarsTotalInsetPx : 12;
+    const metaFieldMap = getMetaFilterMapping(viewer);
+    const formatMetaVal = (v) => {
+        if (v == null) return '—';
+        if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return String(v);
+        try { return JSON.stringify(v); } catch (e) { return String(v); }
+    };
+    const propertyRowsPrimary = React.useMemo(() => {
+        if (!currentImage) return [];
+        const raw = (currentImage.image_meta && typeof currentImage.image_meta === 'object') ? currentImage.image_meta : {};
+        const rows = [];
+        rows.push({ label: '文件名', value: currentImage.file_name || '—' });
+        if (currentImage.source_path != null && currentImage.source_path !== '') {
+            rows.push({ label: '目录', value: String(currentImage.source_path) });
+        }
+        rows.push({ label: '尺寸', value: `${currentImage.width} × ${currentImage.height}` });
+        const tKey = metaFieldMap.c_time;
+        if (raw[tKey] != null && String(raw[tKey]).trim() !== '') rows.push({ label: '时间', value: formatMetaVal(raw[tKey]) });
+        const pKey = metaFieldMap.position;
+        if (raw[pKey] != null && String(raw[pKey]).trim() !== '') rows.push({ label: '位置', value: formatMetaVal(raw[pKey]) });
+        const snKey = metaFieldMap.product_id;
+        if (raw[snKey] != null && String(raw[snKey]).trim() !== '') rows.push({ label: 'SN / 产品号', value: formatMetaVal(raw[snKey]) });
+        const nv = (noteInput || '').trim();
+        if (nv) rows.push({ label: '备注', value: nv });
+        return rows;
+    }, [currentImage, metaFieldMap, noteInput]);
+    const propertyRowsExtra = React.useMemo(() => {
+        const raw = (currentImage && currentImage.image_meta && typeof currentImage.image_meta === 'object') ? currentImage.image_meta : {};
+        const used = new Set(['id', 'file_name', 'width', 'height', 'source_path', 'note', 'image_category', 'image_categories', metaFieldMap.c_time, metaFieldMap.position, metaFieldMap.product_id]);
+        return Object.entries(raw)
+            .filter(([k]) => !used.has(k) && raw[k] != null && String(raw[k]).trim() !== '')
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([k, v]) => ({ label: k, value: formatMetaVal(v) }));
+    }, [currentImage, metaFieldMap]);
     const linkedPredIdxSet = React.useMemo(() => {
         if (hoveredAnnIdx == null) return new Set();
         const gtAnn = currentImage.annotations?.[hoveredAnnIdx];
@@ -5863,23 +5982,26 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
 
     const fitZoom = useCallback(() => {
         if (!imgRef.current || !containerRef.current) return 1;
+        const stripReserve = (!annotateMode && showFilmstrip) ? VIEWER_FILMSTRIP_RESERVE_PX : 0;
         const cw = containerRef.current.clientWidth - 40;
-        const ch = containerRef.current.clientHeight - 40;
+        const ch = containerRef.current.clientHeight - 40 - stripReserve;
         const iw = imgRef.current.naturalWidth;
         const ih = imgRef.current.naturalHeight;
         if (iw === 0 || ih === 0) return 1;
         return Math.min(cw / iw, ch / ih, 1);
-    }, []);
+    }, [annotateMode, showFilmstrip]);
 
     // 仅根据容器与图片元数据（宽高）计算适应缩放，不依赖图片加载，任意分辨率打开即自适应
     const getFitZoomFromMeta = useCallback(() => {
         const el = containerRef.current;
         const w = currentImage.width, h = currentImage.height;
         if (!el || !w || !h) return 1;
-        const cw = el.clientWidth - 40, ch = el.clientHeight - 40;
+        const stripReserve = (!annotateMode && showFilmstrip) ? VIEWER_FILMSTRIP_RESERVE_PX : 0;
+        const cw = el.clientWidth - 40;
+        const ch = el.clientHeight - 40 - stripReserve;
         if (cw <= 0 || ch <= 0) return 1;
         return Math.min(cw / w, ch / h, 1);
-    }, [currentImage.width, currentImage.height]);
+    }, [currentImage.width, currentImage.height, annotateMode, showFilmstrip]);
 
     const drawAnnotations = useCallback(() => {
         const canvas = canvasRef.current;
@@ -6072,7 +6194,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         setPanY(0);
     }, [currentImage.image_id]);
 
-    // 切换图片时立即按元数据做自适应缩放（不等待图片加载），任意分辨率都先适应屏幕
+    // 切换图片时立即按元数据做自适应缩放（不等待图片加载），任意分辨率都先适应屏幕；缩略图显隐变化时同步重算
     useEffect(() => {
         const z = getFitZoomFromMeta();
         setZoom(z);
@@ -6080,7 +6202,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
             setZoom(getFitZoomFromMeta());
         });
         return () => cancelAnimationFrame(t);
-    }, [currentImage.image_id, getFitZoomFromMeta]);
+    }, [currentImage.image_id, getFitZoomFromMeta, annotateMode, showFilmstrip]);
 
     const handleImageLoad = () => {
         setZoom(fitZoom());
@@ -7186,7 +7308,12 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                     className={`viewer-nav-btn vbtn ${compareMode ? 'vbtn-on-blue' : 'vbtn-neutral'}`}
                                     title="GT vs 预测对比 (C)"
                                     onClick={() => setCompareMode(m => !m)}
-                                >⊞ 对比</button>
+                                >⊞</button>
+                                <button
+                                    className={`viewer-nav-btn vbtn ${showFilmstrip ? 'vbtn-on-teal' : 'vbtn-neutral'}`}
+                                    title={showFilmstrip ? '隐藏底部缩略图' : '显示底部缩略图'}
+                                    onClick={() => setShowFilmstrip(s => !s)}
+                                >🎞</button>
                             </div>
                             <div className="viewer-toolbar-group">
                                 <button
@@ -7194,6 +7321,11 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                     title={`全屏 (F) ${isFullscreen ? '退出' : ''}`}
                                     onClick={toggleFullscreen}
                                 >{isFullscreen ? '⊡' : '⊞'}</button>
+                                <button
+                                    className={`viewer-nav-btn vbtn ${sidebarDock === 'left' ? 'vbtn-on-blue' : 'vbtn-neutral'}`}
+                                    title={`侧栏停靠：${sidebarDock === 'left' ? '左侧' : '右侧'}（点击切换）`}
+                                    onClick={toggleSidebarDock}
+                                >{sidebarDock === 'left' ? '⇤' : '⇥'}</button>
                                 <button
                                     className="viewer-nav-btn vbtn vbtn-neutral"
                                     title="快捷键帮助 (?)"
@@ -7299,9 +7431,9 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                 </div>
             )}
 
-            <div className={`viewer-body ${hasPredAnnotations ? 'has-left-pred' : ''}`}>
+            <div className={`viewer-body ${hasPredAnnotations ? 'has-left-pred' : ''} ${sidebarDock === 'right' ? 'dock-right' : 'dock-left'}`}>
                 {hasPredAnnotations && (
-                    <div className="viewer-sidebar viewer-sidebar-left">
+                    <div className="viewer-sidebar viewer-sidebar-left viewer-sidebar-pred viewer-slot-pred" style={{ width: predSidebarWidth, flexShrink: 0, minWidth: 0 }}>
                         <div className="viewer-sidebar-header">
                             <span>{annotateMode ? '预测参考框' : '预测标注'}</span>
                             <span>{(currentImage.pred_annotations || []).length}</span>
@@ -7405,278 +7537,44 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                         </div>
                     </div>
                 )}
-                {/* C10: 对比模式 */}
-                {compareMode && !annotateMode ? (
-                    <CompareLayout 
-                        currentImage={currentImage} 
-                        imageUrl={imageUrl} 
-                        palette={palette} 
-                        lineWidth={lineWidth} 
-                        annFill={annFill} 
-                        hiddenCats={hiddenCats} 
-                        brightness={brightness} 
-                        contrast={contrast} 
-                        visiblePredModels={visiblePredModels} 
-                        confOpacity={confOpacity} 
-                        confThresholdGT={confThresholdGT}
-                        confThresholdPred={confThresholdPred}
-                    />
-                ) : (
-                <div
-                    className={`viewer-canvas-area ${(viewer.backgroundStyle || 'checkerboard') === 'checkerboard' ? 'viewer-bg-checkerboard' : 'viewer-bg-solid'}`}
-                    ref={containerRef}
-                    onMouseDown={handleMouseDown}
-                    onDoubleClick={() => { if (!annotateMode) enterAnnotateMode(); }}
-                    onContextMenu={!annotateMode ? (e) => {
-                        e.preventDefault();
-                        const wrapper = wrapperRef.current;
-                        if (!wrapper) return;
-                        const rect = wrapper.getBoundingClientRect();
-                        const imgX = (e.clientX - rect.left) / zoom, imgY = (e.clientY - rect.top) / zoom;
-                        const tol = Math.max(4, 8 / zoom);
-                        // 检测 GT 框
-                        const anns = currentImage.annotations;
-                        for (let i = anns.length - 1; i >= 0; i--) {
-                            const ann = anns[i];
-                            if (!ann.bbox || hiddenAnns.has(i) || hiddenCats.has(ann.category)) continue;
-                            if (!passesConfThreshold(ann, confThresholdGT)) continue;
-                            const [x, y, bw, bh] = ann.bbox;
-                            if (imgX >= x - tol && imgX <= x + bw + tol && imgY >= y - tol && imgY <= y + bh + tol) {
-                                setCtxMenu({ x: e.clientX, y: e.clientY, ann, type: 'gt', annIdx: i });
-                                return;
-                            }
-                        }
-                        // 检测预测框
-                        const predAnns = currentImage.pred_annotations || [];
-                        for (let i = predAnns.length - 1; i >= 0; i--) {
-                            const ann = predAnns[i];
-                            if (!ann.bbox || hiddenPredAnns.has(i) || hiddenCats.has(ann.category)) continue;
-                            if (visiblePredModels && !visiblePredModels.has(ann._pred_source)) continue;
-                            if (!passesConfThreshold(ann, confThresholdPred)) continue;
-                            const [x, y, bw, bh] = ann.bbox;
-                            if (imgX >= x - tol && imgX <= x + bw + tol && imgY >= y - tol && imgY <= y + bh + tol) {
-                                setCtxMenu({ x: e.clientX, y: e.clientY, ann, type: 'pred', annIdx: i });
-                                return;
-                            }
-                        }
-                        setCtxMenu(null);
-                    } : undefined}
-                    onMouseMove={(e) => {
-                        if (annotateMode) {
-                            if (crosshairXRef.current && crosshairYRef.current) {
-                                const rect = containerRef.current.getBoundingClientRect();
-                                crosshairXRef.current.style.top = (e.clientY - rect.top) + 'px';
-                                crosshairYRef.current.style.left = (e.clientX - rect.left) + 'px';
-                                crosshairXRef.current.style.display = 'block';
-                                crosshairYRef.current.style.display = 'block';
-                            }
-                        } else {
-                            if (crosshairXRef.current && crosshairYRef.current) {
-                                crosshairXRef.current.style.display = 'none';
-                                crosshairYRef.current.style.display = 'none';
-                            }
-                            // 查看模式：鼠标在框线上时高亮并显示 tooltip
-                            const wrapper = wrapperRef.current;
-                            if (!wrapper) return;
-                            const rect = wrapper.getBoundingClientRect();
-                            const imgX = (e.clientX - rect.left) / zoom, imgY = (e.clientY - rect.top) / zoom;
-                            const tol = Math.max(4, 6 / zoom); // 容差（图片像素）
-                            // 检测 GT 框线
-                            const anns = currentImage.annotations;
-                            for (let i = anns.length - 1; i >= 0; i--) {
-                                const ann = anns[i];
-                                if (!ann.bbox || hiddenAnns.has(i) || hiddenCats.has(ann.category)) continue;
-                                if (!passesConfThreshold(ann, confThresholdGT)) continue;
-                                const [x, y, bw, bh] = ann.bbox;
-                                const onBorder = imgX >= x - tol && imgX <= x + bw + tol && imgY >= y - tol && imgY <= y + bh + tol
-                                    && !(imgX > x + tol && imgX < x + bw - tol && imgY > y + tol && imgY < y + bh - tol);
-                                if (onBorder) { setHoveredAnnIdx(i); setHoveredPredAnnIdx(null); return; }
-                            }
-                            // 检测预测框线
-                            const predAnns = currentImage.pred_annotations || [];
-                            for (let i = predAnns.length - 1; i >= 0; i--) {
-                                const ann = predAnns[i];
-                                if (!ann.bbox || hiddenPredAnns.has(i) || hiddenCats.has(ann.category)) continue;
-                                if (visiblePredModels && !visiblePredModels.has(ann._pred_source)) continue;
-                                if (!passesConfThreshold(ann, confThresholdPred)) continue;
-                                const [x, y, bw, bh] = ann.bbox;
-                                const onBorder = imgX >= x - tol && imgX <= x + bw + tol && imgY >= y - tol && imgY <= y + bh + tol
-                                    && !(imgX > x + tol && imgX < x + bw - tol && imgY > y + tol && imgY < y + bh - tol);
-                                if (onBorder) { setHoveredPredAnnIdx(i); setHoveredAnnIdx(null); return; }
-                            }
-                            setHoveredAnnIdx(null);
-                            setHoveredPredAnnIdx(null);
-                        }
-                    }}
-                    onMouseLeave={() => {
-                        if (crosshairXRef.current && crosshairYRef.current) {
-                            crosshairXRef.current.style.display = 'none';
-                            crosshairYRef.current.style.display = 'none';
-                        }
-                        if (!annotateMode) {
-                            setHoveredAnnIdx(null);
-                            setHoveredPredAnnIdx(null);
-                        }
-                    }}
-                    style={(viewer.backgroundStyle || 'checkerboard') === 'checkerboard'
-                        ? { '--checkerboard-1': viewer.checkerboardColor1 || '#2d2d44', '--checkerboard-2': viewer.checkerboardColor2 || '#252548' }
-                        : { background: viewer.backgroundColor || '#1a1a2e' }
-                    }
-                >
-                    {/* 十字辅助线 (仅标注模式显示) */}
-                    <div ref={crosshairXRef} style={{ display: 'none', position: 'absolute', left: 0, right: 0, height: '1px', borderTop: '1px dashed rgba(255,255,255,0.7)', pointerEvents: 'none', zIndex: 100 }} />
-                    <div ref={crosshairYRef} style={{ display: 'none', position: 'absolute', top: 0, bottom: 0, width: '1px', borderLeft: '1px dashed rgba(255,255,255,0.7)', pointerEvents: 'none', zIndex: 100 }} />
-                    
-                    <div className="viewer-image-wrapper" ref={wrapperRef} style={{ transform: `translate(${panX}px, ${panY}px)` }}>
-                        <img ref={imgRef} src={imageUrl} alt="" onLoad={handleImageLoad} draggable={false}
-                            style={brightness !== 100 || contrast !== 100 ? { filter: `brightness(${brightness}%) contrast(${contrast}%)` } : undefined} />
-                        <canvas ref={canvasRef} className="viewer-canvas"></canvas>
-                        {/* 标注交互层 Canvas */}
-                        <canvas
-                            ref={editCanvasRef}
-                            className="viewer-canvas"
-                            style={{
-                                pointerEvents: annotateMode ? 'all' : 'none',
-                                cursor: annotateMode ? editCursor : 'none',
-                            }}
-                            onMouseDown={annotateMode ? handleEditMouseDown : undefined}
-                        ></canvas>
-                        {/* opt6: 右键菜单 */}
-                        {ctxMenu && !annotateMode && (() => {
-                            const { x, y, ann, type, annIdx } = ctxMenu;
-                            const containerRect = containerRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
-                            const menuX = x - containerRect.left, menuY = y - containerRect.top;
-                            const infoLines = type === 'gt'
-                                ? [`GT · ${ann.category}`, `位置 [${Math.round(ann.bbox[0])}, ${Math.round(ann.bbox[1])}]`, `大小 ${Math.round(ann.bbox[2])}×${Math.round(ann.bbox[3])}`]
-                                : [`预测 · ${ann.category}`, ann.score != null ? `置信度 ${(ann.score*100).toFixed(1)}%` : null, `位置 [${Math.round(ann.bbox[0])}, ${Math.round(ann.bbox[1])}]`, `大小 ${Math.round(ann.bbox[2])}×${Math.round(ann.bbox[3])}`].filter(Boolean);
-                            return (
-                                <div
-                                    style={{ position:'absolute', left: menuX, top: menuY, zIndex: 9900, background:'var(--bg-surface)', border:'1px solid var(--border-strong)', borderRadius:'8px', boxShadow:'0 8px 28px rgba(0,0,0,0.55)', minWidth:'180px', fontSize:'12px', overflow:'hidden' }}
-                                    onMouseLeave={() => setCtxMenu(null)}
-                                >
-                                    <div style={{ padding:'6px 10px', background:'var(--bg-raised)', borderBottom:'1px solid var(--border)', color:'var(--text-muted)' }}>
-                                        {infoLines.map((l, i) => <div key={i}>{l}</div>)}
-                    </div>
-                                    <div style={{ padding:'4px 0' }}>
-                                        <div className="ctx-menu-item" onClick={() => {
-                                            const bbox = ann.bbox;
-                                            const info = `${ann.category} [${bbox.map(v => Math.round(v)).join(', ')}]${ann.score != null ? ` conf=${(ann.score*100).toFixed(1)}%` : ''}`;
-                                            navigator.clipboard.writeText(info).catch(() => {});
-                                            setCtxMenu(null);
-                                        }}>📋 复制框信息</div>
-                                        <div className="ctx-menu-item" onClick={() => {
-                                            setHiddenCats(prev => { const n = new Set(prev); n.add(ann.category); return n; });
-                                            setCtxMenu(null);
-                                        }}>🚫 隐藏此类别</div>
-                                        {type === 'gt' && (
-                                            <div className="ctx-menu-item" onClick={() => {
-                                                centerOnAnnotation(ann.bbox);
-                                                setCtxMenu(null);
-                                            }}>🎯 居中到此框</div>
-                                        )}
-                                        <div className="ctx-menu-item" onClick={() => {
-                                            enterAnnotateMode();
-                                            setCtxMenu(null);
-                                        }}>✏ 进入标注模式</div>
-                </div>
-                                </div>
-                            );
-                        })()}
-                        {/* opt9: Undo/Redo toast */}
-                        {undoToast && (
-                            <div key={undoToast.id} style={{
-                                position:'absolute', bottom:'60px', left:'50%', transform:'translateX(-50%)',
-                                background:'rgba(0,0,0,0.75)', color:'#fff', fontSize:'12px',
-                                padding:'5px 14px', borderRadius:'16px', pointerEvents:'none',
-                                whiteSpace:'nowrap', zIndex:9000,
-                                animation:'fadeInOut 1.5s ease forwards'
-                            }}>{undoToast.msg}</div>
-                        )}
-                        {/* B8: 小地图 */}
-                        <canvas
-                            ref={minimapCanvasRef}
-                            style={{
-                                position:'absolute', bottom:'8px', right:'8px',
-                                border:'1px solid var(--border-strong)', borderRadius:'6px',
-                                opacity: 0.88, pointerEvents:'none',
-                                display: zoom > 1.5 ? 'block' : 'none',
-                                background:'var(--bg-raised)',
-                            }}
-                        ></canvas>
-                    </div>
-                    {/* 类别选择弹窗（画完框后弹出）— 在 wrapper 外，不受 pan/zoom transform 影响 */}
-                    {annotateMode && categoryPickerBbox && (
-                        <CategoryPicker
-                            categories={categories.length > 0 ? categories : ['目标']}
-                            lastCategory={lastCategoryRef.current}
-                            onConfirm={(cat) => {
-                                lastCategoryRef.current = cat;
-                                const newAnn = { category: cat, bbox: categoryPickerBbox, area: categoryPickerBbox[2] * categoryPickerBbox[3], iscrowd: 0 };
-                                commitChange([...localAnns, newAnn]);
-                                setSelectedAnnIdx(localAnns.length);
-                                setCategoryPickerBbox(null);
-                                scheduleAutoSave(); // 选完类别后自动保存
-                            }}
-                            onCancel={() => setCategoryPickerBbox(null)}
-                        />
-                    )}
-                    {/* C1: 锁定信息面板 */}
-                    {lockedAnn && !annotateMode && (() => {
-                        const { type, ann, sx, sy } = lockedAnn;
-                        const container = containerRef.current;
-                        const cr = container ? container.getBoundingClientRect() : { left:0, top:0, right:800, bottom:600 };
-                        const relX = sx - cr.left + 12, relY = sy - cr.top + 12;
-                        const lines = type === 'gt' ? [
-                            ann.category,
-                            `位置: [${Math.round(ann.bbox[0])}, ${Math.round(ann.bbox[1])}]`,
-                            `大小: ${Math.round(ann.bbox[2])} × ${Math.round(ann.bbox[3])}`,
-                            `面积: ${Math.round(ann.bbox[2] * ann.bbox[3]).toLocaleString()} px²`,
-                        ] : [
-                            `[预测] ${ann._pred_source || ''}`,
-                            ann.category,
-                            ann.score != null ? `置信度: ${(Number(ann.score) * 100).toFixed(1)}%` : null,
-                            `位置: [${Math.round(ann.bbox[0])}, ${Math.round(ann.bbox[1])}]`,
-                            `大小: ${Math.round(ann.bbox[2])} × ${Math.round(ann.bbox[3])}`,
-                            `面积: ${Math.round(ann.bbox[2] * ann.bbox[3]).toLocaleString()} px²`,
-                        ].filter(Boolean);
-                        const color = getCategoryColor(palette, ann.category);
-                        const panelW = 190;
-                        const left = relX + panelW > cr.right - cr.left ? relX - panelW - 24 : relX;
-                        const top = relY;
-                        return (
-                            <div style={{
-                                position:'absolute', left, top, zIndex:10, pointerEvents:'auto',
-                                background:'rgba(10,10,30,0.95)', border:`1px solid ${color}`,
-                                borderRadius:'7px', padding:'10px 13px', minWidth:'160px', maxWidth:`${panelW}px`,
-                                boxShadow:'0 4px 20px rgba(0,0,0,0.6)', backdropFilter:'blur(4px)',
-                            }}>
-                                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'6px'}}>
-                                    <span style={{fontSize:'11px', color: type === 'gt' ? '#5d5' : '#7af', fontWeight:'bold'}}>
-                                        {type === 'gt' ? '● GT' : '⋯ 预测'}
-                                    </span>
-                                    <button onClick={() => setLockedAnn(null)} style={{background:'none', border:'none', color:'var(--text-muted)', cursor:'pointer', fontSize:'14px', padding:'0 2px'}}>✕</button>
-                                </div>
-                                {lines.map((l, i) => (
-                                    <div key={i} style={{fontSize:'12px', color: i === 0 ? '#fff' : '#aaa', padding:'1px 0', fontWeight: i === 0 ? 'bold' : 'normal'}}>{l}</div>
-                                ))}
-                                <div style={{marginTop:'6px', fontSize:'10px', color:'var(--text-muted)'}}>再次点击框解锁</div>
-                            </div>
-                        );
-                    })()}
-                    {/* 双击提示（查看模式无标注时） */}
-                    {!annotateMode && !lockedAnn && (
-                        <div style={{position:'absolute', bottom:'8px', left:'50%', transform:'translateX(-50%)', fontSize:'11px', color:'var(--text-muted)', pointerEvents:'none', userSelect:'none'}}>
-                            双击图片进入标注模式 · Tab 切换框 · 0=适应窗口
-                        </div>
-                    )}
-                </div>
+                {hasPredAnnotations && (
+                    <div className="viewer-resize-handle viewer-resize-pred viewer-slot-pred-handle" onMouseDown={beginResizePred} role="separator" aria-orientation="vertical" title="拖拽调整预测栏宽度" />
                 )}
-
-                <div className="viewer-sidebar">
+                <div className="viewer-sidebar viewer-sidebar-main viewer-sidebar-left viewer-slot-main" style={{ width: mainSidebarWidth, flexShrink: 0, minWidth: 0 }}>
+                    <div className="viewer-sidebar-tabbar">
+                        <button type="button" className={`viewer-tab ${viewerLeftTab === 'annotate' ? 'viewer-tab-active' : ''}`} onClick={() => setViewerLeftTab('annotate')}>标注</button>
+                        <button type="button" className={`viewer-tab ${viewerLeftTab === 'props' ? 'viewer-tab-active' : ''}`} onClick={() => setViewerLeftTab('props')}>属性</button>
+                    </div>
+                    <div className="viewer-sidebar-tabbody">
+                        {viewerLeftTab === 'props' ? (
+                            <div className="viewer-props-panel" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1, overflow: 'hidden' }}>
+                                <div className="viewer-sidebar-header"><span>图片属性</span></div>
+                                <div className="viewer-sidebar-form" style={{ padding: '8px 12px 12px', flex: 1, overflow: 'auto' }}>
+                                    {propertyRowsPrimary.map((row, i) => (
+                                        <div key={`p-${i}`} style={{ marginBottom: '10px' }}>
+                                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '2px' }}>{row.label}</div>
+                                            <div style={{ fontSize: '13px', color: 'var(--text-primary)', wordBreak: 'break-word' }}>{row.value}</div>
+                                        </div>
+                                    ))}
+                                    {propertyRowsExtra.length > 0 && (
+                                        <>
+                                            <div style={{ borderTop: '1px solid var(--border)', margin: '12px 0 8px', paddingTop: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>其他元数据</div>
+                                            {propertyRowsExtra.map((row, i) => (
+                                                <div key={`pe-${row.label}-${i}`} style={{ marginBottom: '8px' }}>
+                                                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '2px' }}>{row.label}</div>
+                                                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', wordBreak: 'break-word' }}>{row.value}</div>
+                                                </div>
+                                            ))}
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        ) : (
+                        <>
                     {!annotateMode ? (
                         <>
                     <div className="viewer-sidebar-header">
-                        <span>图片信息</span>
+                        <span>分类与筛选</span>
                     </div>
                         {/* C5: 类别筛选 */}
                         {(() => {
@@ -7746,21 +7644,14 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                         // 标注模式侧边栏
                         <div className="viewer-sidebar-form" style={{paddingBottom:'4px'}}>
                             <div style={{fontSize:'12px', color:'var(--text-muted)', padding:'6px 12px', borderBottom:'1px solid var(--border)'}}>
-                                <div>文件: {currentImage.file_name.split('/').pop()}</div>
-                                <div>尺寸: {currentImage.width} × {currentImage.height}</div>
-                                <div style={{marginTop:'3px'}}>
+                                <div style={{marginTop:'2px'}}>
                                     <span style={{color:'#52c41a'}}>GT {localAnns.length}</span>
                                     {(currentImage.pred_annotations || []).length > 0 && (
                                         <span style={{color:'var(--accent)', marginLeft:'8px'}}>预测 {(currentImage.pred_annotations || []).length}</span>
                                     )}
                                 </div>
-                                {imageMetaEntries.map(([k, v]) => (
-                                    <div key={`meta-anno-${k}`} title={`${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`} style={{ marginTop: '3px' }}>
-                                        <span style={{ color: 'var(--text-muted)' }}>{k}:</span>{' '}
-                                        <span style={{ color: 'var(--text-secondary)' }}>{typeof v === 'string' ? v : JSON.stringify(v)}</span>
-                                    </div>
-                                ))}
                                 <div style={{marginTop:'4px', color: dirty ? 'var(--warning)' : 'var(--text-muted)'}}>{dirty ? '● 有未保存修改' : '○ 已保存'}</div>
+                                <div style={{marginTop:'6px', fontSize:'11px'}}>文件名与元数据见「属性」标签</div>
                             </div>
                         </div>
                     )}
@@ -7779,16 +7670,8 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                         />
                     </div>
                     <div style={{padding: '8px 12px', borderBottom: '1px solid var(--border)', fontSize: 'var(--font-xs)', color: 'var(--text-muted)'}}>
-                        {!annotateMode && <>
-                        <div>文件: {currentImage.file_name.split('/').pop()}</div>
-                        <div>尺寸: {currentImage.width} × {currentImage.height}</div>
-                        {imageMetaEntries.map(([k, v]) => (
-                            <div key={`meta-view-${k}`} title={`${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`}>
-                                <span style={{ color: 'var(--text-muted)' }}>{k}:</span>{' '}
-                                <span style={{ color: 'var(--text-secondary)' }}>{typeof v === 'string' ? v : JSON.stringify(v)}</span>
-                            </div>
-                        ))}
-                            <div style={{marginTop:'3px', display:'flex', gap:'10px', flexWrap:'wrap'}}>
+                        {!annotateMode && (
+                            <div style={{ display:'flex', gap:'10px', flexWrap:'wrap', alignItems:'center' }}>
                                 <span><span style={{color:'#52c41a', fontWeight:'bold'}}>
                                     {confThresholdGT > 0 && currentImage.annotations.some(a => a.score != null)
                                         ? `${currentImage.annotations.filter(a => passesConfThreshold(a, confThresholdGT)).length}/${currentImage.annotations.length}`
@@ -7797,8 +7680,9 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                 {(currentImage.pred_annotations || []).length > 0 && (
                                     <span><span style={{color:'var(--accent)', fontWeight:'bold'}}>{(currentImage.pred_annotations || []).length}</span> 预测框</span>
                                 )}
-                    </div>
-                        </>}
+                                <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>详情见「属性」</span>
+                            </div>
+                        )}
                     </div>
                     {!annotateMode && currentImage.annotations.some(a => a.score != null) && (
                         <div style={{padding: '6px 12px', background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '8px'}}>
@@ -8032,7 +7916,280 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                 </div>
                     )}
 
+                        </>
+                        )}
+                    </div>
                 </div>
+                <div className="viewer-resize-handle viewer-resize-main viewer-slot-main-handle" onMouseDown={beginResizeMain} role="separator" aria-orientation="vertical" title="拖拽调整主侧栏宽度" />
+                {/* C10: 对比模式 */}
+                {compareMode && !annotateMode ? (
+                    <CompareLayout 
+                        currentImage={currentImage} 
+                        imageUrl={imageUrl} 
+                        palette={palette} 
+                        lineWidth={lineWidth} 
+                        annFill={annFill} 
+                        hiddenCats={hiddenCats} 
+                        brightness={brightness} 
+                        contrast={contrast} 
+                        visiblePredModels={visiblePredModels} 
+                        confOpacity={confOpacity} 
+                        confThresholdGT={confThresholdGT}
+                        confThresholdPred={confThresholdPred}
+                    />
+                ) : (
+                <div
+                    className={`viewer-canvas-area viewer-slot-canvas ${(viewer.backgroundStyle || 'checkerboard') === 'checkerboard' ? 'viewer-bg-checkerboard' : 'viewer-bg-solid'}`}
+                    ref={containerRef}
+                    onMouseDown={handleMouseDown}
+                    onDoubleClick={() => { if (!annotateMode) enterAnnotateMode(); }}
+                    onContextMenu={!annotateMode ? (e) => {
+                        e.preventDefault();
+                        const wrapper = wrapperRef.current;
+                        if (!wrapper) return;
+                        const rect = wrapper.getBoundingClientRect();
+                        const imgX = (e.clientX - rect.left) / zoom, imgY = (e.clientY - rect.top) / zoom;
+                        const tol = Math.max(4, 8 / zoom);
+                        // 检测 GT 框
+                        const anns = currentImage.annotations;
+                        for (let i = anns.length - 1; i >= 0; i--) {
+                            const ann = anns[i];
+                            if (!ann.bbox || hiddenAnns.has(i) || hiddenCats.has(ann.category)) continue;
+                            if (!passesConfThreshold(ann, confThresholdGT)) continue;
+                            const [x, y, bw, bh] = ann.bbox;
+                            if (imgX >= x - tol && imgX <= x + bw + tol && imgY >= y - tol && imgY <= y + bh + tol) {
+                                setCtxMenu({ x: e.clientX, y: e.clientY, ann, type: 'gt', annIdx: i });
+                                return;
+                            }
+                        }
+                        // 检测预测框
+                        const predAnns = currentImage.pred_annotations || [];
+                        for (let i = predAnns.length - 1; i >= 0; i--) {
+                            const ann = predAnns[i];
+                            if (!ann.bbox || hiddenPredAnns.has(i) || hiddenCats.has(ann.category)) continue;
+                            if (visiblePredModels && !visiblePredModels.has(ann._pred_source)) continue;
+                            if (!passesConfThreshold(ann, confThresholdPred)) continue;
+                            const [x, y, bw, bh] = ann.bbox;
+                            if (imgX >= x - tol && imgX <= x + bw + tol && imgY >= y - tol && imgY <= y + bh + tol) {
+                                setCtxMenu({ x: e.clientX, y: e.clientY, ann, type: 'pred', annIdx: i });
+                                return;
+                            }
+                        }
+                        setCtxMenu(null);
+                    } : undefined}
+                    onMouseMove={(e) => {
+                        if (annotateMode) {
+                            if (crosshairXRef.current && crosshairYRef.current) {
+                                const rect = containerRef.current.getBoundingClientRect();
+                                crosshairXRef.current.style.top = (e.clientY - rect.top) + 'px';
+                                crosshairYRef.current.style.left = (e.clientX - rect.left) + 'px';
+                                crosshairXRef.current.style.display = 'block';
+                                crosshairYRef.current.style.display = 'block';
+                            }
+                        } else {
+                            if (crosshairXRef.current && crosshairYRef.current) {
+                                crosshairXRef.current.style.display = 'none';
+                                crosshairYRef.current.style.display = 'none';
+                            }
+                            // 查看模式：鼠标在框线上时高亮并显示 tooltip
+                            const wrapper = wrapperRef.current;
+                            if (!wrapper) return;
+                            const rect = wrapper.getBoundingClientRect();
+                            const imgX = (e.clientX - rect.left) / zoom, imgY = (e.clientY - rect.top) / zoom;
+                            const tol = Math.max(4, 6 / zoom); // 容差（图片像素）
+                            // 检测 GT 框线
+                            const anns = currentImage.annotations;
+                            for (let i = anns.length - 1; i >= 0; i--) {
+                                const ann = anns[i];
+                                if (!ann.bbox || hiddenAnns.has(i) || hiddenCats.has(ann.category)) continue;
+                                if (!passesConfThreshold(ann, confThresholdGT)) continue;
+                                const [x, y, bw, bh] = ann.bbox;
+                                const onBorder = imgX >= x - tol && imgX <= x + bw + tol && imgY >= y - tol && imgY <= y + bh + tol
+                                    && !(imgX > x + tol && imgX < x + bw - tol && imgY > y + tol && imgY < y + bh - tol);
+                                if (onBorder) { setHoveredAnnIdx(i); setHoveredPredAnnIdx(null); return; }
+                            }
+                            // 检测预测框线
+                            const predAnns = currentImage.pred_annotations || [];
+                            for (let i = predAnns.length - 1; i >= 0; i--) {
+                                const ann = predAnns[i];
+                                if (!ann.bbox || hiddenPredAnns.has(i) || hiddenCats.has(ann.category)) continue;
+                                if (visiblePredModels && !visiblePredModels.has(ann._pred_source)) continue;
+                                if (!passesConfThreshold(ann, confThresholdPred)) continue;
+                                const [x, y, bw, bh] = ann.bbox;
+                                const onBorder = imgX >= x - tol && imgX <= x + bw + tol && imgY >= y - tol && imgY <= y + bh + tol
+                                    && !(imgX > x + tol && imgX < x + bw - tol && imgY > y + tol && imgY < y + bh - tol);
+                                if (onBorder) { setHoveredPredAnnIdx(i); setHoveredAnnIdx(null); return; }
+                            }
+                            setHoveredAnnIdx(null);
+                            setHoveredPredAnnIdx(null);
+                        }
+                    }}
+                    onMouseLeave={() => {
+                        if (crosshairXRef.current && crosshairYRef.current) {
+                            crosshairXRef.current.style.display = 'none';
+                            crosshairYRef.current.style.display = 'none';
+                        }
+                        if (!annotateMode) {
+                            setHoveredAnnIdx(null);
+                            setHoveredPredAnnIdx(null);
+                        }
+                    }}
+                    style={{
+                        paddingBottom: (!annotateMode && showFilmstrip) ? VIEWER_FILMSTRIP_RESERVE_PX : 0,
+                        ...((viewer.backgroundStyle || 'checkerboard') === 'checkerboard'
+                            ? { '--checkerboard-1': viewer.checkerboardColor1 || '#2d2d44', '--checkerboard-2': viewer.checkerboardColor2 || '#252548' }
+                            : { background: viewer.backgroundColor || '#1a1a2e' }),
+                    }}
+                >
+                    {/* 十字辅助线 (仅标注模式显示) */}
+                    <div ref={crosshairXRef} style={{ display: 'none', position: 'absolute', left: 0, right: 0, height: '1px', borderTop: '1px dashed rgba(255,255,255,0.7)', pointerEvents: 'none', zIndex: 100 }} />
+                    <div ref={crosshairYRef} style={{ display: 'none', position: 'absolute', top: 0, bottom: 0, width: '1px', borderLeft: '1px dashed rgba(255,255,255,0.7)', pointerEvents: 'none', zIndex: 100 }} />
+                    
+                    <div className="viewer-image-wrapper" ref={wrapperRef} style={{ transform: `translate(${panX}px, ${panY}px)` }}>
+                        <img ref={imgRef} src={imageUrl} alt="" onLoad={handleImageLoad} draggable={false}
+                            style={brightness !== 100 || contrast !== 100 ? { filter: `brightness(${brightness}%) contrast(${contrast}%)` } : undefined} />
+                        <canvas ref={canvasRef} className="viewer-canvas"></canvas>
+                        {/* 标注交互层 Canvas */}
+                        <canvas
+                            ref={editCanvasRef}
+                            className="viewer-canvas"
+                            style={{
+                                pointerEvents: annotateMode ? 'all' : 'none',
+                                cursor: annotateMode ? editCursor : 'none',
+                            }}
+                            onMouseDown={annotateMode ? handleEditMouseDown : undefined}
+                        ></canvas>
+                        {/* opt6: 右键菜单 */}
+                        {ctxMenu && !annotateMode && (() => {
+                            const { x, y, ann, type, annIdx } = ctxMenu;
+                            const containerRect = containerRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+                            const menuX = x - containerRect.left, menuY = y - containerRect.top;
+                            const infoLines = type === 'gt'
+                                ? [`GT · ${ann.category}`, `位置 [${Math.round(ann.bbox[0])}, ${Math.round(ann.bbox[1])}]`, `大小 ${Math.round(ann.bbox[2])}×${Math.round(ann.bbox[3])}`]
+                                : [`预测 · ${ann.category}`, ann.score != null ? `置信度 ${(ann.score*100).toFixed(1)}%` : null, `位置 [${Math.round(ann.bbox[0])}, ${Math.round(ann.bbox[1])}]`, `大小 ${Math.round(ann.bbox[2])}×${Math.round(ann.bbox[3])}`].filter(Boolean);
+                            return (
+                                <div
+                                    style={{ position:'absolute', left: menuX, top: menuY, zIndex: 9900, background:'var(--bg-surface)', border:'1px solid var(--border-strong)', borderRadius:'8px', boxShadow:'0 8px 28px rgba(0,0,0,0.55)', minWidth:'180px', fontSize:'12px', overflow:'hidden' }}
+                                    onMouseLeave={() => setCtxMenu(null)}
+                                >
+                                    <div style={{ padding:'6px 10px', background:'var(--bg-raised)', borderBottom:'1px solid var(--border)', color:'var(--text-muted)' }}>
+                                        {infoLines.map((l, i) => <div key={i}>{l}</div>)}
+                    </div>
+                                    <div style={{ padding:'4px 0' }}>
+                                        <div className="ctx-menu-item" onClick={() => {
+                                            const bbox = ann.bbox;
+                                            const info = `${ann.category} [${bbox.map(v => Math.round(v)).join(', ')}]${ann.score != null ? ` conf=${(ann.score*100).toFixed(1)}%` : ''}`;
+                                            navigator.clipboard.writeText(info).catch(() => {});
+                                            setCtxMenu(null);
+                                        }}>📋 复制框信息</div>
+                                        <div className="ctx-menu-item" onClick={() => {
+                                            setHiddenCats(prev => { const n = new Set(prev); n.add(ann.category); return n; });
+                                            setCtxMenu(null);
+                                        }}>🚫 隐藏此类别</div>
+                                        {type === 'gt' && (
+                                            <div className="ctx-menu-item" onClick={() => {
+                                                centerOnAnnotation(ann.bbox);
+                                                setCtxMenu(null);
+                                            }}>🎯 居中到此框</div>
+                                        )}
+                                        <div className="ctx-menu-item" onClick={() => {
+                                            enterAnnotateMode();
+                                            setCtxMenu(null);
+                                        }}>✏ 进入标注模式</div>
+                </div>
+                                </div>
+                            );
+                        })()}
+                        {/* opt9: Undo/Redo toast */}
+                        {undoToast && (
+                            <div key={undoToast.id} style={{
+                                position:'absolute', bottom:'60px', left:'50%', transform:'translateX(-50%)',
+                                background:'rgba(0,0,0,0.75)', color:'#fff', fontSize:'12px',
+                                padding:'5px 14px', borderRadius:'16px', pointerEvents:'none',
+                                whiteSpace:'nowrap', zIndex:9000,
+                                animation:'fadeInOut 1.5s ease forwards'
+                            }}>{undoToast.msg}</div>
+                        )}
+                        {/* B8: 小地图 */}
+                        <canvas
+                            ref={minimapCanvasRef}
+                            style={{
+                                position:'absolute', bottom:'8px', right:'8px',
+                                border:'1px solid var(--border-strong)', borderRadius:'6px',
+                                opacity: 0.88, pointerEvents:'none',
+                                display: zoom > 1.5 ? 'block' : 'none',
+                                background:'var(--bg-raised)',
+                            }}
+                        ></canvas>
+                    </div>
+                    {/* 类别选择弹窗（画完框后弹出）— 在 wrapper 外，不受 pan/zoom transform 影响 */}
+                    {annotateMode && categoryPickerBbox && (
+                        <CategoryPicker
+                            categories={categories.length > 0 ? categories : ['目标']}
+                            lastCategory={lastCategoryRef.current}
+                            onConfirm={(cat) => {
+                                lastCategoryRef.current = cat;
+                                const newAnn = { category: cat, bbox: categoryPickerBbox, area: categoryPickerBbox[2] * categoryPickerBbox[3], iscrowd: 0 };
+                                commitChange([...localAnns, newAnn]);
+                                setSelectedAnnIdx(localAnns.length);
+                                setCategoryPickerBbox(null);
+                                scheduleAutoSave(); // 选完类别后自动保存
+                            }}
+                            onCancel={() => setCategoryPickerBbox(null)}
+                        />
+                    )}
+                    {/* C1: 锁定信息面板 */}
+                    {lockedAnn && !annotateMode && (() => {
+                        const { type, ann, sx, sy } = lockedAnn;
+                        const container = containerRef.current;
+                        const cr = container ? container.getBoundingClientRect() : { left:0, top:0, right:800, bottom:600 };
+                        const relX = sx - cr.left + 12, relY = sy - cr.top + 12;
+                        const lines = type === 'gt' ? [
+                            ann.category,
+                            `位置: [${Math.round(ann.bbox[0])}, ${Math.round(ann.bbox[1])}]`,
+                            `大小: ${Math.round(ann.bbox[2])} × ${Math.round(ann.bbox[3])}`,
+                            `面积: ${Math.round(ann.bbox[2] * ann.bbox[3]).toLocaleString()} px²`,
+                        ] : [
+                            `[预测] ${ann._pred_source || ''}`,
+                            ann.category,
+                            ann.score != null ? `置信度: ${(Number(ann.score) * 100).toFixed(1)}%` : null,
+                            `位置: [${Math.round(ann.bbox[0])}, ${Math.round(ann.bbox[1])}]`,
+                            `大小: ${Math.round(ann.bbox[2])} × ${Math.round(ann.bbox[3])}`,
+                            `面积: ${Math.round(ann.bbox[2] * ann.bbox[3]).toLocaleString()} px²`,
+                        ].filter(Boolean);
+                        const color = getCategoryColor(palette, ann.category);
+                        const panelW = 190;
+                        const left = relX + panelW > cr.right - cr.left ? relX - panelW - 24 : relX;
+                        const top = relY;
+                        return (
+                            <div style={{
+                                position:'absolute', left, top, zIndex:10, pointerEvents:'auto',
+                                background:'rgba(10,10,30,0.95)', border:`1px solid ${color}`,
+                                borderRadius:'7px', padding:'10px 13px', minWidth:'160px', maxWidth:`${panelW}px`,
+                                boxShadow:'0 4px 20px rgba(0,0,0,0.6)', backdropFilter:'blur(4px)',
+                            }}>
+                                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'6px'}}>
+                                    <span style={{fontSize:'11px', color: type === 'gt' ? '#5d5' : '#7af', fontWeight:'bold'}}>
+                                        {type === 'gt' ? '● GT' : '⋯ 预测'}
+                                    </span>
+                                    <button onClick={() => setLockedAnn(null)} style={{background:'none', border:'none', color:'var(--text-muted)', cursor:'pointer', fontSize:'14px', padding:'0 2px'}}>✕</button>
+                                </div>
+                                {lines.map((l, i) => (
+                                    <div key={i} style={{fontSize:'12px', color: i === 0 ? '#fff' : '#aaa', padding:'1px 0', fontWeight: i === 0 ? 'bold' : 'normal'}}>{l}</div>
+                                ))}
+                                <div style={{marginTop:'6px', fontSize:'10px', color:'var(--text-muted)'}}>再次点击框解锁</div>
+                            </div>
+                        );
+                    })()}
+                    {/* 双击提示（查看模式无标注时） */}
+                    {!annotateMode && !lockedAnn && (
+                        <div style={{position:'absolute', bottom:'8px', left:'50%', transform:'translateX(-50%)', fontSize:'11px', color:'var(--text-muted)', pointerEvents:'none', userSelect:'none'}}>
+                            双击图片进入标注模式 · Tab 切换框 · 0=适应窗口
+                        </div>
+                    )}
+                </div>
+                )}
+
             </div>
             {/* C9: 导出弹窗 */}
             {exportModal && (
@@ -8081,7 +8238,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
             )}
             {/* B7: 查看模式下的亮度/对比度控制条 */}
             {!annotateMode && (brightness !== 100 || contrast !== 100) && (
-                <div style={{position:'fixed', bottom: '85px', left:'50%', transform:'translateX(-50%)', background:'rgba(15,17,23,0.94)', border:'1px solid var(--border-strong)', borderRadius:'10px', padding:'6px 16px', display:'flex', gap:'12px', alignItems:'center', fontSize:'12px', zIndex:999, backdropFilter:'blur(8px)', boxShadow:'0 8px 24px rgba(0,0,0,0.5)'}}>
+                <div style={{position:'fixed', bottom: (!annotateMode && showFilmstrip) ? '85px' : '24px', left:'50%', transform:'translateX(-50%)', background:'rgba(15,17,23,0.94)', border:'1px solid var(--border-strong)', borderRadius:'10px', padding:'6px 16px', display:'flex', gap:'12px', alignItems:'center', fontSize:'12px', zIndex:999, backdropFilter:'blur(8px)', boxShadow:'0 8px 24px rgba(0,0,0,0.5)'}}>
                     <span style={{color:'#ffaa00', fontWeight:'500'}}>图像调整</span>
                     <span style={{color:'var(--text-muted)'}}>亮度</span>
                     <input type="range" min="30" max="200" value={brightness} onChange={e=>setBrightness(Number(e.target.value))} style={{width:'80px', accentColor:'#ffaa00'}} />
@@ -8093,15 +8250,15 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                 </div>
             )}
             
-            {/* 缩略图导航带 (仅在查看模式显示) */}
-            {!annotateMode && (
+            {/* 缩略图导航带 (仅在查看模式显示，可隐藏) */}
+            {!annotateMode && showFilmstrip && (
                 <Filmstrip 
                     images={images} 
                     currentIndex={imageIdx} 
                     datasetId={datasetId} 
                     onNavigateTo={(idx) => navigate(idx - imageIdx)}
-                    leftInset={hasPredAnnotations ? 'calc(var(--viewer-sidebar-width, 260px) + 12px)' : 12}
-                    rightInset={'calc(var(--viewer-sidebar-width, 260px) + 12px)'}
+                    leftInset={filmstripLeftInsetPx}
+                    rightInset={filmstripRightInsetPx}
                 />
             )}
 
@@ -8123,6 +8280,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                 ['F', '全屏 / 退出全屏'],
                                 ['Esc', '关闭查看器 / 清除锁定'],
                                 ['?', '显示/隐藏帮助'],
+                                ['（工具栏）🎞 缩略图', '显示/隐藏底部缩略图导航'],
                                 ['双击图片', '进入标注模式'],
                                 ['点击标注框', '锁定/解锁信息面板'],
                             ]},
