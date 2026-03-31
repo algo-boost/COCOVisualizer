@@ -1102,18 +1102,36 @@ def _parse_c_time(s):
     return None
 
 
-def _apply_image_meta_filters(images_df, c_time_start=None, c_time_end=None, product_id_query=None, position=None):
+def _normalize_meta_filter_mapping(mapping):
+    m = mapping if isinstance(mapping, dict) else {}
+    def _pick(key, default):
+        v = m.get(key, default)
+        v = str(v).strip() if v is not None else ''
+        return v or default
+    return {
+        'c_time': _pick('c_time', 'c_time'),
+        'product_id': _pick('product_id', 'product_id'),
+        'position': _pick('position', 'position'),
+    }
+
+
+def _apply_image_meta_filters(images_df, c_time_start=None, c_time_end=None, product_id_query=None, position=None, meta_filter_mapping=None):
     """根据图片元数据筛选：c_time 时间段、product_id(SN) 模糊查询、position 精确匹配。
     任一字段在 images_df 中不存在时，该条件忽略（兼容无该字段的 COCO）。返回通过筛选的 image id 集合。"""
     if images_df.empty or 'id' not in images_df.columns:
         return set()
     allowed = set(images_df['id'].astype(int).tolist())
 
+    fm = _normalize_meta_filter_mapping(meta_filter_mapping)
+    c_time_col = fm['c_time']
+    product_id_col = fm['product_id']
+    position_col = fm['position']
+
     # c_time 时间段
     if c_time_start is not None or c_time_end is not None:
-        if 'c_time' in images_df.columns:
+        if c_time_col in images_df.columns:
             def in_range(row):
-                t = _parse_c_time(row.get('c_time'))
+                t = _parse_c_time(row.get(c_time_col))
                 if t is None:
                     return False
                 if c_time_start is not None:
@@ -1132,9 +1150,9 @@ def _apply_image_meta_filters(images_df, c_time_start=None, c_time_end=None, pro
     # product_id 模糊查询（product_id 即 SN，不单独处理 SN）
     if product_id_query and str(product_id_query).strip():
         q = str(product_id_query).strip().lower()
-        if 'product_id' in images_df.columns:
+        if product_id_col in images_df.columns:
             def match_product_id(row):
-                pid = row.get('product_id')
+                pid = row.get(product_id_col)
                 if pid is None or (isinstance(pid, float) and math.isnan(pid)):
                     return False
                 return q in str(pid).lower()
@@ -1144,9 +1162,9 @@ def _apply_image_meta_filters(images_df, c_time_start=None, c_time_end=None, pro
     # position 精确匹配
     if position and str(position).strip():
         pos_val = str(position).strip()
-        if 'position' in images_df.columns:
+        if position_col in images_df.columns:
             def match_position(row):
-                p = row.get('position')
+                p = row.get(position_col)
                 if p is None or (isinstance(p, float) and math.isnan(p)):
                     return False
                 return str(p).strip() == pos_val
@@ -1160,12 +1178,22 @@ def _apply_image_meta_filters(images_df, c_time_start=None, c_time_end=None, pro
 META_FILTER_PRODUCT_IDS_LIMIT = 500
 
 
-def _build_meta_filter_options(images_df):
+def _build_meta_filter_options(images_df, meta_filter_mapping=None):
     """从 images_df 构建 meta_filter_options：是否有各字段、position 列表、product_ids 列表、c_time 范围。兼容缺失字段。"""
+    fm = _normalize_meta_filter_mapping(meta_filter_mapping)
+    c_time_col = fm['c_time']
+    product_id_col = fm['product_id']
+    position_col = fm['position']
     opts = {
-        'has_c_time': 'c_time' in images_df.columns,
-        'has_product_id': 'product_id' in images_df.columns,
-        'has_position': 'position' in images_df.columns,
+        'has_c_time': c_time_col in images_df.columns,
+        'has_product_id': product_id_col in images_df.columns,
+        'has_position': position_col in images_df.columns,
+        'c_time_field': c_time_col,
+        'product_id_field': product_id_col,
+        'position_field': position_col,
+        'c_time_label': c_time_col,
+        'product_id_label': product_id_col,
+        'position_label': position_col,
         'positions': [],
         'product_ids': [],
         'c_time_min': None,
@@ -1174,16 +1202,16 @@ def _build_meta_filter_options(images_df):
     if images_df.empty:
         return opts
     if opts['has_position']:
-        positions = images_df['position'].dropna().astype(str).str.strip()
+        positions = images_df[position_col].dropna().astype(str).str.strip()
         opts['positions'] = sorted(positions.unique().tolist())
     if opts['has_product_id']:
-        pids = images_df['product_id'].dropna().astype(str).str.strip()
+        pids = images_df[product_id_col].dropna().astype(str).str.strip()
         pids = pids[pids.str.len() > 0].unique().tolist()
         pids = sorted(pids)[:META_FILTER_PRODUCT_IDS_LIMIT]
         opts['product_ids'] = pids
     if opts['has_c_time']:
         times = []
-        for v in images_df['c_time'].dropna():
+        for v in images_df[c_time_col].dropna():
             t = _parse_c_time(v)
             if t is not None:
                 times.append(t)
@@ -1307,6 +1335,7 @@ def load_dataset():
         coco_json_path = data.get('coco_json_path')
         image_dir = data.get('image_dir', '')
         dataset_name = data.get('dataset_name', 'dataset')
+        meta_filter_mapping = data.get('meta_filter_mapping') if isinstance(data, dict) else None
         
         if not coco_json_path:
             return jsonify({'error': '缺少COCO JSON路径'}), 400
@@ -1360,7 +1389,7 @@ def load_dataset():
         categories = class_dist['name'].tolist()
         
         # 准备所有可视化数据（含图片元数据筛选能力：c_time / product_id / position）
-        meta_filter_options = _build_meta_filter_options(eda.images_df)
+        meta_filter_options = _build_meta_filter_options(eda.images_df, meta_filter_mapping=meta_filter_mapping)
         visualization_data = {
             'dataset_id': dataset_id,
             'dataset_name': dataset_name,
@@ -1542,7 +1571,7 @@ def _source_fingerprint(items):
     return hashlib.md5('\n'.join(paths).encode('utf-8')).hexdigest()[:16]
 
 
-def _load_dataset_merged_impl(items, dataset_name='merged', output_dir=None):
+def _load_dataset_merged_impl(items, dataset_name='merged', output_dir=None, meta_filter_mapping=None):
     """合并多个 COCO（每个 item 含 coco_path, image_dir, relative_path），生成一个 CocoEDA 并返回 (eda, visualization_data)。
     output_dir：合并文件写入的目录，必须为加载的数据集对应目录（如扫描根目录），不写入 app 的 data 目录。
     同一组源文件始终复用同一个 merged 文件（基于路径指纹），并保留用户已设置的分类和备注。"""
@@ -1663,7 +1692,7 @@ def _load_dataset_merged_impl(items, dataset_name='merged', output_dir=None):
     df = _add_normalized_bbox_stats(eda, df)
     class_dist = eda.get_class_distribution()
     categories = class_dist['name'].tolist()
-    meta_filter_options = _build_meta_filter_options(eda.images_df)
+    meta_filter_options = _build_meta_filter_options(eda.images_df, meta_filter_mapping=meta_filter_mapping)
     visualization_data = {
         'num_images': len(eda.images_df),
         'num_annotations': len(eda.annotations_df),
@@ -1759,10 +1788,11 @@ def load_dataset_merged():
         items = data.get('items', [])
         dataset_name = (data.get('dataset_name') or 'merged').strip() or 'merged'
         root_path = (data.get('root_path') or data.get('merge_output_dir') or '').strip()
+        meta_filter_mapping = data.get('meta_filter_mapping') if isinstance(data.get('meta_filter_mapping'), dict) else None
         if not items:
             return jsonify({'error': '请至少选择一项（items 不能为空）'}), 400
         output_dir = root_path if root_path else None
-        eda, visualization_data = _load_dataset_merged_impl(items, dataset_name, output_dir=output_dir)
+        eda, visualization_data = _load_dataset_merged_impl(items, dataset_name, output_dir=output_dir, meta_filter_mapping=meta_filter_mapping)
         dataset_id = f"{dataset_name}_{len(current_datasets)}"
         current_datasets[dataset_id] = eda
         _persist_dataset(dataset_id, eda.coco_json_path, dataset_name, eda.image_dir)
@@ -1888,6 +1918,7 @@ def get_images_by_category():
         c_time_end = data.get('c_time_end')
         product_id_query = data.get('product_id_query')
         position = data.get('position')
+        meta_filter_mapping = data.get('meta_filter_mapping') if isinstance(data.get('meta_filter_mapping'), dict) else None
 
         eda = _ensure_dataset_loaded(dataset_id)
         if eda is None:
@@ -1910,7 +1941,8 @@ def get_images_by_category():
             c_time_start=c_time_start or None,
             c_time_end=c_time_end or None,
             product_id_query=product_id_query or None,
-            position=position or None
+            position=position or None,
+            meta_filter_mapping=meta_filter_mapping
         )
         if meta_allowed is not None and len(meta_allowed) > 0:
             target_image_ids = [i for i in target_image_ids if int(i) in meta_allowed]
@@ -2034,6 +2066,30 @@ def get_images_by_category():
                 img_item['c_time'] = str(img_info['c_time'])
             if img_info.get('position') is not None and (not isinstance(img_info['position'], float) or not math.isnan(img_info['position'])):
                 img_item['position'] = str(img_info['position'])
+
+            # 完整透传 COCO images 元字段（除 id 外），供前端看图界面完整显示
+            image_meta = {}
+            for _col in img_info.index:
+                if _col == 'id':
+                    continue
+                _val = img_info.get(_col)
+                if _val is None:
+                    continue
+                if isinstance(_val, (float, np.floating)) and (math.isnan(_val) or math.isinf(_val)):
+                    continue
+                if isinstance(_val, np.integer):
+                    image_meta[_col] = int(_val)
+                elif isinstance(_val, np.floating):
+                    image_meta[_col] = float(_val)
+                elif isinstance(_val, np.ndarray):
+                    image_meta[_col] = _val.tolist()
+                elif isinstance(_val, (list, tuple)):
+                    image_meta[_col] = list(_val)
+                elif isinstance(_val, dict):
+                    image_meta[_col] = _val
+                else:
+                    image_meta[_col] = _val
+            img_item['image_meta'] = image_meta
 
             # 尝试获取文件大小和修改时间（若在磁盘上存在）
             file_name = img_info.get('file_name', '')

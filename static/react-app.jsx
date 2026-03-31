@@ -54,7 +54,12 @@ const DEFAULT_CONFIG = {
         backgroundColor: '#1a1a2e',
         checkerboardColor1: '#2d2d44',
         checkerboardColor2: '#252548',
-        crossSidebarIouThreshold: 0.5
+        crossSidebarIouThreshold: 0.5,
+        metaFilterFieldMap: {
+            c_time: 'c_time',
+            product_id: 'product_id',
+            position: 'position'
+        }
     },
     settings: {
         modalTitle: '设置',
@@ -189,6 +194,19 @@ function passesConfThreshold(ann, confThreshold) {
     return confThreshold <= 0 || ann.score == null || Number(ann.score) >= confThreshold;
 }
 
+function getMetaFilterMapping(viewerCfg) {
+    const m = (viewerCfg && viewerCfg.metaFilterFieldMap) || {};
+    const pick = (k, d) => {
+        const v = String(m[k] || '').trim();
+        return v || d;
+    };
+    return {
+        c_time: pick('c_time', 'c_time'),
+        product_id: pick('product_id', 'product_id'),
+        position: pick('position', 'position')
+    };
+}
+
 // ==================== 配置提供者（config.json + 本地设置） ====================
 function ConfigProvider({ children }) {
     const [config, setConfig] = useState(DEFAULT_CONFIG);
@@ -254,10 +272,11 @@ function App() {
     const loadDataset = async (cocoPath, imageDir, name) => {
         setLoading(true);
         try {
+            const metaFilterMapping = getMetaFilterMapping(config.viewer || DEFAULT_CONFIG.viewer);
             const res = await fetch('/api/load_dataset', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ coco_json_path: cocoPath, image_dir: imageDir, dataset_name: name })
+                body: JSON.stringify({ coco_json_path: cocoPath, image_dir: imageDir, dataset_name: name, meta_filter_mapping: metaFilterMapping })
             });
             const data = await res.json();
             if (data.success) {
@@ -277,10 +296,11 @@ function App() {
         if (!items || items.length === 0) { alert('请至少选择一项'); return; }
         setLoading(true);
         try {
+            const metaFilterMapping = getMetaFilterMapping(config.viewer || DEFAULT_CONFIG.viewer);
             const res = await fetch('/api/load_dataset_merged', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ items, dataset_name: datasetName || 'merged', root_path: (rootPath || '').trim() })
+                body: JSON.stringify({ items, dataset_name: datasetName || 'merged', root_path: (rootPath || '').trim(), meta_filter_mapping: metaFilterMapping })
             });
             const data = await res.json();
             if (data.success) {
@@ -314,7 +334,7 @@ function App() {
             setActiveImageCategoryColors(null);
             setActiveImageCategoryMultiSelect(null);
         }
-        const body = { dataset_id: data.dataset_id, selected_categories: data.categories };
+        const body = { dataset_id: data.dataset_id, selected_categories: data.categories, meta_filter_mapping: getMetaFilterMapping(config.viewer || DEFAULT_CONFIG.viewer) };
         if (metaFilters && typeof metaFilters === 'object') {
             if (metaFilters.c_time_start) body.c_time_start = metaFilters.c_time_start;
             if (metaFilters.c_time_end) body.c_time_end = metaFilters.c_time_end;
@@ -348,7 +368,7 @@ function App() {
     // 按图片元数据筛选后重新拉取列表（c_time / product_id / position）
     const refetchImagesWithMetaFilters = useCallback(async (filters) => {
         if (!datasetData) return;
-        const body = { dataset_id: datasetData.dataset_id, selected_categories: categories };
+        const body = { dataset_id: datasetData.dataset_id, selected_categories: categories, meta_filter_mapping: getMetaFilterMapping(config.viewer || DEFAULT_CONFIG.viewer) };
         if (filters && typeof filters === 'object') {
             if (filters.c_time_start) body.c_time_start = filters.c_time_start;
             if (filters.c_time_end) body.c_time_end = filters.c_time_end;
@@ -391,7 +411,7 @@ function App() {
             const res = await fetch('/api/get_images_by_category', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dataset_id: datasetData.dataset_id, selected_categories: categories })
+                body: JSON.stringify({ dataset_id: datasetData.dataset_id, selected_categories: categories, meta_filter_mapping: getMetaFilterMapping(config.viewer || DEFAULT_CONFIG.viewer) })
             });
             const data = await res.json();
             if (data.success && data.images) {
@@ -3662,7 +3682,17 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
         setSelectedImages(new Set());
     };
 
-    const hasMetaFilterCapability = metaFilterOptions && (metaFilterOptions.has_c_time || metaFilterOptions.has_product_id || metaFilterOptions.has_position);
+    const metaOpts = metaFilterOptions || {};
+    const metaFieldMap = getMetaFilterMapping(config.viewer || DEFAULT_CONFIG.viewer);
+    const sampleMeta = (images && images[0] && images[0].image_meta) || {};
+    const hasMetaFilterCapability = !!(
+        (metaOpts.has_c_time || metaOpts.has_product_id || metaOpts.has_position) ||
+        (sampleMeta && typeof sampleMeta === 'object' && (
+            Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.c_time) ||
+            Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.product_id) ||
+            Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.position)
+        ))
+    );
     const handleApplyMetaFilters = async () => {
         if (!onApplyMetaFilters) return;
         setMetaFilterApplying(true);
@@ -3726,35 +3756,35 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                 {hasMetaFilterCapability && (
                     <div className="meta-filter-bar">
                         <span style={{ fontWeight: 600, marginRight: '4px' }}>元数据筛选:</span>
-                        {metaFilterOptions.has_c_time && (
+                        {(metaOpts.has_c_time || Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.c_time)) && (
                             <>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <span style={{ whiteSpace: 'nowrap' }}>时间起</span>
+                                    <span style={{ whiteSpace: 'nowrap' }}>{`${(metaOpts.c_time_label || metaFieldMap.c_time || '时间')}起`}</span>
                                     <input type="datetime-local" value={metaCtimeStart} onChange={(e) => setMetaCtimeStart(e.target.value)} style={{ padding: '4px 8px' }} />
                                 </label>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <span style={{ whiteSpace: 'nowrap' }}>时间止</span>
+                                    <span style={{ whiteSpace: 'nowrap' }}>{`${(metaOpts.c_time_label || metaFieldMap.c_time || '时间')}止`}</span>
                                     <input type="datetime-local" value={metaCtimeEnd} onChange={(e) => setMetaCtimeEnd(e.target.value)} style={{ padding: '4px 8px' }} />
                                 </label>
                             </>
                         )}
-                        {metaFilterOptions.has_product_id && (
+                        {(metaOpts.has_product_id || Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.product_id)) && (
                             <>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <span style={{ whiteSpace: 'nowrap' }}>SN/产品ID</span>
+                                    <span style={{ whiteSpace: 'nowrap' }}>{metaOpts.product_id_label || metaFieldMap.product_id || 'SN/产品ID'}</span>
                                     <input type="text" placeholder="输入模糊查询" value={metaProductIdQuery} onChange={(e) => setMetaProductIdQuery(e.target.value)} style={{ padding: '4px 8px', minWidth: '140px' }} />
                                 </label>
-                                {metaFilterOptions.product_ids && metaFilterOptions.product_ids.length > 0 && (
+                                {metaOpts.product_ids && metaOpts.product_ids.length > 0 && (
                                     <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                                         <span style={{ whiteSpace: 'nowrap' }}>或选择</span>
                                         <select
                                             value={metaProductIdQuery}
                                             onChange={(e) => setMetaProductIdQuery(e.target.value === '' ? '' : e.target.value)}
                                             style={{ padding: '4px 8px', minWidth: '160px', maxWidth: '220px' }}
-                                            title="从已有 SN 中选择"
+                                            title={`从已有 ${metaOpts.product_id_label || metaFieldMap.product_id || 'SN'} 中选择`}
                                         >
                                             <option value="">全部</option>
-                                            {metaFilterOptions.product_ids.map(pid => (
+                                            {metaOpts.product_ids.map(pid => (
                                                 <option key={pid} value={pid} title={pid}>{pid.length > 24 ? pid.slice(0, 21) + '...' : pid}</option>
                                             ))}
                                         </select>
@@ -3762,14 +3792,23 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                 )}
                             </>
                         )}
-                        {metaFilterOptions.has_position && metaFilterOptions.positions && metaFilterOptions.positions.length > 0 && (
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                <span style={{ whiteSpace: 'nowrap' }}>朝向</span>
-                                <select value={metaPosition} onChange={(e) => setMetaPosition(e.target.value)} style={{ padding: '4px 8px' }}>
-                                    <option value="all">全部</option>
-                                    {metaFilterOptions.positions.map(p => <option key={p} value={p}>{p}</option>)}
-                                </select>
-                            </label>
+                        {(metaOpts.has_position || Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.position)) && (
+                            <>
+                                {metaOpts.positions && metaOpts.positions.length > 0 ? (
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <span style={{ whiteSpace: 'nowrap' }}>{metaOpts.position_label || metaFieldMap.position || '位置'}</span>
+                                        <select value={metaPosition} onChange={(e) => setMetaPosition(e.target.value)} style={{ padding: '4px 8px' }}>
+                                            <option value="all">全部</option>
+                                            {metaOpts.positions.map(p => <option key={p} value={p}>{p}</option>)}
+                                        </select>
+                                    </label>
+                                ) : (
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <span style={{ whiteSpace: 'nowrap' }}>{metaOpts.position_label || metaFieldMap.position || '位置'}</span>
+                                        <input type="text" placeholder="精确匹配" value={metaPosition === 'all' ? '' : metaPosition} onChange={(e) => setMetaPosition(e.target.value || 'all')} style={{ padding: '4px 8px', minWidth: '120px' }} />
+                                    </label>
+                                )}
+                            </>
                         )}
                         <button type="button" className="btn btn-primary btn-sm" onClick={handleApplyMetaFilters} disabled={metaFilterApplying}>
                             {metaFilterApplying ? '筛选中...' : '应用筛选'}
@@ -4329,6 +4368,35 @@ function SettingsModal({
                                             {lineWidthOptions.map(v => <option key={v} value={v}>{v}</option>)}
                                         </select>
                                         <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginTop: '4px' }}>0.1～1 共十档，查看器内可随时调整</p>
+                                    </div>
+                                    <div className="form-group">
+                                        <label className="form-label">元筛选字段映射</label>
+                                        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                                            用于指定 COCO images 里的字段名，例如时间字段、SN/产品号字段、位置字段。
+                                        </p>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '8px', alignItems: 'center' }}>
+                                            <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-sm)' }}>时间字段</span>
+                                            <input
+                                                className="form-input"
+                                                value={(viewer.metaFilterFieldMap && viewer.metaFilterFieldMap.c_time) || 'c_time'}
+                                                onChange={(e) => updateViewer('metaFilterFieldMap', { ...(viewer.metaFilterFieldMap || {}), c_time: e.target.value })}
+                                                placeholder="例如 c_time / capture_time"
+                                            />
+                                            <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-sm)' }}>SN/产品号字段</span>
+                                            <input
+                                                className="form-input"
+                                                value={(viewer.metaFilterFieldMap && viewer.metaFilterFieldMap.product_id) || 'product_id'}
+                                                onChange={(e) => updateViewer('metaFilterFieldMap', { ...(viewer.metaFilterFieldMap || {}), product_id: e.target.value })}
+                                                placeholder="例如 product_id / sn / serial_no"
+                                            />
+                                            <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-sm)' }}>位置字段</span>
+                                            <input
+                                                className="form-input"
+                                                value={(viewer.metaFilterFieldMap && viewer.metaFilterFieldMap.position) || 'position'}
+                                                onChange={(e) => updateViewer('metaFilterFieldMap', { ...(viewer.metaFilterFieldMap || {}), position: e.target.value })}
+                                                placeholder="例如 position / station"
+                                            />
+                                        </div>
                                     </div>
                                     <div className="form-group">
                                         <label className="form-label">GT/预测侧栏联动 IoU 阈值</label>
@@ -5761,6 +5829,13 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     const currentCategory = currentCategories[0];
     const currentNote = imageNotes[currentImage.image_id] || '';
     const hasPredAnnotations = (currentImage.pred_annotations || []).length > 0;
+    const imageMetaEntries = React.useMemo(() => {
+        const raw = (currentImage && currentImage.image_meta && typeof currentImage.image_meta === 'object')
+            ? currentImage.image_meta
+            : {};
+        const entries = Object.entries(raw).filter(([k]) => k !== 'id');
+        return entries;
+    }, [currentImage]);
     const linkedPredIdxSet = React.useMemo(() => {
         if (hoveredAnnIdx == null) return new Set();
         const gtAnn = currentImage.annotations?.[hoveredAnnIdx];
@@ -7679,6 +7754,12 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                         <span style={{color:'var(--accent)', marginLeft:'8px'}}>预测 {(currentImage.pred_annotations || []).length}</span>
                                     )}
                                 </div>
+                                {imageMetaEntries.map(([k, v]) => (
+                                    <div key={`meta-anno-${k}`} title={`${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`} style={{ marginTop: '3px' }}>
+                                        <span style={{ color: 'var(--text-muted)' }}>{k}:</span>{' '}
+                                        <span style={{ color: 'var(--text-secondary)' }}>{typeof v === 'string' ? v : JSON.stringify(v)}</span>
+                                    </div>
+                                ))}
                                 <div style={{marginTop:'4px', color: dirty ? 'var(--warning)' : 'var(--text-muted)'}}>{dirty ? '● 有未保存修改' : '○ 已保存'}</div>
                             </div>
                         </div>
@@ -7701,6 +7782,12 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                         {!annotateMode && <>
                         <div>文件: {currentImage.file_name.split('/').pop()}</div>
                         <div>尺寸: {currentImage.width} × {currentImage.height}</div>
+                        {imageMetaEntries.map(([k, v]) => (
+                            <div key={`meta-view-${k}`} title={`${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`}>
+                                <span style={{ color: 'var(--text-muted)' }}>{k}:</span>{' '}
+                                <span style={{ color: 'var(--text-secondary)' }}>{typeof v === 'string' ? v : JSON.stringify(v)}</span>
+                            </div>
+                        ))}
                             <div style={{marginTop:'3px', display:'flex', gap:'10px', flexWrap:'wrap'}}>
                                 <span><span style={{color:'#52c41a', fontWeight:'bold'}}>
                                     {confThresholdGT > 0 && currentImage.annotations.some(a => a.score != null)
