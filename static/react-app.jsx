@@ -29,6 +29,8 @@ const DEFAULT_CONFIG = {
         selectedSuffix: '已选'
     },
     imageCategories: ['未分类', '背景误检', '低置信度背景误检', '低置信度正确检出', '高置信度正确检出', '环境误检', '类别误检', '漏检'],
+    /** COCO 中无任何 GT 类别（空 categories 或无标注推断）时，用于筛选/打标/导出的默认类别名，可在 config.json 覆盖 */
+    defaultAnnotationCategories: ['object'],
     imageCategoryMultiSelect: false,
     imageCategoryColors: {
         '未分类': '#888888',
@@ -74,11 +76,16 @@ const DEFAULT_CONFIG = {
         backgroundStyleCheckerboard: '马赛克',
         backgroundStyleSolid: '纯色',
         lineWidthDefaultLabel: '默认线宽',
-        imageCategoriesLabel: '图片分类',
-        imageCategoriesHint: '用于标注图片级分类（如未分类、误检等），可增删改名称与颜色。',
+        imageCategoriesLabel: '图片级分类（全局默认）',
+        imageCategoriesHint: '用于图片级标签（如未分类、误检等），保存在本机；若当前 COCO 含 image_category_definitions 则仍以文件中的定义为准。',
+        annotationCategoriesLabel: 'GT 框标注类别（默认）',
+        annotationCategoriesHint: '当数据集中没有任何 GT 类别时，使用此处名称作为可选类别（如图库筛选、看图打框）。至少保留一项。',
+        categoriesTabTitle: '分类默认值',
         addCategoryButton: '添加分类',
+        addAnnotationCategoryButton: '添加类别',
         categoryNamePlaceholder: '分类名称',
         resetCategoriesButton: '恢复默认',
+        resetAnnotationCategoriesButton: '恢复 GT 默认',
         closeButtonText: '关闭'
     },
     help: {
@@ -100,7 +107,27 @@ const DEFAULT_CONFIG = {
         modalTitle: '按分类导出',
         modalDescription: '选择要导出的图片分类，每个分类将生成独立的COCO数据：',
         exportButtonText: '导出',
-        progressGenerating: '正在生成压缩包...'
+        progressGenerating: '正在生成压缩包...',
+        tabCategory: '按分类',
+        tabExperiment: '实验 train/valid',
+        experimentTitle: '实验数据集（train / valid）',
+        experimentDescription: '基于当前已加载的 COCO：导出文件名为原始 basename。默认自动丢弃重名（保留最小 image_id）；也可关闭此项改为遇重名报错。',
+        experimentTrainRatio: '训练集比例',
+        experimentSeed: '随机种子',
+        experimentZipLabel: 'ZIP 文件名',
+        experimentOutputPathLabel: '服务端保存路径（可选）',
+        experimentOutputPathPlaceholder: '/path/to/dir 或 /path/to/file.zip',
+        experimentOutputPathHint: '填写运行本服务的机器上的绝对或相对路径。以 .zip 结尾则视为完整文件路径，否则视为目录并与上方 ZIP 文件名拼接。留空则写入临时目录并触发浏览器下载。',
+        experimentExportButton: '导出实验包',
+        experimentProgress: '正在生成实验数据集...',
+        experimentLead: '合并当前 COCO 中的图片与标注，按种子划分 train / valid，打包为单个 ZIP。',
+        experimentSectionParams: '划分参数',
+        experimentSectionDup: '重名处理',
+        experimentSectionOutput: '输出文件',
+        experimentDropDupes: '丢弃重名图片',
+        experimentDropDupesHint: '同一文件名（basename）只保留 image_id 最小的一张，其余不参与导出。',
+        experimentStrictDupesHint: '关闭后若存在重名将报错终止，需先手动改名。',
+        experimentFootnote: '图库筛选不影响本导出；导出的是已加载 COCO 中的全部图片。'
     },
     saveModal: {
         title: '保存到 COCO 文件',
@@ -321,8 +348,13 @@ function App() {
     };
 
     const applyDatasetAndFetchImages = async (data, metaFilters) => {
-        setDatasetData(data);
-        setCategories(data.categories);
+        const serverAnnCats = Array.isArray(data.categories) && data.categories.length > 0 ? data.categories : null;
+        const fallbackAnn = (config.defaultAnnotationCategories && config.defaultAnnotationCategories.length > 0)
+            ? config.defaultAnnotationCategories
+            : (DEFAULT_CONFIG.defaultAnnotationCategories || ['object']);
+        const effectiveAnnCats = serverAnnCats || fallbackAnn;
+        setDatasetData({ ...data, categories: effectiveAnnCats });
+        setCategories(effectiveAnnCats);
         // 若 COCO 文件含有本软件写入的分类定义，完全按原定义加载（保持顺序、颜色、快捷键绑定）
         // 否则清空活跃定义，回退到用户自己的 config
         const catDefs = data.image_category_definitions;
@@ -339,7 +371,8 @@ function App() {
             setActiveImageCategoryColors(null);
             setActiveImageCategoryMultiSelect(null);
         }
-        const body = { dataset_id: data.dataset_id, selected_categories: data.categories, meta_filter_mapping: getMetaFilterMapping(config.viewer || DEFAULT_CONFIG.viewer) };
+        // 服务端无类别时 selected_categories 传 [] 表示不按 GT 类别筛图（仍显示全部图片）；UI 上仍展示默认类别供后续打标
+        const body = { dataset_id: data.dataset_id, selected_categories: serverAnnCats || [], meta_filter_mapping: getMetaFilterMapping(config.viewer || DEFAULT_CONFIG.viewer) };
         if (metaFilters && typeof metaFilters === 'object') {
             if (metaFilters.c_time_start) body.c_time_start = metaFilters.c_time_start;
             if (metaFilters.c_time_end) body.c_time_end = metaFilters.c_time_end;
@@ -836,6 +869,8 @@ function App() {
                     imageCategories={imageCategories}
                     imageCategoryColors={imageCategoryColors}
                     imageCategoryMultiSelect={imageCategoryMultiSelect}
+                    onUpdateImageCategories={setActiveImageCategories}
+                    onUpdateImageCategoryColors={setActiveImageCategoryColors}
                     onUpdateCategory={updateImageCategory}
                     onUpdateCategories={updateImageCategories}
                     onUpdateNote={updateImageNote}
@@ -854,6 +889,7 @@ function App() {
                     agentFilterIds={agentFilterIds}
                     agentFilterMsg={agentFilterMsg}
                     onClearAgentFilter={() => { setAgentFilterIds(null); setAgentFilterMsg(''); }}
+                    onFilterByIds={handleAgentFilter}
                 />
             )}
             {page === 'eda' && datasetData && (
@@ -865,15 +901,7 @@ function App() {
                 />
             )}
             {showSettingsModal && (
-                <SettingsModal
-                    onClose={() => setShowSettingsModal(false)}
-                    imageCategories={imageCategories}
-                    imageCategoryColors={imageCategoryColors}
-                    imageCategoryMultiSelect={imageCategoryMultiSelect}
-                    onUpdateImageCategories={setActiveImageCategories}
-                    onUpdateImageCategoryColors={setActiveImageCategoryColors}
-                    onUpdateImageCategoryMultiSelect={setActiveImageCategoryMultiSelect}
-                />
+                <SettingsModal onClose={() => setShowSettingsModal(false)} />
             )}
             {showHelpModal && (
                 <HelpModal onClose={() => setShowHelpModal(false)} />
@@ -944,7 +972,7 @@ function HelpModal({ onClose }) {
                             <p>COCOVisualizer 是一个面向目标检测项目的 <b>数据浏览、对比评估、标注修正、智能分析</b> 一体化工具。</p>
                             <ol style={{ paddingLeft: '20px', marginTop: '10px' }}>
                                 <li><b>加载数据：</b>导入 COCO JSON + 图片目录，快速启动可视化。</li>
-                                <li><b>图库筛选：</b>按类别、目录、框数量、置信度等条件定位目标图片。</li>
+                                <li><b>图库筛选：</b>按类别、目录、置信度、Python 代码等条件定位目标图片。</li>
                                 <li><b>看图对比：</b>同屏查看 GT 与预测，支持独立阈值和联动高亮。</li>
                                 <li><b>标注修正：</b>进入编辑模式增删改框，并可接受预测框为 GT。</li>
                                 <li><b>智能分析：</b>在 Agent 中用自然语言完成筛图、统计、导出。</li>
@@ -974,13 +1002,14 @@ function HelpModal({ onClose }) {
                     )}
                     {activeTab === 'gallery' && (
                         <div>
-                            <h4>🖼 图库与高级筛选</h4>
+                            <h4>🖼 图库与代码筛选</h4>
                             <ul style={{ paddingLeft: '20px' }}>
-                                <li><b>快速筛选：</b>按 GT 类别、图片级分类、目录、关键词快速过滤。</li>
-                                <li><b>高级筛选：</b>支持 GT 数量区间、预测数量区间、极小目标过滤等硬例定位条件。</li>
+                                <li><b>快速筛选：</b>按 GT 类别、图片级分类、目录、关键词快速过滤；工具栏「无 GT」仅保留无任何 GT 框的图片（与图片级「未分类」无关）。</li>
+                                <li><b>代码筛选：</b>点击工具栏「代码筛选」打开弹窗，编写 Python（与 Agent 消息里代码块相同执行环境）。最后一行表达式为 <code>image_id</code> 列表时应用为图库筛选；也可运行统计/导出类脚本在弹窗内查看报告。</li>
                                 <li><b>排序：</b>可按文件名、GT 框数、预测框数、文件大小、时间排序。</li>
                                 <li><b>批量操作：</b>支持批量打图片级分类、批量清理标注。</li>
-                                <li><b>自动联动：</b>Agent 或代码返回 image_id 列表后可直接联动图库筛选。</li>
+                                <li><b>实验导出：</b>「实验 train/valid」：默认同 basename 只保留最小 image_id，其余丢弃；可关闭为遇重名报错。ZIP 默认同数据集名。</li>
+                                <li><b>自动联动：</b>Agent 聊天中运行代码块筛选结果会跳转图库；图库内运行筛选与之一致。</li>
                             </ul>
                         </div>
                     )}
@@ -1000,10 +1029,10 @@ function HelpModal({ onClose }) {
                     {activeTab === 'annotate' && (
                         <div>
                             <h4>✏️ 画框与打标</h4>
-                            <p>在看图模式下双击图片或点击 <b>✏️ 标注</b> 进入编辑模式。</p>
+                            <p>在看图模式下：<b>双击空白处</b>进入画框模式；<b>双击已有 GT 框</b>进入选择模式并选中该框（可拖拽、改类别）。也可点击 <b>✏️ 标注</b>。</p>
                             <ul style={{ paddingLeft: '20px' }}>
                                 <li><b>画框：</b>B 键切画框工具，拖拽即可新建框。</li>
-                                <li><b>选框：</b>V 键切选择工具，支持移动/缩放/多选。</li>
+                                <li><b>选框：</b>V 键切选择工具，支持移动/缩放/多选；双击框可快速进入。</li>
                                 <li><b>精修：</b>方向键微调，Shift+方向键快速移动，坐标面板可精确改数值。</li>
                                 <li><b>预测转 GT：</b>支持单条 <b>+GT</b> 和批量“全部接受”。</li>
                                 <li><b>撤销重做：</b><code>Ctrl+Z / Ctrl+Y</code> 全链路可回退。</li>
@@ -1033,7 +1062,7 @@ function HelpModal({ onClose }) {
                         <div>
                             <h4>⌨ 快捷键清单</h4>
                             <table className="help-shortcut-table" style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px' }}>
-                                <tbody>
+                        <tbody>
                                     <tr style={{borderBottom:'1px solid var(--border)'}}><td style={{padding:'8px', fontWeight:'bold'}}>通用 & 导航</td><td></td></tr>
                                     <tr><td className="help-key">← / A 或 → / D</td><td>上一张 / 下一张图片（自带预加载，零延迟秒切）</td></tr>
                                     <tr><td className="help-key">Tab / Shift+Tab</td><td>在当前图的不同标注框之间循环切换并居中高亮</td></tr>
@@ -1048,9 +1077,9 @@ function HelpModal({ onClose }) {
                                     <tr><td className="help-key">Ctrl+Z / Ctrl+Y</td><td>撤销 (Undo) / 重做 (Redo)</td></tr>
                                     <tr><td className="help-key">方向键</td><td>微调选中框位置（加按 Shift 每次移动 10px）</td></tr>
                                     <tr><td className="help-key">Space + 拖拽</td><td>画框模式下临时切换为手形工具平移画布</td></tr>
-                                </tbody>
-                            </table>
-                        </div>
+                        </tbody>
+                    </table>
+                </div>
                     )}
                 </div>
                 <div className="modal-footer" style={{ borderTop: '1px solid var(--border)' }}>
@@ -1246,10 +1275,118 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
         onLoadMerged(selected, datasetName, rootPath);
     };
 
-    const handleDrop = (e) => {
+    const isLikelyLocalServer = React.useMemo(() => {
+        const host = (window.location.hostname || '').toLowerCase();
+        return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+    }, []);
+    const collectDroppedFiles = async (dataTransfer) => {
+        if (!dataTransfer) return [];
+        const list = [];
+        const items = Array.from(dataTransfer.items || []);
+        const hasEntryApi = items.some(it => typeof it.webkitGetAsEntry === 'function');
+
+        const walkEntry = async (entry, prefix = '') => {
+            if (!entry) return;
+            if (entry.isFile) {
+                await new Promise((resolve) => {
+                    entry.file((file) => {
+                        list.push({ file, relativePath: prefix + file.name });
+                        resolve();
+                    }, () => resolve());
+                });
+                return;
+            }
+            if (entry.isDirectory) {
+                const reader = entry.createReader();
+                const readAll = () => new Promise((resolve) => {
+                    const all = [];
+                    const loop = () => reader.readEntries((entries) => {
+                        if (!entries.length) return resolve(all);
+                        all.push(...entries);
+                        loop();
+                    }, () => resolve(all));
+                    loop();
+                });
+                const entries = await readAll();
+                for (const sub of entries) {
+                    await walkEntry(sub, `${prefix}${entry.name}/`);
+                }
+            }
+        };
+
+        if (hasEntryApi) {
+            for (const it of items) {
+                const entry = it.webkitGetAsEntry ? it.webkitGetAsEntry() : null;
+                if (entry) await walkEntry(entry, '');
+            }
+        } else {
+            const files = Array.from(dataTransfer.files || []);
+            files.forEach((f) => list.push({ file: f, relativePath: f.webkitRelativePath || f.name }));
+        }
+        return list.filter(x => x && x.file);
+    };
+    const uploadDroppedFilesAsBundle = async (droppedFiles) => {
+        if (!droppedFiles || droppedFiles.length === 0) return null;
+        const form = new FormData();
+        droppedFiles.forEach(({ file, relativePath }) => {
+            form.append('files', file, file.name);
+            form.append('paths', relativePath || file.name);
+        });
+        const res = await fetch('/api/upload_drop_bundle', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || '上传失败');
+        return data.root_path || '';
+    };
+    const handleDrop = async (e) => {
         e.preventDefault();
-        const t = (e.dataTransfer && e.dataTransfer.getData('text')) || '';
-        if (t) setRootPath(t.trim());
+        const dt = e.dataTransfer;
+        const droppedFiles = await collectDroppedFiles(dt);
+        const rawTextPath = ((dt && (dt.getData('text/uri-list') || dt.getData('text/plain') || dt.getData('text'))) || '').trim();
+        const textPath = rawTextPath.startsWith('file://') ? decodeURIComponent(rawTextPath.replace(/^file:\/\//, '')) : rawTextPath;
+        if (isLikelyLocalServer) {
+            if (textPath) {
+                setRootPath(textPath);
+                return;
+            }
+            const localFile = droppedFiles[0]?.file;
+            if (localFile && localFile.path) {
+                const p = String(localFile.path || '');
+                const dir = p.includes('/') || p.includes('\\') ? p.replace(/[\\/][^\\/]*$/, '') : p;
+                if (dir) setRootPath(dir);
+                return;
+            }
+            // 某些浏览器不会暴露本地拖拽路径；本地模式下也兜底为上传后回填服务端路径
+            try {
+                if (droppedFiles.length > 0) {
+                    const uploadedRoot = await uploadDroppedFilesAsBundle(droppedFiles);
+                    if (uploadedRoot) {
+                        setRootPath(uploadedRoot);
+                        return;
+                    }
+                }
+            } catch (err) {
+                alert('拖拽处理失败: ' + (err?.message || err));
+                return;
+            }
+            alert('未读取到本地路径，也未上传成功，请直接粘贴目录路径。');
+            return;
+        }
+        try {
+            if (droppedFiles.length > 0) {
+                const uploadedRoot = await uploadDroppedFilesAsBundle(droppedFiles);
+                if (uploadedRoot) {
+                    setRootPath(uploadedRoot);
+                    return;
+                }
+            }
+            if (textPath) {
+                setRootPath(textPath);
+                return;
+            }
+            alert('远程模式下请拖入文件/目录以便上传，或手动输入服务器路径。');
+        } catch (err) {
+            alert('拖拽上传失败: ' + (err?.message || err));
+        }
     };
     const handlePaste = (e) => {
         const t = (e.clipboardData && e.clipboardData.getData('text')) || '';
@@ -1300,10 +1437,10 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
                         </div>
                     )}
                     
-                    <div className="load-title-row">
-                        <img src="/static/logo.png" alt="" className="load-logo" />
-                        <h1 className="load-title">{config.appName || lp.title}</h1>
-                    </div>
+                <div className="load-title-row">
+                    <img src="/static/logo.png" alt="" className="load-logo" />
+                    <h1 className="load-title">{config.appName || lp.title}</h1>
+                </div>
                     <div className="load-subtitle">专业的计算机视觉数据查看、修正与评估工具</div>
                     
                     <div className="load-tabs">
@@ -1314,119 +1451,140 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
 
                 <div className="load-body-area">
                     {loadTab === 'scan' && (
-                        <div className="load-section">
+                <div className="load-section">
                             <p className="load-section-desc">约定：自动扫描指定目录及其子目录下的 <code>_annotations.coco.json</code> 文件。支持拖入或粘贴路径。</p>
-                            <div className="load-field">
-                                <label className="load-label">根目录路径</label>
-                                <div className="load-path-row">
-                                    <div
+                    <div className="load-field">
+                        <label className="load-label">根目录路径</label>
+                        <div className="load-path-row">
+                            <div
                                         className="load-drop-zone"
-                                        onDrop={handleDrop}
-                                        onDragOver={(e) => e.preventDefault()}
-                                        onPaste={handlePaste}
-                                        style={{ flex: 1 }}
-                                    >
+                                onDrop={handleDrop}
+                                onDragOver={(e) => e.preventDefault()}
+                                onPaste={handlePaste}
+                                style={{ flex: 1 }}
+                            >
                                         <div className="drop-zone-icon">📥</div>
-                                        <div className="load-drop-zone-text">拖拽目录到此处，或粘贴路径</div>
-                                        <input
-                                            type="text"
-                                            value={rootPath}
-                                            onChange={(e) => setRootPath(e.target.value)}
-                                            placeholder="例如 D:\data\coco_root 或 /path/to/root"
+                                        <div className="load-drop-zone-text">{isLikelyLocalServer ? '拖拽目录到此处，自动提取本地路径' : '拖拽目录/文件到此处，自动上传到服务器'}</div>
+                                <input
+                                    type="text"
+                                    value={rootPath}
+                                    onChange={(e) => setRootPath(e.target.value)}
+                                    placeholder="例如 D:\data\coco_root 或 /path/to/root"
                                             className="load-input"
-                                        />
-                                    </div>
-                                    <button type="button" className="load-btn load-btn-secondary" onClick={() => setShowPathPicker(true)} title="弹窗选择路径" style={{marginTop: 0, padding: '0 24px', borderRadius: '12px'}}>浏览目录...</button>
-                                </div>
-                            </div>
-                            {showPathPicker && (
-                                <PathPickerModal
-                                    initialPath={rootPath}
-                                    onSelect={(p) => { setRootPath(p); setShowPathPicker(false); }}
-                                    onClose={() => setShowPathPicker(false)}
                                 />
-                            )}
-                            <div className="load-actions">
+                            </div>
+                                    <button type="button" className="load-btn load-btn-secondary" onClick={() => setShowPathPicker(true)} title="弹窗选择路径" style={{marginTop: 0, padding: '0 24px', borderRadius: '12px'}}>浏览目录...</button>
+                        </div>
+                    </div>
+                    {showPathPicker && (
+                        <PathPickerModal
+                            initialPath={rootPath}
+                            onSelect={(p) => { setRootPath(p); setShowPathPicker(false); }}
+                            onClose={() => setShowPathPicker(false)}
+                        />
+                    )}
+                    <div className="load-actions">
                                 <button type="button" className="load-btn" onClick={handleScan} disabled={scanning} style={{flex: 1}}>
                                     {scanning ? '正在深度扫描中...' : '开始扫描'}
-                                </button>
+                        </button>
                             </div>
                             
-                            {scanItems.length > 0 && (
-                                <div className="load-scan-list" style={{ marginTop: '24px', borderTop: '1px solid var(--border)', paddingTop: '20px' }}>
+                        {scanItems.length > 0 && (
+                                <div className="load-scan-results">
                                     <div className="load-scan-list-header">
                                         已发现 {scanItems.length} 个标注目录
                                         {scanItems.some(it => it.auto_created) && (
-                                            <span style={{ color: '#f0a040', marginLeft: '6px' }}>
+                                            <span className="load-scan-header-note">
                                                 （含 {scanItems.filter(it => it.auto_created).length} 个自动创建的数据集）
-                                            </span>
-                                        )}
-                                    </div>
-                                    <div style={{ maxHeight: '250px', overflowY: 'auto', background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: '8px', padding: '4px' }}>
-                                        {scanItems.map((item, i) => (
-                                            <div key={i} className="load-scan-item" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px', padding: '8px 12px', borderBottom: '1px solid var(--border)', background: selectedIndices.has(i) ? 'var(--bg-hover)' : 'transparent' }}>
-                                                <label style={{ display: 'flex', alignItems: 'center', flex: '1 1 auto', minWidth: 0, cursor: 'pointer' }}>
-                                                    <input type="checkbox" checked={selectedIndices.has(i)} onChange={() => toggleItem(i)} style={{accentColor: 'var(--accent)'}} />
-                                                    <span className="load-scan-rel" style={{marginLeft: '8px', fontWeight: '500'}}>{item.relative_path || '(根)'}</span>
+                                </span>
+                        )}
+                    </div>
+                                    <div className="load-scan-scroll">
+                            {scanItems.map((item, i) => (
+                                            <div
+                                                key={i}
+                                                className={`load-scan-item ${selectedIndices.has(i) ? 'load-scan-item-selected' : ''}`}
+                                            >
+                                                <label className="load-scan-item-main">
+                                                    <input type="checkbox" checked={selectedIndices.has(i)} onChange={() => toggleItem(i)} className="load-scan-checkbox" />
+                                        <span className="load-scan-rel">{item.relative_path || '(根)'}</span>
                                                     {item.auto_created && (
-                                                        <span title={`该目录含 ${item.num_images ?? '?'} 张图片，已自动创建 _annotations.coco.json`}
-                                                            style={{ fontSize: '10px', background: 'rgba(245,165,36,0.15)', color: 'var(--warning)', border: '1px solid rgba(245,165,36,0.35)', borderRadius: '4px', padding: '2px 6px', marginLeft: '8px', whiteSpace: 'nowrap' }}>
+                                                        <span
+                                                            className="load-scan-badge-auto"
+                                                            title={`该目录含 ${item.num_images ?? '?'} 张图片，已自动创建 _annotations.coco.json`}
+                                                        >
                                                             自动创建 · {item.num_images ?? '?'} 张
                                                         </span>
                                                     )}
-                                                    <span className="load-scan-path" style={{marginLeft: 'auto', fontSize: '12px', color: 'var(--text-muted)'}} title={item.coco_path}>{item.coco_path.split(/[/\\]/).pop()}</span>
-                                                </label>
-                                                <button type="button" className="load-btn load-btn-secondary" style={{ flexShrink: 0, width: 'auto', padding: '4px 10px', fontSize: '12px', marginTop: 0 }} onClick={() => handleLoadSingleFromScanItem(item)} disabled={loading} title="仅加载此目录的 COCO 文件">
-                                                    单项加载
-                                                </button>
-                                                {item.loader_record && (
-                                                    <button type="button" className="load-btn load-btn-secondary" style={{ flexShrink: 0, width: 'auto', padding: '4px 10px', fontSize: '12px', marginTop: 0, color: 'var(--accent)', borderColor: 'var(--accent)' }} onClick={() => handleLoadLastFromScanItem(item)} disabled={loading}>
-                                                        加载上次
-                                                    </button>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <div className="load-actions" style={{ marginTop: '16px' }}>
-                                        <button type="button" className="load-btn load-btn-secondary" style={{width: 'auto', flex: 0}} onClick={toggleSelectAll}>
-                                            {selectedIndices.size === scanItems.length ? '取消全选' : '全选'}
+                                                    <span className="load-scan-path" title={item.coco_path}>{item.coco_path.split(/[/\\]/).pop()}</span>
+                                    </label>
+                                                <div className="load-scan-item-actions">
+                                                    <button type="button" className="load-btn-xs load-btn-secondary" onClick={() => handleLoadSingleFromScanItem(item)} disabled={loading} title="仅加载此目录的 COCO 文件">
+                                                        单项加载
+                                    </button>
+                                    {item.loader_record && (
+                                                        <button type="button" className="load-btn-xs load-btn-secondary load-btn-last" onClick={() => handleLoadLastFromScanItem(item)} disabled={loading}>
+                                            加载上次
                                         </button>
-                                        <span className="load-merged-name" style={{flex: 1, display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--bg-base)', padding: '0 12px', borderRadius: '8px', border: '1px solid var(--border)'}}>
-                                            <label className="load-label" style={{margin: 0, whiteSpace: 'nowrap'}}>合并后名称</label>
-                                            <input type="text" value={datasetName} onChange={(e) => setDatasetName(e.target.value)} placeholder="merged_dataset" className="load-input load-input-inline" style={{border: 'none', background: 'transparent', flex: 1, boxShadow: 'none'}} />
-                                        </span>
-                                        <button type="button" className="load-btn" style={{width: 'auto', flex: 0, margin: 0, padding: '12px 24px'}} onClick={handleLoadMerged} disabled={loading || selectedIndices.size === 0}>
+                                    )}
+                                                </div>
+                                </div>
+                            ))}
+                                    </div>
+                                    <div className="load-scan-footer">
+                                        <div className="load-scan-footer-row">
+                                            <button type="button" className="load-btn-secondary load-scan-select-toggle" onClick={toggleSelectAll}>
+                                                {selectedIndices.size === scanItems.length ? '取消全选' : '全选'}
+                                            </button>
+                                            <div className="load-scan-merged-field">
+                                                <label htmlFor="load-merged-dataset-name">合并后名称</label>
+                                                <input
+                                                    id="load-merged-dataset-name"
+                                                    type="text"
+                                                    value={datasetName}
+                                                    onChange={(e) => setDatasetName(e.target.value)}
+                                                    placeholder="merged_dataset"
+                                                    className="load-input load-scan-merged-input"
+                                                />
+                                            </div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            className="load-btn load-scan-load-merged"
+                                            onClick={handleLoadMerged}
+                                            disabled={loading || selectedIndices.size === 0}
+                                        >
                                             {loading ? '加载中...' : `加载选中 (${selectedIndices.size})`}
                                         </button>
                                     </div>
-                                </div>
-                            )}
                         </div>
+                    )}
+                </div>
                     )}
 
                     {loadTab === 'single' && (
-                        <div className="load-section">
+                <div className="load-section">
                             <p className="load-section-desc">直接提供精确的 JSON 路径和图片目录进行加载，适用于标准独立的 COCO 数据集。</p>
-                            <form onSubmit={handleSubmit}>
-                                <div className="load-field">
-                                    <label className="load-label">{lp.cocoPathLabel}</label>
-                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                        <input className="load-input" type="text" value={cocoPath} onChange={(e) => setCocoPath(e.target.value)} placeholder={lp.cocoPathPlaceholder || '/path/to/annotations.json 或 COCO 所在目录'} style={{ flex: 1 }} />
+                    <form onSubmit={handleSubmit}>
+                        <div className="load-field">
+                            <label className="load-label">{lp.cocoPathLabel}</label>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <input className="load-input" type="text" value={cocoPath} onChange={(e) => setCocoPath(e.target.value)} placeholder={lp.cocoPathPlaceholder || '/path/to/annotations.json 或 COCO 所在目录'} style={{ flex: 1 }} />
                                         <button type="button" className="load-btn load-btn-secondary" style={{width: 'auto', margin: 0, padding: '14px 20px', whiteSpace: 'nowrap'}} onClick={handleDetectLastRecord} title="从该路径（目录或文件）读取上次加载记录并填充">检测记录</button>
-                                    </div>
-                                </div>
-                                <div className="load-field">
-                                    <label className="load-label">{lp.imageDirLabel}</label>
-                                    <input className="load-input" type="text" value={imageDir} onChange={(e) => setImageDir(e.target.value)} placeholder={lp.imageDirPlaceholder || '/path/to/images/'} />
-                                </div>
-                                <div className="load-field">
-                                    <label className="load-label">{lp.datasetNameLabel}</label>
-                                    <input className="load-input" type="text" value={datasetName} onChange={(e) => setDatasetName(e.target.value)} placeholder={lp.datasetNamePlaceholder} />
-                                </div>
+                            </div>
+                        </div>
+                        <div className="load-field">
+                            <label className="load-label">{lp.imageDirLabel}</label>
+                            <input className="load-input" type="text" value={imageDir} onChange={(e) => setImageDir(e.target.value)} placeholder={lp.imageDirPlaceholder || '/path/to/images/'} />
+                        </div>
+                        <div className="load-field">
+                            <label className="load-label">{lp.datasetNameLabel}</label>
+                            <input className="load-input" type="text" value={datasetName} onChange={(e) => setDatasetName(e.target.value)} placeholder={lp.datasetNamePlaceholder} />
+                        </div>
                                 <button className="load-btn" type="submit" disabled={loading} style={{marginTop: '30px'}}>
                                     {loading ? '正在加载数据...' : lp.loadButtonText}
-                                </button>
-                            </form>
+                        </button>
+                    </form>
                         </div>
                     )}
                 </div>
@@ -1543,6 +1701,177 @@ function ChatTextBlock({ content }) {
     return <>{elements}</>;
 }
 
+// 与图库「代码筛选」共用：POST /api/chat/run_code，解析结果
+async function runGalleryPythonCode(code, datasetId) {
+    try {
+        const res = await fetch('/api/chat/run_code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code, dataset_id: datasetId })
+        });
+        let d;
+        try {
+            d = await res.json();
+        } catch {
+            return { ok: false, error: '响应解析失败' };
+        }
+        if (!res.ok) {
+            return { ok: false, error: typeof d.error === 'string' ? d.error : (d.error || '执行失败') };
+        }
+        if (d.success) {
+            if (d.type === 'filter') {
+                const ids = d.image_ids || [];
+                return {
+                    ok: true,
+                    type: 'filter',
+                    image_ids: ids,
+                    count: d.count != null ? d.count : ids.length,
+                    output: d.output || ''
+                };
+            }
+            return { ok: true, type: 'report', output: d.output || '' };
+        }
+        return { ok: false, error: d.error || '执行失败' };
+    } catch (e) {
+        return { ok: false, error: String(e) };
+    }
+}
+
+const GALLERY_CODE_FILTER_DEFAULT = `# 最后一行表达式为 image_id 列表时，将应用为图库筛选（与 Agent 中 Python 代码块相同）
+find_images(gt_min=1, gt_max=None, pred_min=None, pred_max=None)
+`;
+
+const GALLERY_CODE_FILTER_STORAGE_KEY = 'coco_gallery_code_filter_v1';
+const GALLERY_CODE_REPORT_MAX_CHARS = 16000;
+
+function truncateGalleryReportOutput(text) {
+    const s = text == null ? '' : String(text);
+    if (s.length <= GALLERY_CODE_REPORT_MAX_CHARS) return s;
+    return `${s.slice(0, GALLERY_CODE_REPORT_MAX_CHARS)}\n\n…（输出过长，已截断；调试用请缩小 print 范围或只打印 len(images) 等）`;
+}
+
+function GalleryCodeFilterModal({ onClose, datasetId, onFilterByIds }) {
+    const [code, setCode] = useState(() => {
+        try {
+            const s = localStorage.getItem(GALLERY_CODE_FILTER_STORAGE_KEY);
+            return (s && s.trim()) ? s : GALLERY_CODE_FILTER_DEFAULT;
+        } catch {
+            return GALLERY_CODE_FILTER_DEFAULT;
+        }
+    });
+    const [running, setRunning] = useState(false);
+    const [runResult, setRunResult] = useState(null);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(GALLERY_CODE_FILTER_STORAGE_KEY, code);
+        } catch { /* ignore */ }
+    }, [code]);
+
+    useEffect(() => {
+        const onKey = (e) => {
+            if (e.key === 'Escape') onClose();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [onClose]);
+
+    const runFilter = async () => {
+        if (running || !datasetId) return;
+        setRunning(true);
+        setRunResult(null);
+        try {
+            const r = await runGalleryPythonCode(code, datasetId);
+            if (!r.ok) {
+                setRunResult({ ok: false, msg: r.error });
+            } else if (r.type === 'filter') {
+                if (r.image_ids && r.image_ids.length > 0) {
+                    onFilterByIds && onFilterByIds(r.image_ids, `图库代码筛选（${r.count} 张）`);
+                    onClose();
+                } else {
+                    setRunResult({ ok: true, type: 'filter', count: 0, msg: '没有符合条件的图片' });
+                }
+            } else {
+                setRunResult({
+                    ok: true,
+                    type: 'report',
+                    output: truncateGalleryReportOutput(r.output)
+                });
+            }
+        } catch (e) {
+            setRunResult({ ok: false, msg: String(e) });
+        }
+        setRunning(false);
+    };
+
+    return (
+        <div className="modal-overlay gallery-code-filter-modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+            <div className="modal-content gallery-code-filter-modal" role="dialog" aria-labelledby="gallery-code-filter-title" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header gallery-code-filter-modal-header">
+                    <div>
+                        <h3 id="gallery-code-filter-title" style={{ margin: 0 }}>代码筛选</h3>
+                        <p className="gallery-code-filter-modal-sub">
+                            与 Agent 中 Python 代码块相同环境；最后一行表达式为 <code>image_id</code> 列表时应用图库筛选
+                        </p>
+                    </div>
+                    <button type="button" className="modal-close" onClick={onClose} aria-label="关闭">✕</button>
+                </div>
+                <div className="modal-body gallery-code-filter-modal-body">
+                    <div className="gallery-code-filter-toolbar">
+                        <button type="button" className="chat-code-btn chat-code-btn-run" onClick={runFilter} disabled={running || !datasetId} title="执行代码；筛选成功后将关闭此窗口">
+                            {running ? '⏳ 运行中' : '▶ 运行筛选'}
+                        </button>
+                        <button type="button" className="chat-code-btn" onClick={() => { setCode(GALLERY_CODE_FILTER_DEFAULT); setRunResult(null); }} title="恢复默认示例代码">
+                            重置示例
+                        </button>
+                        <span className="gallery-code-filter-hint">提示：调试大数据请用 <code>len(images)</code>、切片等，避免 <code>print(images)</code> 整表刷屏</span>
+                    </div>
+                    <label className="gallery-code-filter-label" htmlFor="gallery-code-filter-editor">Python</label>
+                    <textarea
+                        id="gallery-code-filter-editor"
+                        className="gallery-code-filter-editor"
+                        value={code}
+                        onChange={e => setCode(e.target.value)}
+                        spellCheck={false}
+                        rows={10}
+                    />
+                    {runResult && (
+                        <div className={`gallery-code-filter-output ${runResult.ok ? 'ok' : 'err'}`}>
+                            <div className="gallery-code-filter-output-title">输出</div>
+                            {!runResult.ok && <pre className="gallery-code-filter-output-pre">{truncateGalleryReportOutput(runResult.msg)}</pre>}
+                            {runResult.ok && runResult.type === 'filter' && (
+                                runResult.count > 0
+                                    ? <p className="gallery-code-filter-output-line">✅ 已应用筛选，共 {runResult.count} 张{runResult.output ? ` · ${runResult.output}` : ''}</p>
+                                    : <p className="gallery-code-filter-output-line">ℹ️ {runResult.msg}</p>
+                            )}
+                            {runResult.ok && runResult.type === 'report' && (
+                                <pre className="gallery-code-filter-output-pre">{runResult.output}</pre>
+                            )}
+                        </div>
+                    )}
+                    <details className="gallery-code-filter-docs">
+                        <summary>内置对象与函数（与 Agent 代码块一致）</summary>
+                        <ul>
+                            <li><code>images</code>：当前数据集中每张图的字典列表，含 <code>image_id</code>、<code>file_name</code>、<code>annotations</code>、<code>pred_annotations</code> 等。</li>
+                            <li><code>coco_json_path</code>、<code>images_dir</code>：当前 COCO 与图片目录路径（字符串）。</li>
+                            <li><code>find_images(gt_min, gt_max, pred_min, pred_max, categories, score_min, score_max)</code>：多条件筛图，返回 <code>image_id</code> 列表。</li>
+                            <li><code>hard_cases(score_low, score_high, min_pred)</code>：疑难样本（预测分数落在区间内的框）。</li>
+                            <li><code>coco_overview()</code>、<code>category_stats(source)</code>（<code>gt</code>|<code>pred</code>）、<code>bbox_stats()</code>：统计摘要。</li>
+                            <li><code>filter_gallery(ids, description)</code>：推送筛选并跳转图库（聊天侧常用）。</li>
+                            <li><code>export_coco</code> / <code>export_csv</code> / <code>export_json</code> / <code>export_txt</code>：导出。</li>
+                            <li><code>show_chart</code>、<code>show_table</code>、<code>navigate_to</code> 等：界面联动（筛选面板以返回列表为主）。</li>
+                            <li>最后一行<strong>表达式</strong>为 <code>image_id</code> 列表时，结果按「筛选」处理；否则为报告输出。亦可设置变量 <code>result</code>。</li>
+                        </ul>
+                    </details>
+                </div>
+                <div className="modal-footer gallery-code-filter-modal-footer">
+                    <button type="button" className="vbtn vbtn-neutral" onClick={onClose}>关闭</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // 代码块：带语言标签 + 复制 + 运行筛选按钮
 function ChatCodeBlock({ lang, code, datasetId, onFilterByIds }) {
     const [copied, setCopied] = useState(false);
@@ -1562,27 +1891,18 @@ function ChatCodeBlock({ lang, code, datasetId, onFilterByIds }) {
         setRunning(true);
         setRunResult(null);
         try {
-            const res = await fetch('/api/chat/run_code', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code, dataset_id: datasetId })
-            });
-            const d = await res.json();
-            if (d.success) {
-                if (d.type === 'filter') {
-                    // 筛选模式：跳转图库
-                    if (d.image_ids && d.image_ids.length > 0) {
-                        setRunResult({ ok: true, type: 'filter', count: d.count, output: d.output });
-                        onFilterByIds && onFilterByIds(d.image_ids, `AI 代码筛选结果（${d.count} 张）`);
-                    } else {
-                        setRunResult({ ok: true, type: 'filter', count: 0, msg: '没有符合条件的图片' });
-                    }
+            const r = await runGalleryPythonCode(code, datasetId);
+            if (!r.ok) {
+                setRunResult({ ok: false, msg: r.error });
+            } else if (r.type === 'filter') {
+                if (r.image_ids && r.image_ids.length > 0) {
+                    setRunResult({ ok: true, type: 'filter', count: r.count, output: r.output });
+                    onFilterByIds && onFilterByIds(r.image_ids, `AI 代码筛选结果（${r.count} 张）`);
                 } else {
-                    // 报告/统计模式：展示输出文本
-                    setRunResult({ ok: true, type: 'report', output: d.output });
+                    setRunResult({ ok: true, type: 'filter', count: 0, msg: '没有符合条件的图片' });
                 }
             } else {
-                setRunResult({ ok: false, msg: d.error || '执行失败' });
+                setRunResult({ ok: true, type: 'report', output: r.output });
             }
         } catch (e) {
             setRunResult({ ok: false, msg: String(e) });
@@ -3425,7 +3745,7 @@ function PredEvalModal({ predModelNames, initModel, initIou, initScore, onApply,
 }
 
 // ==================== 图片宫格页面 ====================
-function GalleryPage({ datasetData, images, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, imageCategoryMultiSelect, onUpdateCategory, onUpdateCategories, onUpdateNote, onBatchUpdateCategory, onBatchClearAnnotations, onRollback, metaFilterOptions, onApplyMetaFilters, autoSaveStatus, onAnnotationsSaved, onReloadImages, jumpToCategory, onJumpHandled, jumpToImageId, onJumpImageHandled, agentFilterIds, agentFilterMsg, onClearAgentFilter }) {
+function GalleryPage({ datasetData, images, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, imageCategoryMultiSelect, onUpdateImageCategories, onUpdateImageCategoryColors, onUpdateCategory, onUpdateCategories, onUpdateNote, onBatchUpdateCategory, onBatchClearAnnotations, onRollback, metaFilterOptions, onApplyMetaFilters, autoSaveStatus, onAnnotationsSaved, onReloadImages, jumpToCategory, onJumpHandled, jumpToImageId, onJumpImageHandled, agentFilterIds, agentFilterMsg, onClearAgentFilter, onFilterByIds }) {
     const config = useConfig();
     const gallery = config.gallery || DEFAULT_CONFIG.gallery;
     const [currentPage, setCurrentPage] = useState(1);
@@ -3433,7 +3753,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     const [selectedLabelCategory, setSelectedLabelCategory] = useState('all'); // 标注类别筛选
     const [selectedImageCategory, setSelectedImageCategory] = useState('all'); // 图片分类筛选
     const [selectedDirectory, setSelectedDirectory] = useState('all'); // 目录筛选（多目录合并时）
-    const [showUnannotatedOnly, setShowUnannotatedOnly] = useState(false); // 仅显示未标注图片
+    const [showUnannotatedOnly, setShowUnannotatedOnly] = useState(false); // 仅显示无 GT 框（筛选条件，非图片级分类）
     const [searchText, setSearchText] = useState('');
     // 图片元数据筛选（c_time / product_id / position），仅当 COCO 含对应字段时显示
     const [metaCtimeStart, setMetaCtimeStart] = useState('');
@@ -3443,12 +3763,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     const [metaFilterApplying, setMetaFilterApplying] = useState(false);
     const [scoreMin, setScoreMin] = useState('');
     const [scoreMax, setScoreMax] = useState('');
-    const [gtCountMin, setGtCountMin] = useState('');
-    const [gtCountMax, setGtCountMax] = useState('');
-    const [predCountMin, setPredCountMin] = useState('');
-    const [predCountMax, setPredCountMax] = useState('');
-    const [areaMax, setAreaMax] = useState(''); // 包含极小目标(面积 < xxx)
-    const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+    const [showCodeFilterPanel, setShowCodeFilterPanel] = useState(false);
     const [selectedImages, setSelectedImages] = useState(new Set());
     const [showExportModal, setShowExportModal] = useState(false);
     const [showVersionModal, setShowVersionModal] = useState(false);
@@ -3593,27 +3908,6 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
             const hit = img.annotations.some(checkScore) || (img.pred_annotations && img.pred_annotations.some(checkScore));
             if (!hit) return false;
         }
-        // GT 框数量筛选
-        if (gtCountMin !== '') {
-            if ((img.annotations?.length || 0) < parseInt(gtCountMin, 10)) return false;
-        }
-        if (gtCountMax !== '') {
-            if ((img.annotations?.length || 0) > parseInt(gtCountMax, 10)) return false;
-        }
-        // 预测框数量筛选
-        if (predCountMin !== '') {
-            if ((img.pred_annotations?.length || 0) < parseInt(predCountMin, 10)) return false;
-        }
-        if (predCountMax !== '') {
-            if ((img.pred_annotations?.length || 0) > parseInt(predCountMax, 10)) return false;
-        }
-        // 目标面积筛选 (小于该面积)
-        if (areaMax !== '') {
-            const aMax = parseFloat(areaMax);
-            const hasSmallObj = img.annotations.some(a => a.bbox && a.bbox[2] * a.bbox[3] < aMax) || 
-                               (img.pred_annotations && img.pred_annotations.some(a => a.bbox && a.bbox[2] * a.bbox[3] < aMax));
-            if (!hasSmallObj) return false;
-        }
         // 预测评估筛选
         if (predEvalEnabled && predEvalFilter !== null) {
             const r = imageEvalResults[img.image_id];
@@ -3623,7 +3917,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
             if (predEvalFilter === 'fn' && !r.hasFN) return false;
         }
         return true;
-    }), [images, selectedDirectory, selectedLabelCategory, selectedImageCategory, searchText, imageClassifications, defaultImageCat, scoreMin, scoreMax, gtCountMin, gtCountMax, predCountMin, predCountMax, areaMax, predEvalEnabled, predEvalFilter, imageEvalResults, showUnannotatedOnly, agentFilterSet]);
+    }), [images, selectedDirectory, selectedLabelCategory, selectedImageCategory, searchText, imageClassifications, defaultImageCat, scoreMin, scoreMax, predEvalEnabled, predEvalFilter, imageEvalResults, showUnannotatedOnly, agentFilterSet]);
 
     // 排序
     const filteredImages = React.useMemo(() => {
@@ -3689,6 +3983,16 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
 
     const metaOpts = metaFilterOptions || {};
     const metaFieldMap = getMetaFilterMapping(config.viewer || DEFAULT_CONFIG.viewer);
+    const normalizeMetaLabel = (label, fallbackKey, fallbackZh) => {
+        const v = (label || '').toString().trim();
+        if (!v) return fallbackZh;
+        const low = v.toLowerCase();
+        if (low === fallbackKey.toLowerCase()) return fallbackZh;
+        return v;
+    };
+    const cTimeLabel = normalizeMetaLabel(metaOpts.c_time_label || metaFieldMap.c_time, 'c_time', '时间');
+    const productIdLabel = normalizeMetaLabel(metaOpts.product_id_label || metaFieldMap.product_id, 'product_id', 'SN号');
+    const positionLabel = normalizeMetaLabel(metaOpts.position_label || metaFieldMap.position, 'position', '位置');
     const sampleMeta = (images && images[0] && images[0].image_meta) || {};
     const hasMetaFilterCapability = !!(
         (metaOpts.has_c_time || metaOpts.has_product_id || metaOpts.has_position) ||
@@ -3753,7 +4057,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                 {agentFilterIds && agentFilterIds.length > 0 && (
                     <div style={{ padding: '8px 16px', background: 'var(--accent-dim, rgba(99,102,241,0.12))', borderBottom: '1px solid var(--accent)', display: 'flex', alignItems: 'center', gap: '12px', fontSize: '13px' }}>
                         <span style={{ flex: 1, color: 'var(--text-primary)' }}>
-                            🤖 <strong>Agent 筛选：</strong>{agentFilterMsg || `已筛选 ${agentFilterIds.length} 张图片`}
+                            🎯 <strong>当前筛选：</strong>{agentFilterMsg || `已筛选 ${agentFilterIds.length} 张图片`}
                         </span>
                         <button className="vbtn vbtn-on-red" style={{ fontSize: '12px', padding: '3px 10px' }} onClick={onClearAgentFilter}>✕ 清除筛选</button>
                     </div>
@@ -3764,11 +4068,11 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                         {(metaOpts.has_c_time || Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.c_time)) && (
                             <>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <span style={{ whiteSpace: 'nowrap' }}>{`${(metaOpts.c_time_label || metaFieldMap.c_time || '时间')}起`}</span>
+                                    <span style={{ whiteSpace: 'nowrap' }}>{`${cTimeLabel}起`}</span>
                                     <input type="datetime-local" value={metaCtimeStart} onChange={(e) => setMetaCtimeStart(e.target.value)} style={{ padding: '4px 8px' }} />
                                 </label>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <span style={{ whiteSpace: 'nowrap' }}>{`${(metaOpts.c_time_label || metaFieldMap.c_time || '时间')}止`}</span>
+                                    <span style={{ whiteSpace: 'nowrap' }}>{`${cTimeLabel}止`}</span>
                                     <input type="datetime-local" value={metaCtimeEnd} onChange={(e) => setMetaCtimeEnd(e.target.value)} style={{ padding: '4px 8px' }} />
                                 </label>
                             </>
@@ -3776,7 +4080,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                         {(metaOpts.has_product_id || Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.product_id)) && (
                             <>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <span style={{ whiteSpace: 'nowrap' }}>{metaOpts.product_id_label || metaFieldMap.product_id || 'SN/产品ID'}</span>
+                                    <span style={{ whiteSpace: 'nowrap' }}>{productIdLabel}</span>
                                     <input type="text" placeholder="输入模糊查询" value={metaProductIdQuery} onChange={(e) => setMetaProductIdQuery(e.target.value)} style={{ padding: '4px 8px', minWidth: '140px' }} />
                                 </label>
                                 {metaOpts.product_ids && metaOpts.product_ids.length > 0 && (
@@ -3786,7 +4090,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                             value={metaProductIdQuery}
                                             onChange={(e) => setMetaProductIdQuery(e.target.value === '' ? '' : e.target.value)}
                                             style={{ padding: '4px 8px', minWidth: '160px', maxWidth: '220px' }}
-                                            title={`从已有 ${metaOpts.product_id_label || metaFieldMap.product_id || 'SN'} 中选择`}
+                                            title={`从已有${productIdLabel}中选择`}
                                         >
                                             <option value="">全部</option>
                                             {metaOpts.product_ids.map(pid => (
@@ -3800,18 +4104,18 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                         {(metaOpts.has_position || Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.position)) && (
                             <>
                                 {metaOpts.positions && metaOpts.positions.length > 0 ? (
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                        <span style={{ whiteSpace: 'nowrap' }}>{metaOpts.position_label || metaFieldMap.position || '位置'}</span>
-                                        <select value={metaPosition} onChange={(e) => setMetaPosition(e.target.value)} style={{ padding: '4px 8px' }}>
-                                            <option value="all">全部</option>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <span style={{ whiteSpace: 'nowrap' }}>{positionLabel}</span>
+                                <select value={metaPosition} onChange={(e) => setMetaPosition(e.target.value)} style={{ padding: '4px 8px' }}>
+                                    <option value="all">全部</option>
                                             {metaOpts.positions.map(p => <option key={p} value={p}>{p}</option>)}
-                                        </select>
-                                    </label>
+                                </select>
+                            </label>
                                 ) : (
                                     <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                        <span style={{ whiteSpace: 'nowrap' }}>{metaOpts.position_label || metaFieldMap.position || '位置'}</span>
+                                        <span style={{ whiteSpace: 'nowrap' }}>{positionLabel}</span>
                                         <input type="text" placeholder="精确匹配" value={metaPosition === 'all' ? '' : metaPosition} onChange={(e) => setMetaPosition(e.target.value || 'all')} style={{ padding: '4px 8px', minWidth: '120px' }} />
-                                    </label>
+                            </label>
                                 )}
                             </>
                         )}
@@ -3920,22 +4224,40 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                         {hasScoreData && (
                             <span style={{ display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
                                 <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)' }}>置信度</span>
+                                <span style={{ fontSize: 'var(--font-xs)', color: 'var(--accent)', minWidth: '88px' }}>
+                                    {`${scoreMin === '' ? '0.00' : Number(scoreMin).toFixed(2)} ~ ${scoreMax === '' ? '1.00' : Number(scoreMax).toFixed(2)}`}
+                                </span>
                                 <input
-                                    type="number" min="0" max="1" step="0.01"
-                                    className="filter-input"
-                                    style={{ width: '62px', padding: '4px 6px' }}
-                                    placeholder="下限"
-                                    value={scoreMin}
-                                    onChange={e => { setScoreMin(e.target.value); setCurrentPage(1); }}
+                                    type="range"
+                                    min="0"
+                                    max="1"
+                                    step="0.01"
+                                    style={{ width: '92px' }}
+                                    value={scoreMin === '' ? '0' : scoreMin}
+                                    onChange={e => {
+                                        const nextMin = Number(e.target.value);
+                                        const curMax = scoreMax === '' ? 1 : Number(scoreMax);
+                                        const safeMin = Math.min(nextMin, curMax);
+                                        setScoreMin(safeMin <= 0 ? '' : safeMin.toFixed(2));
+                                        setCurrentPage(1);
+                                    }}
+                                    title="置信度下限"
                                 />
-                                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)' }}>~</span>
                                 <input
-                                    type="number" min="0" max="1" step="0.01"
-                                    className="filter-input"
-                                    style={{ width: '62px', padding: '4px 6px' }}
-                                    placeholder="上限"
-                                    value={scoreMax}
-                                    onChange={e => { setScoreMax(e.target.value); setCurrentPage(1); }}
+                                    type="range"
+                                    min="0"
+                                    max="1"
+                                    step="0.01"
+                                    style={{ width: '92px' }}
+                                    value={scoreMax === '' ? '1' : scoreMax}
+                                    onChange={e => {
+                                        const nextMax = Number(e.target.value);
+                                        const curMin = scoreMin === '' ? 0 : Number(scoreMin);
+                                        const safeMax = Math.max(nextMax, curMin);
+                                        setScoreMax(safeMax >= 1 ? '' : safeMax.toFixed(2));
+                                        setCurrentPage(1);
+                                    }}
+                                    title="置信度上限"
                                 />
                                 {(scoreMin !== '' || scoreMax !== '') && (
                                     <button
@@ -3949,11 +4271,11 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                         )}
                         <input className="filter-input" placeholder="搜索文件名..." value={searchText} onChange={(e) => { setSearchText(e.target.value); setCurrentPage(1); }} />
                         <button
-                            className={`btn btn-sm ${showAdvancedFilter || gtCountMin || gtCountMax || predCountMin || predCountMax || areaMax ? 'btn-primary' : 'btn-secondary'}`}
-                            onClick={() => setShowAdvancedFilter(!showAdvancedFilter)}
-                            title="展开/收起高级筛选"
+                            className={`btn btn-sm ${showCodeFilterPanel || agentFilterIds ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setShowCodeFilterPanel(true)}
+                            title="在弹窗中打开 Python 代码筛选（与 Agent 代码块相同接口）"
                         >
-                            高级筛选 ▾
+                            代码筛选
                         </button>
                         <select value={sortOrder} onChange={e => { setSortOrder(e.target.value); setCurrentPage(1); }}
                             className="sort-select" title="排序方式">
@@ -3986,42 +4308,18 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                         {autoSaveStatus === 'error' && (
                             <span style={{ fontSize: 'var(--font-sm)', color: '#f5222d', whiteSpace: 'nowrap' }}>⚠ 备份失败</span>
                         )}
-                        <button className="btn btn-success btn-sm" onClick={() => setShowSaveModal(true)} disabled={saving}>
-                            {saving ? '保存中...' : `💾 ${gallery.saveButtonText}`}
+                        <button
+                            className="btn btn-success btn-sm"
+                            onClick={() => setShowSaveModal(true)}
+                            disabled={saving}
+                            title={saving ? '保存中...' : (gallery.saveButtonText || '保存')}
+                        >
+                            {saving ? '⏳' : '💾'}
                         </button>
-                        <button className="btn btn-secondary btn-sm" onClick={() => setShowVersionModal(true)}>📋 {gallery.versionButtonText}</button>
-                        <button className="btn btn-secondary btn-sm" onClick={() => setShowCatMgr(true)} title="跨图批量重命名/合并标注类别">🏷 类别管理</button>
-                        <button className="btn btn-primary btn-sm" onClick={() => setShowExportModal(true)}>📤 {gallery.exportButtonText}</button>
+                        <button className="btn btn-secondary btn-sm" onClick={() => setShowVersionModal(true)} title={gallery.versionButtonText || '版本'}>📋</button>
+                        <button className="btn btn-secondary btn-sm" onClick={() => setShowCatMgr(true)} title="类别管理（跨图批量重命名/合并标注类别）">🏷</button>
+                        <button className="btn btn-primary btn-sm" onClick={() => setShowExportModal(true)} title={gallery.exportButtonText || '导出'}>📤</button>
                     </div>
-                    
-                    {/* 高级筛选面板 */}
-                    {showAdvancedFilter && (
-                        <div style={{ padding: '10px 20px', background: 'var(--bg-raised)', borderBottom: '1px solid var(--border)', display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)' }}>GT框数：</span>
-                                <input type="number" min="0" className="filter-input" style={{ width: '60px', padding: '4px 6px' }} placeholder="Min" value={gtCountMin} onChange={e => { setGtCountMin(e.target.value); setCurrentPage(1); }} />
-                                <span style={{ color: 'var(--text-muted)' }}>-</span>
-                                <input type="number" min="0" className="filter-input" style={{ width: '60px', padding: '4px 6px' }} placeholder="Max" value={gtCountMax} onChange={e => { setGtCountMax(e.target.value); setCurrentPage(1); }} />
-                            </div>
-                            {hasPredData && (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)' }}>预测框数：</span>
-                                    <input type="number" min="0" className="filter-input" style={{ width: '60px', padding: '4px 6px' }} placeholder="Min" value={predCountMin} onChange={e => { setPredCountMin(e.target.value); setCurrentPage(1); }} />
-                                    <span style={{ color: 'var(--text-muted)' }}>-</span>
-                                    <input type="number" min="0" className="filter-input" style={{ width: '60px', padding: '4px 6px' }} placeholder="Max" value={predCountMax} onChange={e => { setPredCountMax(e.target.value); setCurrentPage(1); }} />
-                                </div>
-                            )}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)' }} title="筛选出包含面积小于该值的目标的图片">极小目标面积 &lt;</span>
-                                <input type="number" min="0" className="filter-input" style={{ width: '80px', padding: '4px 6px' }} placeholder="面积(px²)" value={areaMax} onChange={e => { setAreaMax(e.target.value); setCurrentPage(1); }} />
-                            </div>
-                            {(gtCountMin || gtCountMax || predCountMin || predCountMax || areaMax) && (
-                                <button className="btn btn-sm btn-secondary" onClick={() => { setGtCountMin(''); setGtCountMax(''); setPredCountMin(''); setPredCountMax(''); setAreaMax(''); setCurrentPage(1); }}>
-                                    清除高级筛选
-                                </button>
-                            )}
-                        </div>
-                    )}
                 </div>
 
                 <div className="content-area">
@@ -4043,10 +4341,10 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                     {annotationProgress.unannotated > 0 && (
                                         <button
                                             onClick={() => { setShowUnannotatedOnly(v => !v); setCurrentPage(1); }}
-                                            title={showUnannotatedOnly ? '显示全部' : `仅显示未标注图片 (${annotationProgress.unannotated} 张)`}
+                                            title={showUnannotatedOnly ? '显示全部图片' : `仅显示无任何 GT 标注框的图片（${annotationProgress.unannotated} 张）`}
                                                 style={{ fontSize: 'var(--font-xs)', padding: '2px 8px', background: showUnannotatedOnly ? 'var(--warning)' : 'transparent', color: showUnannotatedOnly ? '#000' : 'var(--warning)', border: '1px solid var(--warning)', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap' }}
                                         >
-                                            {showUnannotatedOnly ? '✕ 取消筛选' : `⚠ 未标注 ${annotationProgress.unannotated}`}
+                                            {showUnannotatedOnly ? '✕ 取消筛选' : `⚠ 无 GT ${annotationProgress.unannotated}`}
                                         </button>
                                     )}
                                 </div>
@@ -4205,6 +4503,17 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                 />
             )}
 
+            {showCodeFilterPanel && (
+                <GalleryCodeFilterModal
+                    onClose={() => setShowCodeFilterPanel(false)}
+                    datasetId={datasetData?.dataset_id}
+                    onFilterByIds={(ids, msg) => {
+                        setCurrentPage(1);
+                        onFilterByIds && onFilterByIds(ids, msg);
+                    }}
+                />
+            )}
+
             {viewerOpen && selectedImage && (
                 <ImageViewer
                     image={selectedImage}
@@ -4214,7 +4523,10 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                     imageClassifications={imageClassifications}
                     imageNotes={imageNotes}
                     imageCategories={imageCategories}
+                    imageCategoryColors={imageCategoryColors}
                     imageCategoryMultiSelect={imageCategoryMultiSelect}
+                    onUpdateImageCategories={onUpdateImageCategories}
+                    onUpdateImageCategoryColors={onUpdateImageCategoryColors}
                     visiblePredModels={visiblePredModels}
                     onClose={() => setViewerOpen(false)}
                     onNavigate={(img) => setSelectedImage(img)}
@@ -4229,22 +4541,12 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
 }
 
 // ==================== 设置模态框 ====================
-function SettingsModal({
-    onClose,
-    imageCategories,
-    imageCategoryColors,
-    imageCategoryMultiSelect,
-    onUpdateImageCategories,
-    onUpdateImageCategoryColors,
-    onUpdateImageCategoryMultiSelect,
-}) {
+function SettingsModal({ onClose }) {
     const config = useConfig();
     const setSettings = useSettings();
     const st = config.settings || DEFAULT_CONFIG.settings || {};
     const viewer = config.viewer || DEFAULT_CONFIG.viewer;
     const lineWidthOptions = viewer.lineWidthOptions || [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
-    const categories = imageCategories || config.imageCategories || DEFAULT_CONFIG.imageCategories || [];
-    const categoryColors = imageCategoryColors || config.imageCategoryColors || DEFAULT_CONFIG.imageCategoryColors || {};
     const colorPalette = config.colorPalette || DEFAULT_CONFIG.colorPalette || ['#888'];
     const currentTheme = config.uiTheme || DEFAULT_CONFIG.uiTheme || 'dark';
     const [activeTab, setActiveTab] = useState('appearance'); // appearance | imageCategories | llm
@@ -4253,24 +4555,29 @@ function SettingsModal({
         setSettings(prev => ({ ...prev, viewer: { ...(prev.viewer || {}), [key]: value } }));
     };
 
+    const categories = config.imageCategories || DEFAULT_CONFIG.imageCategories || [];
+    const categoryColors = config.imageCategoryColors || DEFAULT_CONFIG.imageCategoryColors || {};
+    const annDefaults = (config.defaultAnnotationCategories && config.defaultAnnotationCategories.length > 0)
+        ? config.defaultAnnotationCategories
+        : (DEFAULT_CONFIG.defaultAnnotationCategories || ['object']);
+
     const updateCategoryName = (index, newName) => {
         if (index === 0) return; // 首项「未分类」不可改
         const name = (newName || '').trim();
-        if (!name || name === categories[index]) return; // 空值或未变则不更新
+        if (!name || name === categories[index]) return;
         const cats = [...categories];
         const cols = { ...categoryColors };
         const oldName = cats[index];
         cats[index] = name;
         cols[name] = cols[oldName] != null ? cols[oldName] : '#888';
         if (oldName !== name) delete cols[oldName];
-        onUpdateImageCategories?.(cats);
-        onUpdateImageCategoryColors?.(cols);
+        setSettings(prev => ({ ...prev, imageCategories: cats, imageCategoryColors: cols }));
     };
 
     const updateCategoryColor = (index, color) => {
         const name = categories[index];
         if (!name) return;
-        onUpdateImageCategoryColors?.({ ...categoryColors, [name]: color });
+        setSettings(prev => ({ ...prev, imageCategoryColors: { ...(prev.imageCategoryColors || categoryColors), [name]: color } }));
     };
 
     const addCategory = () => {
@@ -4282,25 +4589,60 @@ function SettingsModal({
             name = name + ' ' + n;
         }
         const newColor = colorPalette[existing.length % colorPalette.length];
-        onUpdateImageCategories?.([...existing, name]);
-        onUpdateImageCategoryColors?.({ ...categoryColors, [name]: newColor });
+        setSettings(prev => ({
+            ...prev,
+            imageCategories: [...(prev.imageCategories || categories), name],
+            imageCategoryColors: { ...(prev.imageCategoryColors || categoryColors), [name]: newColor },
+        }));
     };
 
     const removeCategory = (index) => {
-        if (index === 0 || categories.length <= 1) return; // 首项「未分类」不可删
+        if (index === 0 || categories.length <= 1) return;
         const cats = [...categories];
         const cols = { ...categoryColors };
         const removed = cats[index];
         cats.splice(index, 1);
         delete cols[removed];
-        onUpdateImageCategories?.(cats);
-        onUpdateImageCategoryColors?.(cols);
+        setSettings(prev => ({ ...prev, imageCategories: cats, imageCategoryColors: cols }));
     };
 
     const resetCategoriesToDefault = () => {
-        if (!confirm('确定恢复为默认图片分类列表？')) return;
-        onUpdateImageCategories?.(DEFAULT_CONFIG.imageCategories);
-        onUpdateImageCategoryColors?.(DEFAULT_CONFIG.imageCategoryColors);
+        if (!confirm('确定恢复为默认图片级分类列表？将写入本机设置。')) return;
+        setSettings(prev => ({
+            ...prev,
+            imageCategories: [...DEFAULT_CONFIG.imageCategories],
+            imageCategoryColors: { ...DEFAULT_CONFIG.imageCategoryColors },
+        }));
+    };
+
+    const updateAnnDefaultName = (index, newName) => {
+        const name = (newName || '').trim();
+        const arr = [...annDefaults];
+        if (!name || name === arr[index]) return;
+        arr[index] = name;
+        setSettings(prev => ({ ...prev, defaultAnnotationCategories: arr }));
+    };
+
+    const addAnnDefaultCategory = () => {
+        const arr = [...annDefaults];
+        let name = 'class';
+        if (arr.includes(name)) {
+            let n = 1;
+            while (arr.includes(name + n)) n++;
+            name = name + n;
+        }
+        setSettings(prev => ({ ...prev, defaultAnnotationCategories: [...arr, name] }));
+    };
+
+    const removeAnnDefaultCategory = (index) => {
+        if (annDefaults.length <= 1) return;
+        const arr = annDefaults.filter((_, i) => i !== index);
+        setSettings(prev => ({ ...prev, defaultAnnotationCategories: arr }));
+    };
+
+    const resetAnnDefaultsToDefault = () => {
+        if (!confirm('确定恢复为内置 GT 默认类别（object）？')) return;
+        setSettings(prev => ({ ...prev, defaultAnnotationCategories: [...(DEFAULT_CONFIG.defaultAnnotationCategories || ['object'])] }));
     };
 
     return (
@@ -4322,7 +4664,7 @@ function SettingsModal({
                                 type="button"
                                 className={`settings-nav-item ${activeTab === 'imageCategories' ? 'active' : ''}`}
                                 onClick={() => setActiveTab('imageCategories')}
-                            >🏷 图片分类</button>
+                            >{st.categoriesTabTitle || '🏷 分类默认值'}</button>
                             <button
                                 type="button"
                                 className={`settings-nav-item ${activeTab === 'llm' ? 'active' : ''}`}
@@ -4348,32 +4690,32 @@ function SettingsModal({
                                             {st.themeHint || '支持深色、浅色与柔和暗色，可随时切换。'}
                                         </p>
                                     </div>
-                                    <div className="form-group">
-                                        <label className="form-label">{st.viewerBackgroundLabel || '查看器背景'}</label>
-                                        <div style={{ display: 'flex', gap: '16px', marginBottom: '8px' }}>
-                                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
-                                                <input type="radio" name="bgStyle" checked={(viewer.backgroundStyle || 'checkerboard') === 'checkerboard'} onChange={() => updateViewer('backgroundStyle', 'checkerboard')} />
-                                                {st.backgroundStyleCheckerboard || '马赛克'}
-                                            </label>
-                                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
-                                                <input type="radio" name="bgStyle" checked={(viewer.backgroundStyle || '') === 'solid'} onChange={() => updateViewer('backgroundStyle', 'solid')} />
-                                                {st.backgroundStyleSolid || '纯色'}
-                                            </label>
-                                        </div>
-                                        {(viewer.backgroundStyle || 'checkerboard') === 'solid' && (
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+                    <div className="form-group">
+                        <label className="form-label">{st.viewerBackgroundLabel || '查看器背景'}</label>
+                        <div style={{ display: 'flex', gap: '16px', marginBottom: '8px' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                                <input type="radio" name="bgStyle" checked={(viewer.backgroundStyle || 'checkerboard') === 'checkerboard'} onChange={() => updateViewer('backgroundStyle', 'checkerboard')} />
+                                {st.backgroundStyleCheckerboard || '马赛克'}
+                            </label>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                                <input type="radio" name="bgStyle" checked={(viewer.backgroundStyle || '') === 'solid'} onChange={() => updateViewer('backgroundStyle', 'solid')} />
+                                {st.backgroundStyleSolid || '纯色'}
+                            </label>
+                        </div>
+                        {(viewer.backgroundStyle || 'checkerboard') === 'solid' && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
                                                 <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)' }}>背景色</span>
-                                                <input type="color" value={viewer.backgroundColor || '#1a1a2e'} onChange={(e) => updateViewer('backgroundColor', e.target.value)} style={{ width: 36, height: 28, padding: 2, cursor: 'pointer' }} />
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div className="form-group">
-                                        <label className="form-label">{st.lineWidthDefaultLabel || '默认线宽'}</label>
-                                        <select className="form-input" value={viewer.lineWidthDefault ?? 0.5} onChange={(e) => updateViewer('lineWidthDefault', Number(e.target.value))}>
-                                            {lineWidthOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                                        </select>
+                                <input type="color" value={viewer.backgroundColor || '#1a1a2e'} onChange={(e) => updateViewer('backgroundColor', e.target.value)} style={{ width: 36, height: 28, padding: 2, cursor: 'pointer' }} />
+                            </div>
+                        )}
+                    </div>
+                    <div className="form-group">
+                        <label className="form-label">{st.lineWidthDefaultLabel || '默认线宽'}</label>
+                        <select className="form-input" value={viewer.lineWidthDefault ?? 0.5} onChange={(e) => updateViewer('lineWidthDefault', Number(e.target.value))}>
+                            {lineWidthOptions.map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
                                         <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginTop: '4px' }}>0.1～1 共十档，查看器内可随时调整</p>
-                                    </div>
+                    </div>
                                     <div className="form-group">
                                         <label className="form-label">底部缩略图导航</label>
                                         <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', userSelect: 'none' }}>
@@ -4457,65 +4799,98 @@ function SettingsModal({
                             )}
 
                             {activeTab === 'imageCategories' && (
+                                <>
                                 <div className="form-group">
-                                    <label className="form-label">{st.imageCategoriesLabel || '图片分类'}</label>
-                                    <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '10px' }}>{st.imageCategoriesHint || '用于标注图片级分类，可增删改名称与颜色。'}</p>
-                                    <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                                        提示：此处仅作用于当前数据集，并写回当前 COCO 的 <code style={{ background: 'var(--bg-soft)', padding: '1px 4px', borderRadius: '3px' }}>image_category_definitions</code>，不会修改界面全局配置。
-                                    </p>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', cursor: 'pointer', userSelect: 'none' }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={!!imageCategoryMultiSelect}
-                                            onChange={(e) => onUpdateImageCategoryMultiSelect?.(e.target.checked)}
-                                        />
-                                        <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)' }}>允许图片多分类</span>
-                                        <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)' }}>（默认单选，勾选后可为一张图片打多个分类标签）</span>
-                                    </label>
+                                    <label className="form-label">{st.annotationCategoriesLabel || 'GT 框标注类别（默认）'}</label>
+                                    <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '10px' }}>{st.annotationCategoriesHint || ''}</p>
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                        {categories.map((name, i) => (
-                                            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                {i === 0 ? (
-                                                    <span className="form-input" style={{ flex: 1, minWidth: 0, background: 'var(--bg-soft)', color: 'var(--text-muted)', cursor: 'not-allowed' }} title="固定，不可修改">未分类</span>
-                                                ) : (
-                                                    <input
-                                                        key={name}
-                                                        type="text"
-                                                        className="form-input"
-                                                        defaultValue={name}
-                                                        onBlur={(e) => updateCategoryName(i, e.target.value)}
-                                                        onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-                                                        placeholder={st.categoryNamePlaceholder || '分类名称'}
-                                                        style={{ flex: 1, minWidth: 0 }}
-                                                    />
-                                                )}
+                                        {annDefaults.map((name, i) => (
+                                            <div key={`ann-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <input
-                                                    type="color"
-                                                    value={categoryColors[name] || '#888'}
-                                                    onChange={(e) => updateCategoryColor(i, e.target.value)}
-                                                    style={{ width: 36, height: 32, padding: 2, cursor: i === 0 ? 'default' : 'pointer', border: '1px solid var(--border-strong)', borderRadius: '4px' }}
-                                                    title="颜色"
+                                                    type="text"
+                                                    className="form-input"
+                                                    defaultValue={name}
+                                                    onBlur={(e) => updateAnnDefaultName(i, e.target.value)}
+                                                    onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                                                    placeholder="类别名"
+                                                    style={{ flex: 1, minWidth: 0 }}
                                                 />
                                                 <button
                                                     type="button"
                                                     className="btn btn-secondary"
-                                                    onClick={() => removeCategory(i)}
-                                                    disabled={i === 0 || categories.length <= 1}
+                                                    onClick={() => removeAnnDefaultCategory(i)}
+                                                    disabled={annDefaults.length <= 1}
                                                     style={{ padding: '6px 10px' }}
-                                                    title={i === 0 ? '未分类不可删除' : (categories.length <= 1 ? '至少保留一个分类' : '删除')}
+                                                    title={annDefaults.length <= 1 ? '至少保留一项' : '删除'}
                                                 >删除</button>
                                             </div>
                                         ))}
                                     </div>
-                                    <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
-                                        <button type="button" className="btn btn-secondary" onClick={addCategory}>
-                                            {st.addCategoryButton || '添加分类'}
+                                    <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                                        <button type="button" className="btn btn-secondary" onClick={addAnnDefaultCategory}>
+                                            {st.addAnnotationCategoryButton || '添加类别'}
                                         </button>
-                                        <button type="button" className="btn btn-secondary" onClick={resetCategoriesToDefault}>
-                                            {st.resetCategoriesButton || '恢复默认'}
+                                        <button type="button" className="btn btn-secondary" onClick={resetAnnDefaultsToDefault}>
+                                            {st.resetAnnotationCategoriesButton || '恢复 GT 默认'}
                                         </button>
                                     </div>
                                 </div>
+                                <div className="form-group" style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
+                        <label className="form-label">{st.imageCategoriesLabel || '图片级分类（全局默认）'}</label>
+                                    <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '10px' }}>{st.imageCategoriesHint || ''}</p>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', cursor: 'pointer', userSelect: 'none' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={!!(config.imageCategoryMultiSelect ?? DEFAULT_CONFIG.imageCategoryMultiSelect)}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, imageCategoryMultiSelect: e.target.checked }))}
+                                        />
+                                        <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)' }}>允许图片多分类</span>
+                                        <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)' }}>（默认单选，勾选后可为一张图片打多个分类标签）</span>
+                                    </label>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                        {categories.map((name, i) => (
+                                <div key={`ic-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    {i === 0 ? (
+                                                    <span className="form-input" style={{ flex: 1, minWidth: 0, background: 'var(--bg-soft)', color: 'var(--text-muted)', cursor: 'not-allowed' }} title="固定，不可修改">未分类</span>
+                                    ) : (
+                                        <input
+                                            type="text"
+                                            className="form-input"
+                                                        defaultValue={name}
+                                            onBlur={(e) => updateCategoryName(i, e.target.value)}
+                                                        onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                                            placeholder={st.categoryNamePlaceholder || '分类名称'}
+                                            style={{ flex: 1, minWidth: 0 }}
+                                        />
+                                    )}
+                                    <input
+                                        type="color"
+                                                    value={categoryColors[name] || '#888'}
+                                        onChange={(e) => updateCategoryColor(i, e.target.value)}
+                                                    style={{ width: 36, height: 32, padding: 2, cursor: i === 0 ? 'default' : 'pointer', border: '1px solid var(--border-strong)', borderRadius: '4px' }}
+                                        title="颜色"
+                                    />
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary"
+                                        onClick={() => removeCategory(i)}
+                                                    disabled={i === 0 || categories.length <= 1}
+                                        style={{ padding: '6px 10px' }}
+                                                    title={i === 0 ? '未分类不可删除' : (categories.length <= 1 ? '至少保留一个分类' : '删除')}
+                                    >删除</button>
+                                </div>
+                            ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                            <button type="button" className="btn btn-secondary" onClick={addCategory}>
+                                {st.addCategoryButton || '添加分类'}
+                            </button>
+                            <button type="button" className="btn btn-secondary" onClick={resetCategoriesToDefault}>
+                                {st.resetCategoriesButton || '恢复默认'}
+                            </button>
+                                    </div>
+                                </div>
+                                </>
                             )}
 
                             {activeTab === 'llm' && (
@@ -4876,28 +5251,28 @@ function ImageCard({ image, datasetId, selected, imageCategory, imageCategoryCol
             style={isUnannotated ? { outline: '2px solid rgba(240,160,64,0.5)', outlineOffset: '-2px' } : undefined}>
             <div className="image-card-thumb-wrapper">
                 <img className="image-card-thumb" src={thumbUrl} alt={image.file_name} loading="lazy" />
-                <div className="image-card-checkbox" onClick={(e) => { e.stopPropagation(); onSelect(!selected); }}>
-                    <input type="checkbox" checked={selected} readOnly />
-                </div>
+            <div className="image-card-checkbox" onClick={(e) => { e.stopPropagation(); onSelect(!selected); }}>
+                <input type="checkbox" checked={selected} readOnly />
+            </div>
                 {isUnannotated && (
-                    <div className="image-card-badge image-card-badge-warning" title="无标注">
-                        未标注
+                    <div className="image-card-badge image-card-badge-warning" title="无任何 GT 标注框（非图片级分类）">
+                        无 GT
                     </div>
                 )}
-                {showBadge && (
+            {showBadge && (
                     <div className="image-card-category" style={{ background: catColors[primaryCat] || 'var(--text-muted)' }} title={cats.length > 1 ? cats.join(', ') : primaryCat}>
-                        {cats.length > 1 ? `${primaryCat}+${cats.length - 1}` : primaryCat}
-                    </div>
-                )}
-                {hasNote && <div className="image-card-note-icon" title="有备注">📝</div>}
+                    {cats.length > 1 ? `${primaryCat}+${cats.length - 1}` : primaryCat}
+                </div>
+            )}
+            {hasNote && <div className="image-card-note-icon" title="有备注">📝</div>}
             </div>
             
             <div className="image-card-info">
                 <div className="image-card-header">
                     <div className="image-card-name" title={image.file_name}>{image.file_name.split('/').pop()}</div>
-                    {image.source_path != null && image.source_path !== '' && (
-                        <div className="image-card-dir" title={image.source_path}>{image.source_path}</div>
-                    )}
+            {image.source_path != null && image.source_path !== '' && (
+                <div className="image-card-dir" title={image.source_path}>{image.source_path}</div>
+            )}
                 </div>
                 
                 <div className="image-card-meta">
@@ -4908,10 +5283,10 @@ function ImageCard({ image, datasetId, selected, imageCategory, imageCategoryCol
                 </div>
 
                 {labelCategories.length > 0 && (
-                    <div className="image-card-tags">
-                        {labelCategories.map(cat => <span key={cat} className="image-card-tag" style={{ background: getCategoryColor(palette, cat) }}>{cat}</span>)}
+                <div className="image-card-tags">
+                    {labelCategories.map(cat => <span key={cat} className="image-card-tag" style={{ background: getCategoryColor(palette, cat) }}>{cat}</span>)}
                         {image.annotations?.length > 3 && <span className="image-card-tag-more">...</span>}
-                    </div>
+                </div>
                 )}
             </div>
         </div>
@@ -5145,10 +5520,32 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
     const [selectedCategories, setSelectedCategories] = useState(() => new Set(catList));
     const [exportWithBoxes, setExportWithBoxes] = useState(false);
     const [exportMultiCategoryMode, setExportMultiCategoryMode] = useState('all'); // 'all' 放入所有归属目录 | 'priority' 仅放入最高优先级目录
+    const [exportTab, setExportTab] = useState('category'); // 'category' | 'experiment'
+    const [expProgressPct, setExpProgressPct] = useState(null); // 实验导出进度 0–100（服务端真实进度），null 表示不显示
+    const [expTrainRatio, setExpTrainRatio] = useState(0.8);
+    const [expSeed, setExpSeed] = useState(42);
+    const [expDropDupes, setExpDropDupes] = useState(true);
     const defaultZipName = `${datasetData?.dataset_name || 'export'}_分类导出.zip`;
     const [zipFileName, setZipFileName] = useState(defaultZipName);
+    const [expZipName, setExpZipName] = useState(() => {
+        const n = datasetData?.dataset_name || 'export';
+        return n.toLowerCase().endsWith('.zip') ? n : `${n}.zip`;
+    });
+    const [expOutputPath, setExpOutputPath] = useState(() => {
+        try {
+            return localStorage.getItem('cocovis_experiment_output_path') || '';
+        } catch (e) {
+            return '';
+        }
+    });
     useEffect(() => {
         if (datasetData?.dataset_name) setZipFileName(`${datasetData.dataset_name}_分类导出.zip`);
+    }, [datasetData?.dataset_name]);
+    useEffect(() => {
+        if (datasetData?.dataset_name) {
+            const n = datasetData.dataset_name;
+            setExpZipName(n.toLowerCase().endsWith('.zip') ? n : `${n}.zip`);
+        }
     }, [datasetData?.dataset_name]);
 
     const toggleCategory = (cat) => {
@@ -5318,15 +5715,157 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
         setExporting(false);
     };
 
+    const handleExperimentExport = async () => {
+        if (!datasetData?.dataset_id) {
+            alert('请先加载数据集');
+            return;
+        }
+        setExporting(true);
+        setExportProgress(exp.experimentProgress || '连接服务器…');
+        setExpProgressPct(0);
+        try {
+            const defName = (() => {
+                const n = datasetData.dataset_name || 'export';
+                return n.toLowerCase().endsWith('.zip') ? n : `${n}.zip`;
+            })();
+            let name = (expZipName && expZipName.trim()) ? expZipName.trim() : defName;
+            if (!name.endsWith('.zip')) name += '.zip';
+            const res = await fetch('/api/export_experiment_dataset_stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    dataset_id: datasetData.dataset_id,
+                    train_ratio: expTrainRatio,
+                    seed: expSeed,
+                    zip_name: name,
+                    dataset_name: datasetData.dataset_name || 'dataset',
+                    drop_duplicate_basenames: expDropDupes,
+                    ...(expOutputPath.trim() ? { output_path: expOutputPath.trim() } : {}),
+                }),
+            });
+            if (!res.ok) {
+                let errMsg = `HTTP ${res.status}`;
+                try {
+                    const errBody = await res.json();
+                    if (errBody.error) errMsg = errBody.error;
+                } catch (e) { /* ignore */ }
+                alert(errMsg);
+                return;
+            }
+            const reader = res.body && res.body.getReader ? res.body.getReader() : null;
+            if (!reader) {
+                alert('浏览器不支持流式响应');
+                return;
+            }
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let donePayload = null;
+            while (true) {
+                const { done, value } = await reader.read();
+                if (value) buffer += decoder.decode(value, { stream: !done });
+                let nl;
+                while ((nl = buffer.indexOf('\n')) >= 0) {
+                    const line = buffer.slice(0, nl).trim();
+                    buffer = buffer.slice(nl + 1);
+                    if (!line) continue;
+                    let obj;
+                    try {
+                        obj = JSON.parse(line);
+                    } catch (e) {
+                        continue;
+                    }
+                    if (obj.type === 'progress') {
+                        if (typeof obj.pct === 'number') setExpProgressPct(Math.min(100, Math.max(0, obj.pct)));
+                        if (obj.message) setExportProgress(obj.message);
+                    } else if (obj.type === 'error') {
+                        setExpProgressPct(0);
+                        alert(obj.message || '导出失败');
+                        return;
+                    } else if (obj.type === 'done') {
+                        donePayload = obj;
+                        setExpProgressPct(100);
+                    }
+                }
+                if (done) break;
+            }
+            const tail = buffer.trim();
+            if (tail && !donePayload) {
+                try {
+                    const obj = JSON.parse(tail);
+                    if (obj.type === 'done') {
+                        donePayload = obj;
+                        setExpProgressPct(100);
+                    }
+                    else if (obj.type === 'error') {
+                        setExpProgressPct(0);
+                        alert(obj.message || '导出失败');
+                        return;
+                    }
+                } catch (e) { /* ignore */ }
+            }
+            const savedPath = donePayload.saved_path || (donePayload.stats && donePayload.stats.saved_path);
+            if (!donePayload || (!donePayload.download_url && !savedPath)) {
+                alert('未收到完成结果，请重试');
+                return;
+            }
+            if (donePayload.download_url) {
+                window.open(donePayload.download_url, '_blank');
+            }
+            const st = donePayload.stats || {};
+            const dupN = st.dedupe_dropped_count;
+            let msg = `导出成功。\n训练 ${st.train ?? '?'} 张，验证 ${st.valid ?? '?'} 张（种子 ${st.seed ?? expSeed}）。`;
+            if (dupN > 0) {
+                msg += `\n已丢弃 ${dupN} 张重名图片（保留较小 image_id）。`;
+            }
+            if (typeof st.zip_size_bytes === 'number' && st.zip_size_bytes > 0) {
+                msg += `\nZIP 约 ${(st.zip_size_bytes / (1024 * 1024)).toFixed(1)} MB。`;
+            }
+            if (st.storage_note) {
+                msg += `\n${st.storage_note}`;
+            }
+            if (savedPath) {
+                msg += `\n文件路径：${savedPath}`;
+            }
+            if (donePayload.download_url) {
+                msg += '\n若未自动下载，请检查浏览器弹窗拦截。';
+            }
+            alert(msg);
+            onClose();
+        } catch (err) {
+            setExpProgressPct(0);
+            alert('导出失败: ' + err.message);
+        } finally {
+            setExportProgress('');
+            setExporting(false);
+            setExpProgressPct(null);
+        }
+    };
+
     const defaultCat = catList[0] || '未分类';
     return (
         <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: exportTab === 'experiment' ? '580px' : undefined }}>
                 <div className="modal-header">
-                    <h3>{exp.modalTitle}</h3>
+                    <h3>{exportTab === 'category' ? exp.modalTitle : (exp.experimentTitle || '实验数据集导出')}</h3>
                     <button className="modal-close" onClick={onClose}>✕</button>
                 </div>
                 <div className="modal-body">
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                        <button
+                            type="button"
+                            className={exportTab === 'category' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                            onClick={() => setExportTab('category')}
+                            disabled={exporting}
+                        >{exp.tabCategory || '按分类'}</button>
+                        <button
+                            type="button"
+                            className={exportTab === 'experiment' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                            onClick={() => setExportTab('experiment')}
+                            disabled={exporting}
+                        >{exp.tabExperiment || '实验 train/valid'}</button>
+                    </div>
+                    {exportTab === 'category' ? (
+                    <>
                     <p style={{marginBottom: '15px', color: 'var(--text-muted)'}}>{exp.modalDescription}</p>
                     <div style={{ marginBottom: '15px' }}>
                         <label style={{ display: 'block', marginBottom: '6px', fontSize: 'var(--font-md)', color: 'var(--text-secondary)' }}>ZIP 文件名</label>
@@ -5376,17 +5915,123 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
                             );
                         })}
                     </div>
+                    </>
+                    ) : (
+                    <div className="export-experiment-panel">
+                        <p className="export-experiment-lead">{exp.experimentLead || exp.experimentDescription}</p>
+
+                        <div className="export-experiment-section-title">{exp.experimentSectionParams || '划分参数'}</div>
+                        <div className="export-experiment-grid">
+                            <div className="export-experiment-field">
+                                <label className="export-experiment-label">{exp.experimentTrainRatio || '训练集比例'}</label>
+                                <input
+                                    type="number"
+                                    className="filter-input export-experiment-input"
+                                    min={0.05}
+                                    max={0.95}
+                                    step={0.05}
+                                    value={expTrainRatio}
+                                    onChange={(e) => setExpTrainRatio(parseFloat(e.target.value) || 0.8)}
+                                />
+                                <span className="export-experiment-unit">0–1</span>
+                            </div>
+                            <div className="export-experiment-field">
+                                <label className="export-experiment-label">{exp.experimentSeed || '随机种子'}</label>
+                                <input
+                                    type="number"
+                                    className="filter-input export-experiment-input"
+                                    step={1}
+                                    value={expSeed}
+                                    onChange={(e) => setExpSeed(parseInt(e.target.value, 10) || 0)}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="export-experiment-section-title">{exp.experimentSectionDup || '重名处理'}</div>
+                        <div className="export-experiment-dup-box">
+                            <label className="export-experiment-checkbox-row">
+                                <input
+                                    type="checkbox"
+                                    checked={expDropDupes}
+                                    onChange={(e) => setExpDropDupes(e.target.checked)}
+                                    disabled={exporting}
+                                />
+                                <span className="export-experiment-checkbox-title">{exp.experimentDropDupes || '丢弃重名图片'}</span>
+                            </label>
+                            <p className="export-experiment-hint">{exp.experimentDropDupesHint}</p>
+                            {!expDropDupes && (
+                                <p className="export-experiment-hint export-experiment-hint--warn">{exp.experimentStrictDupesHint}</p>
+                            )}
+                        </div>
+
+                        <div className="export-experiment-section-title">{exp.experimentSectionOutput || '输出文件'}</div>
+                        <div className="export-experiment-field export-experiment-field--full">
+                            <label className="export-experiment-label">{exp.experimentZipLabel || 'ZIP 文件名'}</label>
+                            <input
+                                type="text"
+                                className="filter-input export-experiment-input-full"
+                                value={expZipName}
+                                onChange={(e) => setExpZipName(e.target.value)}
+                                placeholder={(() => {
+                                    const n = datasetData?.dataset_name || 'export';
+                                    return n.toLowerCase().endsWith('.zip') ? n : `${n}.zip`;
+                                })()}
+                            />
+                        </div>
+                        <div className="export-experiment-field export-experiment-field--full">
+                            <label className="export-experiment-label">{exp.experimentOutputPathLabel || '服务端保存路径（可选）'}</label>
+                            <input
+                                type="text"
+                                className="filter-input export-experiment-input-full"
+                                value={expOutputPath}
+                                onChange={(e) => {
+                                    const v = e.target.value;
+                                    setExpOutputPath(v);
+                                    try {
+                                        localStorage.setItem('cocovis_experiment_output_path', v);
+                                    } catch (err) { /* ignore */ }
+                                }}
+                                placeholder={exp.experimentOutputPathPlaceholder || '/path/to/dir 或 /path/to/file.zip'}
+                                autoComplete="off"
+                                spellCheck={false}
+                            />
+                            <p className="export-experiment-hint" style={{ marginTop: '8px' }}>{exp.experimentOutputPathHint || ''}</p>
+                        </div>
+                        <p className="export-experiment-footnote">{exp.experimentFootnote}</p>
+                    </div>
+                    )}
                 </div>
                 {exporting && exportProgress && (
                     <div className="modal-progress">
                         <span className="modal-progress-text">{exportProgress}</span>
+                        {exportTab === 'experiment' && expProgressPct != null && (
+                            <>
+                                <div
+                                    className="export-progress-track"
+                                    role="progressbar"
+                                    aria-valuemin={0}
+                                    aria-valuemax={100}
+                                    aria-valuenow={expProgressPct}
+                                    aria-label="实验数据集导出进度"
+                                >
+                                    <div className="export-progress-fill" style={{ width: `${expProgressPct}%` }} />
+                                </div>
+                                <div className="export-progress-meta">{expProgressPct}%</div>
+                            </>
+                        )}
                     </div>
                 )}
                 <div className="modal-footer">
                     <button className="btn btn-secondary" onClick={onClose} disabled={exporting}>取消</button>
-                    <button className="btn btn-primary" onClick={handleExport} disabled={exporting || selectedCategories.size === 0}>
-                        {exporting ? '导出中...' : exp.exportButtonText}
-                    </button>
+                    {exportTab === 'category' ? (
+                        <button className="btn btn-primary" onClick={handleExport} disabled={exporting || selectedCategories.size === 0}>
+                            {exporting ? '导出中...' : exp.exportButtonText}
+                        </button>
+                    ) : (
+                        <button className="btn btn-primary" onClick={handleExperimentExport} disabled={exporting}>
+                            {exporting ? '导出中...' : (exp.experimentExportButton || '导出实验包')}
+                        </button>
+                    )}
                 </div>
             </div>
         </div>
@@ -5678,7 +6323,7 @@ function CategoryPicker({ categories, lastCategory, onConfirm, onCancel }) {
 }
 
 // ==================== 图片查看器（查看 + 标注编辑） ====================
-function ImageViewer({ image, images, datasetId, categories, imageClassifications, imageNotes, imageCategories, imageCategoryMultiSelect, visiblePredModels, onClose, onNavigate, onUpdateCategory, onUpdateCategories, onUpdateNote, onAnnotationsSaved }) {
+function ImageViewer({ image, images, datasetId, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, imageCategoryMultiSelect, onUpdateImageCategories, onUpdateImageCategoryColors, visiblePredModels, onClose, onNavigate, onUpdateCategory, onUpdateCategories, onUpdateNote, onAnnotationsSaved }) {
     const config = useConfig();
     const setSettings = useSettings();
     const viewer = config.viewer || DEFAULT_CONFIG.viewer;
@@ -5709,6 +6354,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     const [currentImage, setCurrentImage] = useState(image || null);
     const [noteInput, setNoteInput] = useState('');
     const noteInputRef = useRef(null);
+    const [newImageCategoryName, setNewImageCategoryName] = useState('');
 
     // ---- 标注编辑模式 ----
     const editCanvasRef = useRef(null);
@@ -5736,6 +6382,11 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     useEffect(() => { localAnnsRef.current = localAnns; }, [localAnns]);
     const dirtyRef = useRef(false);
     useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
+    /** 标注变更必须同步写 dirtyRef：同一次事件里若只 setDirty(true)，scheduleAutoSave 会在 useEffect 之前读到旧的 false */
+    const markAnnotationDirty = useCallback(() => {
+        dirtyRef.current = true;
+        setDirty(true);
+    }, []);
     const currentImageRef = useRef(null);
     useEffect(() => { currentImageRef.current = currentImage; }, [currentImage]);
     const bboxFocusedRef = useRef(false);  // 坐标输入框是否已压入 undo 快照
@@ -5824,6 +6475,8 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     const keepAnnotateModeRef = useRef(false); // navigate 时是否保持标注模式
     const pendingSaveRef = useRef(null);       // { imageId, anns } — navigate 前捕获旧图待保存数据
     const autoSaveTimerRef = useRef(null);     // 画框后延迟自动保存的 timer
+    const autoSaveInFlightRef = useRef(false);
+    const queuedAutoSaveRef = useRef(null);    // { imageId, anns }，写入进行中时仅保留最新一次
     const [undoToast, setUndoToast] = useState(null); // { msg, id } 撤销/重做提示
     const undoToastTimerRef = useRef(null);
 
@@ -5859,6 +6512,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         setDrawingBox(null);
         setSelRect(null);
         setDirty(false);
+        dirtyRef.current = false;
         undoStack.current = [];
         redoStack.current = [];
 
@@ -5980,28 +6634,31 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
 
     useEffect(() => { setNoteInput(currentNote); }, [currentImage.image_id, currentNote]);
 
+    // 使用 annotateModeRef 而非 annotateMode，避免「看图 ↔ 标注」切换时 useCallback 依赖变化触发下方「自动适应」effect，把缩放/平移打回初始
     const fitZoom = useCallback(() => {
         if (!imgRef.current || !containerRef.current) return 1;
-        const stripReserve = (!annotateMode && showFilmstrip) ? VIEWER_FILMSTRIP_RESERVE_PX : 0;
+        const am = annotateModeRef.current;
+        const stripReserve = (!am && showFilmstrip) ? VIEWER_FILMSTRIP_RESERVE_PX : 0;
         const cw = containerRef.current.clientWidth - 40;
         const ch = containerRef.current.clientHeight - 40 - stripReserve;
         const iw = imgRef.current.naturalWidth;
         const ih = imgRef.current.naturalHeight;
         if (iw === 0 || ih === 0) return 1;
         return Math.min(cw / iw, ch / ih, 1);
-    }, [annotateMode, showFilmstrip]);
+    }, [showFilmstrip]);
 
     // 仅根据容器与图片元数据（宽高）计算适应缩放，不依赖图片加载，任意分辨率打开即自适应
     const getFitZoomFromMeta = useCallback(() => {
         const el = containerRef.current;
         const w = currentImage.width, h = currentImage.height;
         if (!el || !w || !h) return 1;
-        const stripReserve = (!annotateMode && showFilmstrip) ? VIEWER_FILMSTRIP_RESERVE_PX : 0;
+        const am = annotateModeRef.current;
+        const stripReserve = (!am && showFilmstrip) ? VIEWER_FILMSTRIP_RESERVE_PX : 0;
         const cw = el.clientWidth - 40;
         const ch = el.clientHeight - 40 - stripReserve;
         if (cw <= 0 || ch <= 0) return 1;
         return Math.min(cw / w, ch / h, 1);
-    }, [currentImage.width, currentImage.height, annotateMode, showFilmstrip]);
+    }, [currentImage.width, currentImage.height, showFilmstrip]);
 
     const drawAnnotations = useCallback(() => {
         const canvas = canvasRef.current;
@@ -6074,7 +6731,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                 if (tx < 0) tx = 4;
                 ctx.fillStyle = 'rgba(0,0,0,0.85)';
                 ctx.fillRect(tx, ty, boxW, boxH);
-                ctx.strokeStyle = getCategoryColor(palette, ann.category);
+            ctx.strokeStyle = getCategoryColor(palette, ann.category);
                 ctx.lineWidth = 1;
                 ctx.strokeRect(tx, ty, boxW, boxH);
                 ctx.fillStyle = '#fff';
@@ -6119,42 +6776,42 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                     ? Math.max(0.25, Number(ann.score)) : 1;
                 ctx.globalAlpha = baseAlpha * confAlpha;
                 ctx.strokeStyle = color;
-                ctx.lineWidth = isHovered ? Math.max(lineWidth + 0.2, 0.3) : lineWidth;
+            ctx.lineWidth = isHovered ? Math.max(lineWidth + 0.2, 0.3) : lineWidth;
                 ctx.setLineDash(dash);
-                ctx.strokeRect(rx, ry, rw, rh);
+            ctx.strokeRect(rx, ry, rw, rh);
                 ctx.setLineDash([]);
-                if (isHovered) {
-                    const area = bw * bh;
-                    const lines = [
+            if (isHovered) {
+                const area = bw * bh;
+                const lines = [
                         `[预测] ${ann._pred_source}`,
-                        ann.category,
+                    ann.category,
                         ann.score !== undefined && ann.score !== null
                             ? `置信度: ${(Number(ann.score) * 100).toFixed(1)}%`
                             : null,
-                        `[${Math.round(x)},${Math.round(y)},${Math.round(bw)}×${Math.round(bh)}]`,
-                        `面积: ${area.toLocaleString()}`
+                    `[${Math.round(x)},${Math.round(y)},${Math.round(bw)}×${Math.round(bh)}]`,
+                    `面积: ${area.toLocaleString()}`
                     ].filter(Boolean);
-                    ctx.font = '12px sans-serif';
-                    const lineH = 14;
-                    const pad = 6;
-                    const boxW = Math.max(...lines.map(l => ctx.measureText(l).width)) + pad * 2;
-                    const boxH = lines.length * lineH + pad * 2;
-                    let tx = rx, ty = ry - boxH - 4;
-                    if (ty < 0) ty = ry + rh + 4;
-                    if (tx + boxW > w) tx = w - boxW;
-                    if (tx < 0) tx = 4;
-                    ctx.fillStyle = 'rgba(0,0,0,0.85)';
-                    ctx.fillRect(tx, ty, boxW, boxH);
+                ctx.font = '12px sans-serif';
+                const lineH = 14;
+                const pad = 6;
+                const boxW = Math.max(...lines.map(l => ctx.measureText(l).width)) + pad * 2;
+                const boxH = lines.length * lineH + pad * 2;
+                let tx = rx, ty = ry - boxH - 4;
+                if (ty < 0) ty = ry + rh + 4;
+                if (tx + boxW > w) tx = w - boxW;
+                if (tx < 0) tx = 4;
+                ctx.fillStyle = 'rgba(0,0,0,0.85)';
+                ctx.fillRect(tx, ty, boxW, boxH);
                     ctx.strokeStyle = color;
-                    ctx.lineWidth = 1;
+                ctx.lineWidth = 1;
                     ctx.setLineDash(dash);
-                    ctx.strokeRect(tx, ty, boxW, boxH);
+                ctx.strokeRect(tx, ty, boxW, boxH);
                     ctx.setLineDash([]);
-                    ctx.fillStyle = '#fff';
-                    lines.forEach((line, i) => {
-                        ctx.fillText(line, tx + pad, ty + pad + (i + 1) * lineH - 2);
-                    });
-                }
+                ctx.fillStyle = '#fff';
+                lines.forEach((line, i) => {
+                    ctx.fillText(line, tx + pad, ty + pad + (i + 1) * lineH - 2);
+                });
+            }
                 // 查看模式常显标签（预测框）
                 if (!annotateMode && showLabels && ann.category && !isHovered) {
                     ctx.globalAlpha = baseAlpha * confAlpha;
@@ -6194,7 +6851,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         setPanY(0);
     }, [currentImage.image_id]);
 
-    // 切换图片时立即按元数据做自适应缩放（不等待图片加载），任意分辨率都先适应屏幕；缩略图显隐变化时同步重算
+    // 换图或缩略图条显隐时重算「适应窗口」缩放；不在 annotateMode / 拉框·选择工具 切换时触发，以保留当前缩放与平移
     useEffect(() => {
         const z = getFitZoomFromMeta();
         setZoom(z);
@@ -6202,7 +6859,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
             setZoom(getFitZoomFromMeta());
         });
         return () => cancelAnimationFrame(t);
-    }, [currentImage.image_id, getFitZoomFromMeta, annotateMode, showFilmstrip]);
+    }, [currentImage.image_id, getFitZoomFromMeta, showFilmstrip]);
 
     const handleImageLoad = () => {
         setZoom(fitZoom());
@@ -6334,6 +6991,20 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         if (!wrapper) return { x: 0, y: 0 };
         const rect = wrapper.getBoundingClientRect();
         return { x: (clientX - rect.left) / zoom, y: (clientY - rect.top) / zoom };
+    }
+
+    /** 查看模式下：命中可见 GT 框则返回其下标，否则 -1（从后往前，与点击锁定一致） */
+    function hitTestGtAnnAtClient(clientX, clientY) {
+        const { x: imgX, y: imgY } = viewClientToImage(clientX, clientY);
+        const anns = currentImage.annotations;
+        for (let i = anns.length - 1; i >= 0; i--) {
+            const ann = anns[i];
+            if (!ann.bbox || hiddenAnns.has(i) || hiddenCats.has(ann.category)) continue;
+            if (!passesConfThreshold(ann, confThresholdGT)) continue;
+            const [x, y, bw, bh] = ann.bbox;
+            if (imgX >= x && imgX <= x + bw && imgY >= y && imgY <= y + bh) return i;
+        }
+        return -1;
     }
 
     // C4: 全屏切换
@@ -6496,10 +7167,13 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     }
 
     function commitChange(nextAnns) {
+        const normalized = nextAnns.map(a => ({ ...a, bbox: [...(a.bbox || [])] }));
         undoStack.current = [...undoStack.current, localAnns.map(a => ({ ...a, bbox: [...a.bbox] }))];
         redoStack.current = [];
-        setLocalAnns(nextAnns);
-        setDirty(true);
+        // 必须在 setState 之前同步 ref：scheduleAutoSave 同步执行，useEffect 尚未更新 ref
+        localAnnsRef.current = normalized;
+        setLocalAnns(normalized);
+        markAnnotationDirty();
         scheduleAutoSave(); // 所有标注变更（移动/删除/粘贴等）均触发自动保存
     }
 
@@ -6514,6 +7188,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         redoStack.current = [...redoStack.current, localAnns.map(a => ({ ...a, bbox: [...a.bbox] }))];
         const prev = undoStack.current[undoStack.current.length - 1];
         undoStack.current = undoStack.current.slice(0, -1);
+        localAnnsRef.current = prev.map(a => ({ ...a, bbox: [...a.bbox] }));
         setLocalAnns(prev);
         setSelectedAnnIdx(null);
         showUndoToast(`已撤销（还可撤销 ${undoStack.current.length} 步）`);
@@ -6524,37 +7199,55 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         undoStack.current = [...undoStack.current, localAnns.map(a => ({ ...a, bbox: [...a.bbox] }))];
         const next = redoStack.current[redoStack.current.length - 1];
         redoStack.current = redoStack.current.slice(0, -1);
+        localAnnsRef.current = next.map(a => ({ ...a, bbox: [...a.bbox] }));
         setLocalAnns(next);
         setSelectedAnnIdx(null);
         showUndoToast(`已重做`);
     }
 
-    function enterAnnotateMode() {
-        setLocalAnns(currentImage.annotations.map(a => ({ ...a, bbox: [...(a.bbox || [])] })));
+    const switchAnnoTool = (nextTool) => {
+        if (annotateModeRef.current) {
+            setAnnoTool(nextTool);
+            setEditCursor(nextTool === 'draw' ? 'crosshair' : 'default');
+            return;
+        }
+        enterAnnotateMode(nextTool);
+    };
+
+    function enterAnnotateMode(preferredTool = 'draw', selectAnnIdx = null) {
+        const initial = currentImage.annotations.map(a => ({ ...a, bbox: [...(a.bbox || [])] }));
+        localAnnsRef.current = initial;
+        setLocalAnns(initial);
         undoStack.current = [];
         redoStack.current = [];
-        setSelectedAnnIdx(null);
+        const sel = selectAnnIdx != null && selectAnnIdx >= 0 && selectAnnIdx < initial.length ? selectAnnIdx : null;
+        setSelectedAnnIdx(sel);
+        setSelectedAnnIdxSet(new Set());
         setDrawingBox(null);
         setDirty(false);
+        dirtyRef.current = false;
         setSaveStatus('idle');
+        annotateModeRef.current = true;
         setAnnotateMode(true);
-        setAnnoTool('draw');
-        setEditCursor('crosshair');
+        setAnnoTool(preferredTool);
+        setEditCursor(preferredTool === 'draw' ? 'crosshair' : 'default');
         spaceRef.current = false;
     }
 
     async function exitAnnotateMode(force) {
         // 有未保存修改时自动保存，不再弹确认框
-        if (dirty) {
+        if (dirtyRef.current) {
             if (force) {
                 // 强制退出：放弃修改
                 setDirty(false);
+                dirtyRef.current = false;
             } else {
                 await saveAnnotations();
             }
         }
         // 清除待自动保存的 timer
         if (autoSaveTimerRef.current) { clearTimeout(autoSaveTimerRef.current); autoSaveTimerRef.current = null; }
+        annotateModeRef.current = false;
         setAnnotateMode(false);
         keepAnnotateModeRef.current = false;
         setSelectedAnnIdx(null);
@@ -6564,6 +7257,8 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     }
 
     async function saveAnnotations() {
+        const imageId = currentImageRef.current?.image_id || currentImage.image_id;
+        const annsToSave = (localAnnsRef.current || []).map(a => ({ ...a, bbox: [...(a.bbox || [])] }));
         setSaveStatus('saving');
         try {
             const res = await fetch('/api/save_annotations', {
@@ -6572,8 +7267,8 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                 body: JSON.stringify({
                     dataset_id: datasetId,
                     images: [{
-                        image_id: currentImage.image_id,
-                        annotations: localAnns.map(a => ({
+                        image_id: imageId,
+                        annotations: annsToSave.map(a => ({
                             category_id: a.category_id,
                             category: a.category,
                             bbox: a.bbox,
@@ -6587,11 +7282,13 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
             if (!data.success) throw new Error(data.error || '保存失败');
             setSaveStatus('saved');
             setDirty(false);
+            dirtyRef.current = false;
             // 同步回父组件 images 状态
-            if (onAnnotationsSaved) onAnnotationsSaved(currentImage.image_id, localAnns);
+            if (onAnnotationsSaved) onAnnotationsSaved(imageId, annsToSave);
             // 更新 currentImage.annotations，确保退出标注模式后查看模式能显示最新标注
-            const savedAnns = localAnns.map(a => ({ ...a, bbox: [...(a.bbox || [])] }));
-            setCurrentImage(prev => ({ ...prev, annotations: savedAnns }));
+            setCurrentImage(prev => ({ ...prev, annotations: annsToSave }));
+            // dirty 已清，不会再次请求保存；回到看图状态（与自动保存一致）
+            await exitAnnotateMode(false);
             setTimeout(() => setSaveStatus('idle'), 2000);
         } catch (e) {
             setSaveStatus('error');
@@ -6600,34 +7297,65 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         }
     }
 
-    // 画框后延迟自动保存（800ms 防抖）
+    async function persistAnnotationsNow(imageId, anns) {
+        const res = await fetch('/api/save_annotations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                dataset_id: datasetId,
+                images: [{
+                    image_id: imageId,
+                    annotations: (anns || []).map(a => ({
+                        category_id: a.category_id,
+                        category: a.category,
+                        bbox: a.bbox,
+                        area: a.bbox ? a.bbox[2] * a.bbox[3] : 0,
+                        iscrowd: a.iscrowd || 0,
+                    })),
+                }],
+            }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || '保存失败');
+    }
+
+    // 标注修改后实时写入（串行，若正在写则只保留最新一次）
     function scheduleAutoSave() {
-        if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-        autoSaveTimerRef.current = setTimeout(async () => {
-            autoSaveTimerRef.current = null;
-            const imgId = currentImageRef.current?.image_id;
-            const anns = localAnnsRef.current;
-            if (!imgId || !dirtyRef.current) return;
+        const imgId = currentImageRef.current?.image_id;
+        const anns = (localAnnsRef.current || []).map(a => ({ ...a, bbox: [...(a.bbox || [])] }));
+        if (!imgId || !dirtyRef.current) return;
+        const request = { imageId: imgId, anns };
+        if (autoSaveInFlightRef.current) {
+            queuedAutoSaveRef.current = request;
+            return;
+        }
+        autoSaveInFlightRef.current = true;
+        setSaveStatus('saving');
+        (async () => {
             try {
-                const res = await fetch('/api/save_annotations', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        dataset_id: datasetId,
-                        images: [{ image_id: imgId, annotations: anns.map(a => ({ category_id: a.category_id, category: a.category, bbox: a.bbox, area: a.bbox ? a.bbox[2] * a.bbox[3] : 0, iscrowd: a.iscrowd || 0 })) }]
-                    })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    setDirty(false);
-                    dirtyRef.current = false;
-                    if (onAnnotationsSaved) onAnnotationsSaved(imgId, anns);
-                    setCurrentImage(prev => ({ ...prev, annotations: anns.map(a => ({ ...a, bbox: [...(a.bbox || [])] })) }));
-                    setSaveStatus('saved');
-                    setTimeout(() => setSaveStatus('idle'), 1200);
+                await persistAnnotationsNow(request.imageId, request.anns);
+                setDirty(false);
+                dirtyRef.current = false;
+                if (onAnnotationsSaved) onAnnotationsSaved(request.imageId, request.anns);
+                setCurrentImage(prev => ({ ...prev, annotations: request.anns }));
+                setSaveStatus('saved');
+                await exitAnnotateMode(false);
+                setTimeout(() => setSaveStatus('idle'), 800);
+            } catch (e) {
+                console.warn('scheduleAutoSave:', e);
+                setSaveStatus('error');
+            } finally {
+                autoSaveInFlightRef.current = false;
+                if (queuedAutoSaveRef.current) {
+                    const latest = queuedAutoSaveRef.current;
+                    queuedAutoSaveRef.current = null;
+                    if (latest.imageId === currentImageRef.current?.image_id) {
+                        dirtyRef.current = true;
+                        scheduleAutoSave();
+                    }
                 }
-            } catch (e) { console.warn('scheduleAutoSave:', e); }
-        }, 800);
+            }
+        })();
     }
 
     // ---- 标注模式鼠标事件处理 ----
@@ -6682,10 +7410,11 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                     setDragOp('move');
                 }
             } else {
-                // 点击空白 → 开始框选
+                // 选择工具点击空白：开始拖动画布
                 setSelectedAnnIdx(null);
                 setSelectedAnnIdxSet(new Set());
-                setSelRect({ x0: imgX, y0: imgY, x1: imgX, y1: imgY });
+                const { panX: px0, panY: py0 } = zoomPanRef.current;
+                dragStartRef.current = { clientX: e.clientX, clientY: e.clientY, panX: px0, panY: py0 };
             }
         } else {
             // draw 模式：开始画框
@@ -6700,8 +7429,8 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         const imgH = currentImage.height || 1e6;
 
         const onMove = (e) => {
-            // 空格平移：由 dragStartRef 驱动，不做标注操作
-            if (dragStartRef.current && spaceRef.current) return;
+            // 平移时不做标注操作（空格平移/选择工具空白拖动）
+            if (dragStartRef.current) return;
 
             const { x: imgX, y: imgY } = clientToImage(e.clientX, e.clientY);
 
@@ -6773,12 +7502,17 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                 setLocalAnns(prev => {
                     const next = prev.map(a => ({ ...a, bbox: [...a.bbox] }));
                     next[annIdx].bbox = [bx, by, bw, bh];
+                    localAnnsRef.current = next.map(a => ({ ...a, bbox: [...a.bbox] }));
                     return next;
                 });
             }
         };
 
         const onUp = () => {
+            if (dragStartRef.current) {
+                dragStartRef.current = null;
+                return;
+            }
             if (drawingBox) {
                 const { x0, y0, x1, y1 } = drawingBox;
                 const bw = Math.abs(x1 - x0), bh = Math.abs(y1 - y0);
@@ -6797,9 +7531,11 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                     undoStack.current = [...undoStack.current, snap];
                     redoStack.current = [];
                     const newAnn = { category: cat, bbox: newBbox, area: newBbox[2] * newBbox[3], iscrowd: 0 };
-                    setLocalAnns(prev => [...prev, newAnn]);
-                    setSelectedAnnIdx(localAnnsRef.current.length);
-                    setDirty(true);
+                    const next = [...localAnnsRef.current.map(a => ({ ...a, bbox: [...a.bbox] })), newAnn];
+                    localAnnsRef.current = next;
+                    setLocalAnns(next);
+                    setSelectedAnnIdx(next.length - 1);
+                    markAnnotationDirty();
                     scheduleAutoSave(); // 画框后自动保存
                 } else {
                     setCategoryPickerBbox(newBbox);
@@ -6807,7 +7543,8 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                 return;
             }
             if (dragOp) {
-                setDirty(true);
+                markAnnotationDirty();
+                scheduleAutoSave(); // 拖拽移动/缩放结束后立即进入自动保存
                 setDragOp(null);
                 annoEditRef.current = null;
             }
@@ -6832,19 +7569,31 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
         return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-    }, [annotateMode, drawingBox, dragOp, selectedAnnIdx, quickMode, selRect, currentImage.width, currentImage.height]); // eslint-disable-line
+    }, [annotateMode, drawingBox, dragOp, selectedAnnIdx, quickMode, selRect, currentImage.width, currentImage.height, markAnnotationDirty]); // eslint-disable-line
 
     // 键盘快捷键（标注模式专属 + 通用）
-    const navigate = (dir) => {
+    const navigate = async (dir) => {
         if (onUpdateNote && noteInput !== currentNote) onUpdateNote(currentImage.image_id, noteInput);
         const newIdx = imageIdx + dir;
         if (newIdx < 0 || newIdx >= images.length) return;
-        // 在切图前捕获当前图的 ID 和标注，确保保存正确的图
+        // 标注状态下：切图前立即落盘，确保和图片分类一样“操作后切图即写入”
         if (annotateModeRef.current && dirtyRef.current) {
-            pendingSaveRef.current = {
-                imageId: currentImage.image_id,
-                anns: localAnnsRef.current.map(a => ({ ...a, bbox: [...(a.bbox || [])] })),
-            };
+            const savingAnns = localAnnsRef.current.map(a => ({ ...a, bbox: [...(a.bbox || [])] }));
+            try {
+                setSaveStatus('saving');
+                await persistAnnotationsNow(currentImage.image_id, savingAnns);
+                setDirty(false);
+                dirtyRef.current = false;
+                if (onAnnotationsSaved) onAnnotationsSaved(currentImage.image_id, savingAnns);
+                setCurrentImage(prev => ({ ...prev, annotations: savingAnns }));
+                setSaveStatus('saved');
+                setTimeout(() => setSaveStatus('idle'), 1200);
+            } catch (e) {
+                setSaveStatus('error');
+                alert('切图前保存失败: ' + e.message);
+                setTimeout(() => setSaveStatus('idle'), 2000);
+                return; // 保存失败不切图，避免数据丢失
+            }
         }
         // 标注模式导航后保持标注模式
         if (annotateModeRef.current) keepAnnotateModeRef.current = true;
@@ -6872,6 +7621,22 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
             if (onUpdateCategories) onUpdateCategories(currentImage.image_id, [cat]); else if (onUpdateCategory) onUpdateCategory(currentImage.image_id, cat);
         }
     };
+    const addImageCategoryInline = () => {
+        const name = (newImageCategoryName || '').trim();
+        if (!name) return;
+        const existing = Array.isArray(catList) ? catList : [];
+        if (existing.includes(name)) {
+            setNewImageCategoryName('');
+            handleCategoryChange({ target: { value: name } });
+            return;
+        }
+        const currentColors = imageCategoryColors || config.imageCategoryColors || DEFAULT_CONFIG.imageCategoryColors || {};
+        const nextColor = palette[(existing.length || 0) % palette.length] || '#888888';
+        onUpdateImageCategories?.([...existing, name]);
+        onUpdateImageCategoryColors?.({ ...currentColors, [name]: nextColor });
+        setNewImageCategoryName('');
+        handleCategoryChange({ target: { value: name } });
+    };
     const toggleCategory = (cat) => {
         // 仅多选模式下使用；"未分类"与其它分类互斥
         const unclassified = catList[0] || '未分类';
@@ -6897,6 +7662,15 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
 
             // 标注模式快捷键
             if (annotateModeRef.current) {
+                // Enter: 强制保存并退出到看图状态（等价“保存后点 X”）
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    // 类别弹窗输入时保留原 Enter 行为（确认类别）
+                    if (categoryPickerBbox) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    exitAnnotateMode(false);
+                    return;
+                }
                 // 空格：临时切换平移模式
                 if (e.key === ' ' && !inInput) {
                     e.preventDefault();
@@ -6979,7 +7753,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                         const nx = Math.max(0, Math.min(imgW - bw, bx + dx));
                         const ny = Math.max(0, Math.min(imgH - bh, by + dy));
                         const next = prev.map((a,i) => i === selectedAnnIdx ? {...a, bbox:[nx,ny,bw,bh]} : a);
-                        setDirty(true);
+                        markAnnotationDirty();
                         if (!e.repeat) scheduleAutoSave(); // 松手后保存（repeat时防抖已处理）
                         return next;
                     });
@@ -7043,7 +7817,33 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [imageIdx, currentImage.image_id, noteInput, currentNote, catList, currentCategories, onUpdateCategories, onUpdateCategory, images, selectedAnnIdx, localAnns, confThresholdGT, hiddenAnns, hiddenCats, hoveredAnnIdx]); // eslint-disable-line
+    }, [imageIdx, currentImage.image_id, noteInput, currentNote, catList, currentCategories, onUpdateCategories, onUpdateCategory, images, selectedAnnIdx, localAnns, confThresholdGT, hiddenAnns, hiddenCats, hoveredAnnIdx, categoryPickerBbox, markAnnotationDirty]); // eslint-disable-line
+
+    // 兜底：窗口关闭/刷新前，若有脏数据则尽力落盘
+    useEffect(() => {
+        const onBeforeUnload = () => {
+            if (!dirtyRef.current || !currentImageRef.current?.image_id) return;
+            const payload = {
+                dataset_id: datasetId,
+                images: [{
+                    image_id: currentImageRef.current.image_id,
+                    annotations: (localAnnsRef.current || []).map(a => ({
+                        category_id: a.category_id,
+                        category: a.category,
+                        bbox: a.bbox,
+                        area: a.bbox ? a.bbox[2] * a.bbox[3] : 0,
+                        iscrowd: a.iscrowd || 0,
+                    })),
+                }],
+            };
+            try {
+                const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+                navigator.sendBeacon('/api/save_annotations', blob);
+            } catch (e) {}
+        };
+        window.addEventListener('beforeunload', onBeforeUnload);
+        return () => window.removeEventListener('beforeunload', onBeforeUnload);
+    }, [datasetId]);
 
     // 跟踪 Ctrl/Cmd 和 Space 按键松开
     useEffect(() => {
@@ -7268,14 +8068,14 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                 />
                                 <span style={{fontSize:'11px', color:'var(--text-muted)'}}>%</span>
                                 <button type="button" className="viewer-nav-btn" onClick={() => setZoom(z => Math.max(viewer?.zoomMin ?? 0.01, z / 1.2))}>−</button>
-                                <button type="button" className="viewer-nav-btn" onClick={() => { setZoom(fitZoom()); setPanX(0); setPanY(0); }}>适应窗口</button>
+                    <button type="button" className="viewer-nav-btn" onClick={() => { setZoom(fitZoom()); setPanX(0); setPanY(0); }}>适应窗口</button>
                             </div>
                             <div className="viewer-toolbar-group">
                                 <span style={{color: 'var(--text-muted)', fontSize: 'var(--font-sm)'}}>线宽:</span>
-                                <select className="viewer-linewidth-select" value={lineWidth} onChange={(e) => setLineWidth(Number(e.target.value))} title="线宽 0.1～1">
-                                    {lineWidthOpts.map(v => <option key={v} value={v}>{v}</option>)}
-                                </select>
-                            </div>
+                    <select className="viewer-linewidth-select" value={lineWidth} onChange={(e) => setLineWidth(Number(e.target.value))} title="线宽 0.1～1">
+                        {lineWidthOpts.map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                </div>
                             <div className="viewer-toolbar-group">
                                 <button
                                     className={`viewer-nav-btn vbtn ${annFill ? 'vbtn-on-cyan' : 'vbtn-off'}`}
@@ -7297,7 +8097,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                     title={`置信度透明 (${confOpacity ? '开' : '关'})`}
                                     onClick={() => setConfOpacity(c => !c)}
                                 >∿</button>
-                            </div>
+            </div>
                             <div className="viewer-toolbar-group">
                                 <button
                                     className="viewer-nav-btn vbtn vbtn-info"
@@ -7332,7 +8132,18 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                     onClick={() => setShowHelp(h => !h)}
                                 >?</button>
                             </div>
-                            <button className="viewer-nav-btn vbtn vbtn-annotate" onClick={enterAnnotateMode} title="进入标注编辑模式 (双击图片)">✏️ 标注</button>
+                            <div className="viewer-toolbar-group">
+                                <button
+                                    className={`viewer-nav-btn vbtn ${annoTool === 'draw' ? 'vbtn-on-green' : 'vbtn-off'}`}
+                                    title="打标：拉框 (B)"
+                                    onClick={() => switchAnnoTool('draw')}
+                                >⬛</button>
+                                <button
+                                    className={`viewer-nav-btn vbtn ${annoTool === 'select' ? 'vbtn-on-blue' : 'vbtn-off'}`}
+                                    title="选择：框上移动/调整，空白处长按拖动画布 (V)"
+                                    onClick={() => switchAnnoTool('select')}
+                                >⬡</button>
+                            </div>
                         </>
                     ) : (
                         // 标注模式工具栏
@@ -7341,14 +8152,14 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                             <div className="viewer-toolbar-group">
                                 <button
                                     className={`viewer-nav-btn vbtn ${annoTool === 'draw' ? 'vbtn-on-green' : 'vbtn-off'}`}
-                                    title="画框 (B)"
-                                    onClick={() => setAnnoTool('draw')}
-                                >⬛ 画框</button>
+                                    title="打标：拉框 (B)"
+                                    onClick={() => switchAnnoTool('draw')}
+                                >⬛</button>
                                 <button
                                     className={`viewer-nav-btn vbtn ${annoTool === 'select' ? 'vbtn-on-blue' : 'vbtn-off'}`}
-                                    title="选择/移动/调整 (V)"
-                                    onClick={() => setAnnoTool('select')}
-                                >⬡ 选择</button>
+                                    title="选择：框上移动/调整，空白处长按拖动画布 (V)"
+                                    onClick={() => switchAnnoTool('select')}
+                                >⬡</button>
                                 <button
                                     className={`viewer-nav-btn vbtn ${quickMode ? 'vbtn-on-lime' : 'vbtn-off'}`}
                                     title={`快速模式${quickMode ? '开启' : '关闭'}: 画完框直接使用上次类别 (Q)`}
@@ -7400,11 +8211,10 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                     title="快捷键帮助 (?)"
                                     onClick={() => setShowHelp(h => !h)}
                                 >?</button>
-                                <button className="viewer-nav-btn btn-danger" style={{border:'none'}} title="退出标注模式" onClick={() => exitAnnotateMode(false)}>✕ 退出</button>
                             </div>
                         </>
                     )}
-                    {!annotateMode && <button className="viewer-nav-btn btn-danger" onClick={onClose} style={{border:'none', marginLeft: '8px'}}>✕</button>}
+                    <button className="viewer-nav-btn btn-danger" onClick={onClose} style={{border:'none', marginLeft: '8px'}}>✕</button>
                 </div>
             </div>
             {/* 标注模式：缩放操作栏 */}
@@ -7444,7 +8254,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                     <div style={{ padding: '0 2px 4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                         <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>预测置信度 ≥</span>
                                         <span style={{ fontSize: 'var(--font-xs)', color: confThresholdPred > 0 ? 'var(--accent)' : 'var(--text-muted)', fontFamily: 'monospace', marginLeft: 'auto' }}>
-                                            {confThresholdPred > 0 ? (confThresholdPred * 100).toFixed(0) + '%' : 'off'}
+                                            {confThresholdPred > 0 ? (confThresholdPred * 100).toFixed(1) + '%' : 'off'}
                                         </span>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -7484,7 +8294,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                                 <div key={idx} className="viewer-ann-item" style={{ borderLeftColor: getCategoryColor(palette, ann.category) }}>
                                                     <div className="viewer-ann-color" style={{ background: getCategoryColor(palette, ann.category) }}></div>
                                                     <span className="viewer-ann-text" title={ann.category}>{ann.category}</span>
-                                                    {ann.score !== undefined && <span className="viewer-ann-score">{(ann.score * 100).toFixed(0)}%</span>}
+                                                    {ann.score !== undefined && <span className="viewer-ann-score">{(ann.score * 100).toFixed(1)}%</span>}
                                                     <button
                                                         title="接受为 GT 标注"
                                                         onClick={() => {
@@ -7514,7 +8324,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                         >
                                             <div className="viewer-ann-color" style={{ background: getCategoryColor(palette, ann.category) }}></div>
                                             <span className="viewer-ann-text" title={ann._pred_source || ''}>{ann.category}</span>
-                                            {ann.score != null && <span className="viewer-ann-score">{(Number(ann.score) * 100).toFixed(0)}%</span>}
+                                            {ann.score != null && <span className="viewer-ann-score">{(Number(ann.score) * 100).toFixed(1)}%</span>}
                                             <button
                                                 className="vbtn vbtn-neutral"
                                                 title="隐藏/显示此预测框"
@@ -7530,11 +8340,11 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                             >
                                                 {hiddenPredAnns.has(idx) ? '○ 显示' : '● 隐藏'}
                                             </button>
-                                        </div>
+                    </div>
                                     );
                                 })
                             )}
-                        </div>
+                </div>
                     </div>
                 )}
                 {hasPredAnnotations && (
@@ -7608,11 +8418,35 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                         })()}
                     <div className="viewer-sidebar-form">
                             <label className="viewer-form-label">{multiSelectCat ? '主分类 (1–9 快捷键)' : '图片分类 (1–9 快捷键)'}</label>
-                        <select className="viewer-form-select" value={currentCategory} onChange={handleCategoryChange}>
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' }}>
+                            <select className="viewer-form-select" style={{ marginBottom: 0, flex: 1 }} value={currentCategory} onChange={handleCategoryChange}>
                             {catList.map((cat, i) => (
                                 <option key={cat} value={cat}>{i < 9 ? `${i + 1}. ${cat}` : cat}</option>
                             ))}
                         </select>
+                            <button
+                                type="button"
+                                className="vbtn-neutral"
+                                style={{ padding: '4px 9px', whiteSpace: 'nowrap' }}
+                                title="新增图片分类"
+                                onClick={addImageCategoryInline}
+                            >
+                                +
+                            </button>
+                        </div>
+                        <input
+                            className="viewer-form-select"
+                            style={{ marginBottom: '10px', height: '30px' }}
+                            value={newImageCategoryName}
+                            onChange={(e) => setNewImageCategoryName(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    addImageCategoryInline();
+                                }
+                            }}
+                            placeholder="新增分类名称，回车创建"
+                        />
                             {multiSelectCat && (<>
                         <label className="viewer-form-label">也属于（多选）</label>
                         {currentCategory === (catList[0] || '未分类') ? (
@@ -7622,7 +8456,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                 {catList.filter(c => c !== currentCategory && c !== (catList[0] || '未分类')).map(cat => (
                                     <label key={cat} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: 'var(--font-sm)', cursor: 'pointer' }}>
                                         <input type="checkbox" checked={currentCategories.includes(cat)} onChange={() => toggleCategory(cat)} />
-                                        <span style={{ background: (config.imageCategoryColors || {})[cat] || '#666', padding: '2px 6px', borderRadius: '4px', color: '#fff' }}>{cat}</span>
+                                        <span style={{ background: (imageCategoryColors || config.imageCategoryColors || {})[cat] || '#666', padding: '2px 6px', borderRadius: '4px', color: '#fff' }}>{cat}</span>
                                     </label>
                                 ))}
                             </div>
@@ -7695,7 +8529,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                 style={{flex: 1, accentColor: 'var(--accent)'}}
                             />
                             <span style={{fontSize: 'var(--font-xs)', color: confThresholdGT > 0 ? 'var(--accent)' : 'var(--text-muted)', fontFamily: 'monospace', minWidth: '32px', textAlign: 'right'}}>
-                                {confThresholdGT > 0 ? (confThresholdGT * 100).toFixed(0) + '%' : 'off'}
+                                {confThresholdGT > 0 ? (confThresholdGT * 100).toFixed(1) + '%' : 'off'}
                             </span>
                             {confThresholdGT > 0 && (
                                 <button
@@ -7736,9 +8570,10 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                                     setLocalAnns(prev => {
                                                         const next = prev.map((a,i) => i === selectedAnnIdx ? {...a, bbox:[...a.bbox]} : a);
                                                         next[selectedAnnIdx].bbox[fi] = n;
+                                                        localAnnsRef.current = next.map(a => ({ ...a, bbox: [...a.bbox] }));
                                                         return next;
                                                     });
-                                                    setDirty(true);
+                                                    markAnnotationDirty();
                                                 }}
                                                 onBlur={() => {
                                                     bboxFocusedRef.current = false;
@@ -7753,8 +8588,9 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                                     bx = Math.max(0, Math.min(imgW - bw, bx));
                                                     by = Math.max(0, Math.min(imgH - bh, by));
                                                     const clamped = localAnnsRef.current.map((a,i) => i === selectedAnnIdx ? {...a, bbox:[bx,by,bw,bh]} : a);
+                                                    localAnnsRef.current = clamped.map(a => ({ ...a, bbox: [...a.bbox] }));
                                                     setLocalAnns(clamped);
-                                                    setDirty(true);
+                                                    markAnnotationDirty();
                                                     scheduleAutoSave();
                                                 }}
                                                 className="viewer-mini-input" style={{flex:1, minWidth:0, padding:'2px 4px', fontSize:'12px'}}
@@ -7858,15 +8694,15 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                             if (annSearchText && !ann.category?.toLowerCase().includes(annSearchText.toLowerCase())) return null;
                             const belowThreshold = !passesConfThreshold(ann, confThresholdGT);
                             if (belowThreshold) return (
-                                <div
-                                    key={idx}
+                            <div
+                                key={idx}
                                     className="viewer-ann-item hidden"
                                     style={{ borderLeftColor: getCategoryColor(palette, ann.category), opacity: 0.35 }}
-                                    title={ann.score != null ? `置信度 ${(Number(ann.score)*100).toFixed(1)}% 低于阈值 ${(confThresholdGT*100).toFixed(0)}%` : undefined}
+                                    title={ann.score != null ? `置信度 ${(Number(ann.score)*100).toFixed(1)}% 低于阈值 ${(confThresholdGT*100).toFixed(1)}%` : undefined}
                                 >
                                     <div className="viewer-ann-color" style={{ background: getCategoryColor(palette, ann.category) }}></div>
                                     <span className="viewer-ann-text">{ann.category}</span>
-                                    {ann.score != null && <span className="viewer-ann-score" style={{textDecoration: 'line-through'}}>{(Number(ann.score) * 100).toFixed(0)}%</span>}
+                                    {ann.score != null && <span className="viewer-ann-score" style={{textDecoration: 'line-through'}}>{(Number(ann.score) * 100).toFixed(1)}%</span>}
                                     <span style={{marginLeft: 'auto', color: 'var(--text-muted)'}}>⊘</span>
                                 </div>
                             );
@@ -7881,7 +8717,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                             >
                                 <div className="viewer-ann-color" style={{ background: getCategoryColor(palette, ann.category) }}></div>
                                 <span className="viewer-ann-text">{ann.category}</span>
-                                {ann.score != null && <span className="viewer-ann-score">{(Number(ann.score) * 100).toFixed(0)}%</span>}
+                                {ann.score != null && <span className="viewer-ann-score">{(Number(ann.score) * 100).toFixed(1)}%</span>}
                                 <button 
                                     className="vbtn vbtn-neutral" 
                                     title="点击居中并隐藏/显示此框" 
@@ -7942,7 +8778,14 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                     className={`viewer-canvas-area viewer-slot-canvas ${(viewer.backgroundStyle || 'checkerboard') === 'checkerboard' ? 'viewer-bg-checkerboard' : 'viewer-bg-solid'}`}
                     ref={containerRef}
                     onMouseDown={handleMouseDown}
-                    onDoubleClick={() => { if (!annotateMode) enterAnnotateMode(); }}
+                    onDoubleClick={(e) => {
+                        if (annotateMode) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const hit = hitTestGtAnnAtClient(e.clientX, e.clientY);
+                        if (hit >= 0) enterAnnotateMode('select', hit);
+                        else enterAnnotateMode('draw');
+                    }}
                     onContextMenu={!annotateMode ? (e) => {
                         e.preventDefault();
                         const wrapper = wrapperRef.current;
@@ -8093,7 +8936,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                             }}>🎯 居中到此框</div>
                                         )}
                                         <div className="ctx-menu-item" onClick={() => {
-                                            enterAnnotateMode();
+                                            enterAnnotateMode(type === 'gt' ? 'select' : 'draw', type === 'gt' ? annIdx : null);
                                             setCtxMenu(null);
                                         }}>✏ 进入标注模式</div>
                 </div>
@@ -8133,7 +8976,6 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                 commitChange([...localAnns, newAnn]);
                                 setSelectedAnnIdx(localAnns.length);
                                 setCategoryPickerBbox(null);
-                                scheduleAutoSave(); // 选完类别后自动保存
                             }}
                             onCancel={() => setCategoryPickerBbox(null)}
                         />
@@ -8178,14 +9020,14 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                     <div key={i} style={{fontSize:'12px', color: i === 0 ? '#fff' : '#aaa', padding:'1px 0', fontWeight: i === 0 ? 'bold' : 'normal'}}>{l}</div>
                                 ))}
                                 <div style={{marginTop:'6px', fontSize:'10px', color:'var(--text-muted)'}}>再次点击框解锁</div>
-                            </div>
+                    </div>
                         );
                     })()}
                     {/* 双击提示（查看模式无标注时） */}
                     {!annotateMode && !lockedAnn && (
                         <div style={{position:'absolute', bottom:'8px', left:'50%', transform:'translateX(-50%)', fontSize:'11px', color:'var(--text-muted)', pointerEvents:'none', userSelect:'none'}}>
-                            双击图片进入标注模式 · Tab 切换框 · 0=适应窗口
-                        </div>
+                            双击空白画框 · 双击 GT 框则选中编辑 · Tab 切换工具 · 0=适应窗口
+                    </div>
                     )}
                 </div>
                 )}
@@ -8281,12 +9123,14 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                 ['Esc', '关闭查看器 / 清除锁定'],
                                 ['?', '显示/隐藏帮助'],
                                 ['（工具栏）🎞 缩略图', '显示/隐藏底部缩略图导航'],
-                                ['双击图片', '进入标注模式'],
-                                ['点击标注框', '锁定/解锁信息面板'],
+                                ['双击空白', '进入画框模式'],
+                                ['双击 GT 框', '进入选择模式并选中该框'],
+                                ['单击标注框', '锁定/解锁信息面板'],
                             ]},
                             { group: '标注工具', items: [
                                 ['B', '切换到画框工具'],
                                 ['V', '切换到选择工具'],
+                                ['Enter', '保存标注并回到看图状态'],
                                 ['Q', '快速模式（记住上次类别）'],
                                 ['Del / Backspace', '删除选中框（支持多选）'],
                                 ['Ctrl+C', '复制选中框'],

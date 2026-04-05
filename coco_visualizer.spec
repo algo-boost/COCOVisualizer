@@ -29,6 +29,7 @@ hiddenimports = [
     'PIL',
     'PIL.Image',
     'coco_eda_utils',
+    'experiment_export',
 ]
 
 a = Analysis(
