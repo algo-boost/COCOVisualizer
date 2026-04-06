@@ -1,5 +1,5 @@
 // COCO数据集可视化工具 - React版本
-const { useState, useEffect, useRef, useCallback, createContext, useContext } = React;
+const { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } = React;
 
 // 默认配置
 const DEFAULT_CONFIG = {
@@ -86,6 +86,7 @@ const DEFAULT_CONFIG = {
         categoryNamePlaceholder: '分类名称',
         resetCategoriesButton: '恢复默认',
         resetAnnotationCategoriesButton: '恢复 GT 默认',
+        categoryScopeSummary: '何时用「设置」里的类别？何时以 COCO 文件为准？',
         closeButtonText: '关闭'
     },
     help: {
@@ -901,7 +902,10 @@ function App() {
                 />
             )}
             {showSettingsModal && (
-                <SettingsModal onClose={() => setShowSettingsModal(false)} />
+                <SettingsModal
+                    onClose={() => setShowSettingsModal(false)}
+                    cocoImageCategoryDefsActive={activeImageCategories != null}
+                />
             )}
             {showHelpModal && (
                 <HelpModal onClose={() => setShowHelpModal(false)} />
@@ -914,8 +918,16 @@ function App() {
 function SidebarNav({ page, setPage, datasetLoaded, onOpenSettings, onOpenHelp }) {
     const config = useConfig();
     const nav = config.nav || DEFAULT_CONFIG.nav;
+    const brandMark = useMemo(() => {
+        const raw = (config.appName || 'CV').trim();
+        if (raw.length <= 2) return raw.slice(0, 2).toUpperCase();
+        const w = raw.split(/\s+/).filter(Boolean);
+        if (w.length >= 2) return (w[0][0] + w[1][0]).toUpperCase();
+        return raw.slice(0, 2).toUpperCase();
+    }, [config.appName]);
     return (
         <div className="sidebar-nav">
+            <div className="sidebar-brand-mark" title={config.appName || ''} aria-hidden="true">{brandMark}</div>
             <div className={`nav-item ${page === 'load' ? 'active' : ''}`} onClick={() => setPage('load')} title={nav.loadTitle}>📂</div>
             <div className="nav-divider"></div>
             {datasetLoaded && (
@@ -3770,6 +3782,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     const [showSaveModal, setShowSaveModal] = useState(false);
     const [saving, setSaving] = useState(false);
     const [showCatMgr, setShowCatMgr] = useState(false); // 类别管理弹窗
+    const [galleryMoreToolsOpen, setGalleryMoreToolsOpen] = useState(false); // 收起次要工具，突出保存/导出
 
     // EDA 联动：收到 jumpToCategory 时自动设置标注类别筛选并跳到第1页
     useEffect(() => {
@@ -4124,8 +4137,13 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                         </button>
                     </div>
                 )}
-                <div className="top-toolbar">
-                    <div className="toolbar-right">
+                <div className="top-toolbar top-toolbar--gallery">
+                    <div className="gallery-toolbar-primary">
+                        <div className="gallery-toolbar-brand">
+                            <span className="gallery-toolbar-heading">图库</span>
+                            <span className="gallery-toolbar-dataset" title={datasetData.dataset_name || ''}>{datasetData.dataset_name || '数据集'}</span>
+                        </div>
+                        <div className="gallery-toolbar-core">
                         {directoryOptions.length > 1 && (
                             <select className="filter-select" value={selectedDirectory} onChange={(e) => { setSelectedDirectory(e.target.value); setCurrentPage(1); }} title="按目录筛选">
                                 <option value="all">全部目录</option>
@@ -4136,6 +4154,37 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                             <option value="all">全部标注类别</option>
                             {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                         </select>
+                        <input className="filter-input gallery-toolbar-search" placeholder="搜索文件名..." value={searchText} onChange={(e) => { setSearchText(e.target.value); setCurrentPage(1); }} />
+                        </div>
+                        <div className="gallery-toolbar-cta">
+                        <button
+                            className="btn btn-success btn-sm gallery-toolbar-cta-save"
+                            onClick={() => setShowSaveModal(true)}
+                            disabled={saving}
+                            title={saving ? '保存中...' : (gallery.saveButtonText || '保存到 COCO')}
+                        >
+                            {saving ? '⏳ 保存中' : '💾 保存'}
+                        </button>
+                        <button className="btn btn-primary btn-sm" onClick={() => setShowExportModal(true)} title={gallery.exportButtonText || '导出'}>📤 导出</button>
+                        <button className="btn btn-secondary btn-sm" onClick={() => setShowVersionModal(true)} title={gallery.versionButtonText || '版本'}>📋</button>
+                        <button className="btn btn-secondary btn-sm" onClick={() => setShowCatMgr(true)} title="类别管理（跨图批量重命名/合并标注类别）">🏷</button>
+                        <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => setGalleryMoreToolsOpen(o => !o)}
+                            title={galleryMoreToolsOpen ? '收起次要筛选与工具' : '展开预测模型、置信度、排序等'}
+                        >
+                            {galleryMoreToolsOpen ? '收起工具 ▴' : '更多工具 ▾'}
+                        </button>
+                        </div>
+                    </div>
+                    {!galleryMoreToolsOpen && (
+                        <p className="gallery-toolbar-collapsed-hint" style={{ margin: '6px 0 0', fontSize: '11px', color: 'var(--text-muted)', width: '100%' }}>
+                            预测可见性、置信度区间、排序、代码筛选等已收起到「更多工具 ▾」
+                        </p>
+                    )}
+                    {galleryMoreToolsOpen && (
+                    <div className="toolbar-right gallery-toolbar-expanded">
                         {/* 预测模型可见性切换（有预测数据时显示） */}
                         {predModelNames.length > 0 && visiblePredModels && (
                             <span style={{ display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
@@ -4269,7 +4318,6 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                 )}
                             </span>
                         )}
-                        <input className="filter-input" placeholder="搜索文件名..." value={searchText} onChange={(e) => { setSearchText(e.target.value); setCurrentPage(1); }} />
                         <button
                             className={`btn btn-sm ${showCodeFilterPanel || agentFilterIds ? 'btn-primary' : 'btn-secondary'}`}
                             onClick={() => setShowCodeFilterPanel(true)}
@@ -4308,18 +4356,8 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                         {autoSaveStatus === 'error' && (
                             <span style={{ fontSize: 'var(--font-sm)', color: '#f5222d', whiteSpace: 'nowrap' }}>⚠ 备份失败</span>
                         )}
-                        <button
-                            className="btn btn-success btn-sm"
-                            onClick={() => setShowSaveModal(true)}
-                            disabled={saving}
-                            title={saving ? '保存中...' : (gallery.saveButtonText || '保存')}
-                        >
-                            {saving ? '⏳' : '💾'}
-                        </button>
-                        <button className="btn btn-secondary btn-sm" onClick={() => setShowVersionModal(true)} title={gallery.versionButtonText || '版本'}>📋</button>
-                        <button className="btn btn-secondary btn-sm" onClick={() => setShowCatMgr(true)} title="类别管理（跨图批量重命名/合并标注类别）">🏷</button>
-                        <button className="btn btn-primary btn-sm" onClick={() => setShowExportModal(true)} title={gallery.exportButtonText || '导出'}>📤</button>
                     </div>
+                    )}
                 </div>
 
                 <div className="content-area">
@@ -4541,7 +4579,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
 }
 
 // ==================== 设置模态框 ====================
-function SettingsModal({ onClose }) {
+function SettingsModal({ onClose, cocoImageCategoryDefsActive = false }) {
     const config = useConfig();
     const setSettings = useSettings();
     const st = config.settings || DEFAULT_CONFIG.settings || {};
@@ -4800,6 +4838,20 @@ function SettingsModal({ onClose }) {
 
                             {activeTab === 'imageCategories' && (
                                 <>
+                                <details className="settings-scope-details" style={{ marginBottom: '18px', padding: '12px 14px', background: 'var(--bg-soft)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                                    <summary style={{ cursor: 'pointer', fontWeight: 600, color: 'var(--text-secondary)', fontSize: 'var(--font-sm)', userSelect: 'none' }}>
+                                        {st.categoryScopeSummary || '何时用「设置」里的类别？何时以 COCO 文件为准？'}
+                                    </summary>
+                                    <div style={{ marginTop: '12px', fontSize: 'var(--font-sm)', color: 'var(--text-muted)', lineHeight: 1.55 }}>
+                                        <p style={{ margin: '0 0 8px' }}><strong>GT 默认类别</strong>与<strong>图片级分类（全局默认）</strong>保存在本机浏览器；在数据集<strong>没有任何 GT 类别名</strong>或<strong>未写入图片分类定义</strong>时，使用此处列表。</p>
+                                        <p style={{ margin: '0 0 8px' }}>若当前 COCO 已包含 <code style={{ background: 'var(--bg-raised)', padding: '1px 5px', borderRadius: '3px' }}>image_category_definitions</code>，则<strong>图片级分类</strong>以<strong>文件内定义</strong>为准（优先级高于下方「图片级分类」全局默认）。</p>
+                                        {cocoImageCategoryDefsActive ? (
+                                            <p style={{ margin: 0, color: 'var(--accent)', fontWeight: 600 }}>当前已加载数据集：<span style={{ textDecoration: 'underline' }}>正在使用 COCO 文件中的图片分类定义</span>。</p>
+                                        ) : (
+                                            <p style={{ margin: 0 }}>当前已加载数据集：<strong>未</strong>使用文件内图片分类定义，图库/看图中的图片级标签来自上方全局默认。</p>
+                                        )}
+                                    </div>
+                                </details>
                                 <div className="form-group">
                                     <label className="form-label">{st.annotationCategoriesLabel || 'GT 框标注类别（默认）'}</label>
                                     <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '10px' }}>{st.annotationCategoriesHint || ''}</p>
@@ -8009,7 +8061,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     }, []);
 
     return (
-        <div className="viewer-modal" ref={viewerModalRef}>
+        <div className={`viewer-modal${annotateMode ? ' viewer-modal--annotate' : ''}`} ref={viewerModalRef}>
             <div className="viewer-header">
                 <div className="viewer-nav">
                     <button className="viewer-nav-btn" disabled={imageIdx <= 0} onClick={() => navigate(-1)}>‹ 上一张</button>
@@ -8146,9 +8198,8 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                             </div>
                         </>
                     ) : (
-                        // 标注模式工具栏
+                        // 标注模式工具栏（模式文案见上方 viewer-mode-strip）
                         <>
-                            <span style={{fontSize:'12px', color:'var(--warning)', fontWeight:'bold', marginRight:'2px'}}>✏️ 标注</span>
                             <div className="viewer-toolbar-group">
                                 <button
                                     className={`viewer-nav-btn vbtn ${annoTool === 'draw' ? 'vbtn-on-green' : 'vbtn-off'}`}
@@ -8216,6 +8267,25 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                     )}
                     <button className="viewer-nav-btn btn-danger" onClick={onClose} style={{border:'none', marginLeft: '8px'}}>✕</button>
                 </div>
+            </div>
+            <div
+                className={`viewer-mode-strip${!annotateMode ? ' viewer-mode-strip--view' : ''}${annotateMode && annoTool === 'draw' ? ' viewer-mode-strip--annotate viewer-mode-strip--draw' : ''}${annotateMode && annoTool === 'select' ? ' viewer-mode-strip--annotate viewer-mode-strip--select' : ''}`}
+                role="status"
+            >
+                <span className="viewer-mode-strip-badge">
+                    {!annotateMode ? '看图' : (annoTool === 'draw' ? '标注 · 拉框' : '标注 · 拖框 / 调整')}
+                </span>
+                {!annotateMode && (
+                    <span className="viewer-mode-strip-hint">浏览 · 滚轮缩放 · 拖动画布</span>
+                )}
+                {annotateMode && (
+                    <span className="viewer-mode-strip-hint">
+                        {annoTool === 'draw'
+                            ? '拖拽绘制新框 · 快捷键 B 拉框 / V 选择'
+                            : '点选框以移动或调整 · 空白处拖动画布'}
+                        <span className="viewer-mode-strip-kbd"> Enter 保存并退出 · Esc 关闭看图</span>
+                    </span>
+                )}
             </div>
             {/* 标注模式：缩放操作栏 */}
             {annotateMode && (
