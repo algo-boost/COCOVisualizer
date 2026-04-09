@@ -26,7 +26,8 @@ const DEFAULT_CONFIG = {
         saveButtonText: '保存',
         galleryTitlePrefix: '共',
         galleryTitleSuffix: '张图片',
-        selectedSuffix: '已选'
+        selectedSuffix: '已选',
+        moreToolsExpandedByDefault: true
     },
     imageCategories: ['未分类', '背景误检', '低置信度背景误检', '低置信度正确检出', '高置信度正确检出', '环境误检', '类别误检', '漏检'],
     /** COCO 中无任何 GT 类别（空 categories 或无标注推断）时，用于筛选/打标/导出的默认类别名，可在 config.json 覆盖 */
@@ -59,6 +60,7 @@ const DEFAULT_CONFIG = {
         crossSidebarIouThreshold: 0.5,
         sidebarDock: 'right',
         filmstripHiddenByDefault: true,
+        imageCategoryExpandedByDefault: true,
         metaFilterFieldMap: {
             c_time: 'c_time',
             product_id: 'product_id',
@@ -1237,9 +1239,33 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
     const [selectedIndices, setSelectedIndices] = useState(new Set());
     const [showPathPicker, setShowPathPicker] = useState(false);
     const [loadNotice, setLoadNotice] = useState(null); // { kind: 'error' | 'info', text: string }
+    const [lastScanRoots, setLastScanRoots] = useState([]);
     const [recentLoads, setRecentLoads] = useState(() => {
         try { return JSON.parse(localStorage.getItem(RECENT_LOADS_KEY) || '[]'); } catch { return []; }
     });
+    const parseRootPaths = useCallback((raw) => {
+        return String(raw || '')
+            .split(/[;\n；]+/g)
+            .map(s => s.trim())
+            .filter(Boolean);
+    }, []);
+    const appendRootPaths = useCallback((incoming) => {
+        const next = parseRootPaths(incoming);
+        if (next.length === 0) return;
+        setRootPath(prev => {
+            const merged = [...parseRootPaths(prev), ...next];
+            const uniq = [];
+            const seen = new Set();
+            merged.forEach(p => {
+                const k = p.toLowerCase();
+                if (!seen.has(k)) {
+                    seen.add(k);
+                    uniq.push(p);
+                }
+            });
+            return uniq.join(';\n');
+        });
+    }, [parseRootPaths]);
 
     const removeRecent = (cocoPath) => {
         try {
@@ -1289,31 +1315,70 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
     };
 
     const handleScan = async () => {
-        if (!rootPath.trim()) {
+        const roots = parseRootPaths(rootPath);
+        if (roots.length === 0) {
             setLoadNotice({ kind: 'error', text: '请先填写或拖入根目录路径。' });
             return;
         }
         setLoadNotice(null);
         setScanning(true);
         try {
-            const res = await fetch('/api/scan_folder', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ root_path: rootPath.trim() })
-            });
-            let data;
-            try {
-                data = await res.json();
-            } catch {
-                setLoadNotice({ kind: 'error', text: `扫描失败：服务器返回非 JSON（HTTP ${res.status}）。请确认后端已正常启动。` });
-                return;
+            const allItems = [];
+            const failedRoots = [];
+            const rootCount = roots.length;
+            for (let i = 0; i < roots.length; i++) {
+                const root = roots[i];
+                const res = await fetch('/api/scan_folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ root_path: root })
+                });
+                let data;
+                try {
+                    data = await res.json();
+                } catch {
+                    failedRoots.push(`${root} (HTTP ${res.status})`);
+                    continue;
+                }
+                if (!data.success) {
+                    failedRoots.push(`${root} (${data.error || '未知错误'})`);
+                    continue;
+                }
+                const rootLabelBase = root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || root;
+                const rootLabel = rootLabelBase.replace(/\s+/g, '_');
+                const items = (data.items || []).map(item => {
+                    if (rootCount <= 1) return item;
+                    const rel = (item.relative_path || '').replace(/^[/\\]+/, '');
+                    return {
+                        ...item,
+                        relative_path: rel ? `${rootLabel}/${rel}` : rootLabel,
+                    };
+                });
+                allItems.push(...items);
             }
-            if (data.success) {
-                setScanItems(data.items || []);
-                setSelectedIndices(new Set((data.items || []).map((_, i) => i)));
-                setLoadNotice(null);
+            // 以 coco_path 去重，避免多个根目录重复扫描到同一文件
+            const dedupMap = new Map();
+            allItems.forEach(it => {
+                const key = `${it.coco_path || ''}@@${it.image_dir || ''}`;
+                if (!dedupMap.has(key)) dedupMap.set(key, it);
+            });
+            const mergedItems = Array.from(dedupMap.values());
+            setScanItems(mergedItems);
+            setSelectedIndices(new Set(mergedItems.map((_, i) => i)));
+            setLastScanRoots(roots);
+            if (failedRoots.length > 0) {
+                setLoadNotice({
+                    kind: 'error',
+                    text: `部分路径扫描失败（${failedRoots.length}/${roots.length}）：${failedRoots.slice(0, 3).join('；')}${failedRoots.length > 3 ? ' ...' : ''}`
+                });
             } else {
-                setLoadNotice({ kind: 'error', text: '扫描失败：' + (data.error || '未知错误') });
+                setLoadNotice({
+                    kind: 'info',
+                    text: roots.length > 1
+                        ? `已完成多路径扫描：${roots.length} 个根目录，共发现 ${mergedItems.length} 个标注目录。`
+                        : null
+                });
+                if (roots.length <= 1) setLoadNotice(null);
             }
         } catch (err) {
             setLoadNotice({ kind: 'error', text: '扫描失败：' + formatClientFetchError(err) });
@@ -1335,7 +1400,11 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
     const handleLoadMerged = () => {
         const selected = scanItems.filter((_, i) => selectedIndices.has(i));
         if (selected.length === 0) { alert('请至少勾选一个目录'); return; }
-        onLoadMerged(selected, datasetName, rootPath);
+        const roots = (lastScanRoots && lastScanRoots.length > 0)
+            ? lastScanRoots
+            : parseRootPaths(rootPath);
+        const mergeRoot = roots[0] || '';
+        onLoadMerged(selected, datasetName, mergeRoot);
     };
 
     const isLikelyLocalServer = React.useMemo(() => {
@@ -1408,14 +1477,14 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
         const textPath = rawTextPath.startsWith('file://') ? decodeURIComponent(rawTextPath.replace(/^file:\/\//, '')) : rawTextPath;
         if (isLikelyLocalServer) {
             if (textPath) {
-                setRootPath(textPath);
+                appendRootPaths(textPath);
                 return;
             }
             const localFile = droppedFiles[0]?.file;
             if (localFile && localFile.path) {
                 const p = String(localFile.path || '');
                 const dir = p.includes('/') || p.includes('\\') ? p.replace(/[\\/][^\\/]*$/, '') : p;
-                if (dir) setRootPath(dir);
+                if (dir) appendRootPaths(dir);
                 return;
             }
             // 某些浏览器不会暴露本地拖拽路径；本地模式下也兜底为上传后回填服务端路径
@@ -1423,7 +1492,7 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
                 if (droppedFiles.length > 0) {
                     const uploadedRoot = await uploadDroppedFilesAsBundle(droppedFiles);
                     if (uploadedRoot) {
-                        setRootPath(uploadedRoot);
+                        appendRootPaths(uploadedRoot);
                         return;
                     }
                 }
@@ -1438,12 +1507,12 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
             if (droppedFiles.length > 0) {
                 const uploadedRoot = await uploadDroppedFilesAsBundle(droppedFiles);
                 if (uploadedRoot) {
-                    setRootPath(uploadedRoot);
+                    appendRootPaths(uploadedRoot);
                     return;
                 }
             }
             if (textPath) {
-                setRootPath(textPath);
+                appendRootPaths(textPath);
                 return;
             }
             alert('远程模式下请拖入文件/目录以便上传，或手动输入服务器路径。');
@@ -1455,7 +1524,7 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
         const t = (e.clipboardData && e.clipboardData.getData('text')) || '';
         if (t && (t.includes('\\') || t.includes('/'))) {
             e.preventDefault();
-            setRootPath(t.trim());
+            appendRootPaths(t.trim());
         }
     };
 
@@ -1521,7 +1590,7 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
                     )}
                     {loadTab === 'scan' && (
                 <div className="load-section">
-                            <p className="load-section-desc">约定：自动扫描指定目录及其子目录下的 <code>_annotations.coco.json</code> 文件。支持拖入或粘贴路径。</p>
+                            <p className="load-section-desc">约定：自动扫描指定目录及其子目录下的 <code>_annotations.coco.json</code> 文件。支持拖入或粘贴路径；多个根目录可用 <code>;</code> 分隔。</p>
                     <div className="load-field">
                         <label className="load-label">根目录路径</label>
                         <div className="load-path-row">
@@ -1534,12 +1603,13 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
                             >
                                         <div className="drop-zone-icon">📥</div>
                                         <div className="load-drop-zone-text">{isLikelyLocalServer ? '拖拽目录到此处，自动提取本地路径' : '拖拽目录/文件到此处，自动上传到服务器'}</div>
-                                <input
-                                    type="text"
+                                <textarea
                                     value={rootPath}
                                     onChange={(e) => setRootPath(e.target.value)}
-                                    placeholder="例如 D:\data\coco_root 或 /path/to/root"
+                                    placeholder={"例如：\nD:\\data\\a；D:\\data\\b\n或\n/path/a;/path/b\n也支持每行一个目录"}
                                             className="load-input"
+                                    rows={3}
+                                    style={{ minHeight: '72px', resize: 'vertical' }}
                                 />
                             </div>
                                     <button type="button" className="load-btn load-btn-secondary" onClick={() => setShowPathPicker(true)} title="弹窗选择路径" style={{marginTop: 0, padding: '0 24px', borderRadius: '12px'}}>浏览目录...</button>
@@ -1548,7 +1618,7 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
                     {showPathPicker && (
                         <PathPickerModal
                             initialPath={rootPath}
-                            onSelect={(p) => { setRootPath(p); setShowPathPicker(false); }}
+                            onSelect={(p) => { appendRootPaths(p); setShowPathPicker(false); }}
                             onClose={() => setShowPathPicker(false)}
                         />
                     )}
@@ -3839,7 +3909,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     const [showSaveModal, setShowSaveModal] = useState(false);
     const [saving, setSaving] = useState(false);
     const [showCatMgr, setShowCatMgr] = useState(false); // 类别管理弹窗
-    const [galleryMoreToolsOpen, setGalleryMoreToolsOpen] = useState(false); // 收起次要工具，突出保存/导出
+    const [galleryMoreToolsOpen, setGalleryMoreToolsOpen] = useState(gallery.moreToolsExpandedByDefault !== false); // 默认展开，可在设置中调整
 
     // EDA 联动：收到 jumpToCategory 时自动设置标注类别筛选并跳到第1页
     useEffect(() => {
@@ -3874,6 +3944,9 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     const [showMapModal, setShowMapModal] = useState(false);
     // 控制哪些预测模型可见（null 表示全显示，Set 表示白名单）
     const [visiblePredModels, setVisiblePredModels] = useState(null);
+    useEffect(() => {
+        setGalleryMoreToolsOpen(gallery.moreToolsExpandedByDefault !== false);
+    }, [gallery.moreToolsExpandedByDefault]);
 
     // 标注类别统计（useMemo 缓存，仅在 images 变化时重算）
     const { labelCategoryStats, totalAnnotations } = React.useMemo(() => {
@@ -4623,6 +4696,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                     onUpdateImageCategories={onUpdateImageCategories}
                     onUpdateImageCategoryColors={onUpdateImageCategoryColors}
                     visiblePredModels={visiblePredModels}
+                    onUpdateVisiblePredModels={setVisiblePredModels}
                     onClose={() => setViewerOpen(false)}
                     onNavigate={(img) => setSelectedImage(img)}
                     onUpdateCategory={onUpdateCategory}
@@ -4641,6 +4715,7 @@ function SettingsModal({ onClose, cocoImageCategoryDefsActive = false }) {
     const setSettings = useSettings();
     const st = config.settings || DEFAULT_CONFIG.settings || {};
     const viewer = config.viewer || DEFAULT_CONFIG.viewer;
+    const galleryCfg = config.gallery || DEFAULT_CONFIG.gallery || {};
     const lineWidthOptions = viewer.lineWidthOptions || [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
     const colorPalette = config.colorPalette || DEFAULT_CONFIG.colorPalette || ['#888'];
     const currentTheme = config.uiTheme || DEFAULT_CONFIG.uiTheme || 'dark';
@@ -4648,6 +4723,9 @@ function SettingsModal({ onClose, cocoImageCategoryDefsActive = false }) {
 
     const updateViewer = (key, value) => {
         setSettings(prev => ({ ...prev, viewer: { ...(prev.viewer || {}), [key]: value } }));
+    };
+    const updateGallery = (key, value) => {
+        setSettings(prev => ({ ...prev, gallery: { ...(prev.gallery || {}), [key]: value } }));
     };
 
     const categories = config.imageCategories || DEFAULT_CONFIG.imageCategories || [];
@@ -4822,6 +4900,34 @@ function SettingsModal({ onClose, cocoImageCategoryDefsActive = false }) {
                                             />
                                             <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
                                                 打开看图时显示底部缩略图（不勾选则默认隐藏，可在看图界面点击「🎞 缩略图」打开；显示时会为缩略条预留空间，避免「适应窗口」压住图片）
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <div className="form-group">
+                                        <label className="form-label">图库工具栏</label>
+                                        <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', userSelect: 'none' }}>
+                                            <input
+                                                type="checkbox"
+                                                style={{ marginTop: '3px' }}
+                                                checked={galleryCfg.moreToolsExpandedByDefault !== false}
+                                                onChange={(e) => updateGallery('moreToolsExpandedByDefault', e.target.checked)}
+                                            />
+                                            <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                                                图库「更多工具」默认展开（关闭后默认折叠，可在图库页手动展开）
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <div className="form-group">
+                                        <label className="form-label">看图里的图片分类展示</label>
+                                        <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', userSelect: 'none' }}>
+                                            <input
+                                                type="checkbox"
+                                                style={{ marginTop: '3px' }}
+                                                checked={viewer.imageCategoryExpandedByDefault !== false}
+                                                onChange={(e) => updateViewer('imageCategoryExpandedByDefault', e.target.checked)}
+                                            />
+                                            <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                                                默认平铺显示图片分类按钮（不使用下拉框）
                                             </span>
                                         </label>
                                     </div>
@@ -6432,7 +6538,7 @@ function CategoryPicker({ categories, lastCategory, onConfirm, onCancel }) {
 }
 
 // ==================== 图片查看器（查看 + 标注编辑） ====================
-function ImageViewer({ image, images, datasetId, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, imageCategoryMultiSelect, onUpdateImageCategories, onUpdateImageCategoryColors, visiblePredModels, onClose, onNavigate, onUpdateCategory, onUpdateCategories, onUpdateNote, onAnnotationsSaved }) {
+function ImageViewer({ image, images, datasetId, categories, imageClassifications, imageNotes, imageCategories, imageCategoryColors, imageCategoryMultiSelect, onUpdateImageCategories, onUpdateImageCategoryColors, visiblePredModels, onUpdateVisiblePredModels, onClose, onNavigate, onUpdateCategory, onUpdateCategories, onUpdateNote, onAnnotationsSaved }) {
     const config = useConfig();
     const setSettings = useSettings();
     const viewer = config.viewer || DEFAULT_CONFIG.viewer;
@@ -6678,6 +6784,24 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     const currentCategory = currentCategories[0];
     const currentNote = imageNotes[currentImage.image_id] || '';
     const hasPredAnnotations = (currentImage.pred_annotations || []).length > 0;
+    const predAnnsByModel = React.useMemo(() => {
+        const groups = {};
+        (currentImage.pred_annotations || []).forEach((ann, idx) => {
+            const model = String(ann._pred_source || '未命名模型');
+            if (!groups[model]) groups[model] = [];
+            groups[model].push({ ann, idx });
+        });
+        return groups;
+    }, [currentImage.pred_annotations]);
+    const predModelList = React.useMemo(() => Object.keys(predAnnsByModel), [predAnnsByModel]);
+    const togglePredModelInViewer = useCallback((modelName) => {
+        if (!onUpdateVisiblePredModels) return;
+        const normalized = String(modelName || '未命名模型');
+        const base = new Set(visiblePredModels || predModelList);
+        if (base.has(normalized)) base.delete(normalized);
+        else base.add(normalized);
+        onUpdateVisiblePredModels(base);
+    }, [onUpdateVisiblePredModels, visiblePredModels, predModelList]);
     const sidebarsTotalInsetPx = React.useMemo(() => {
         const handlePad = 6;
         let w = 12 + mainSidebarWidth + handlePad;
@@ -8428,6 +8552,56 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                     </div>
                                 </div>
                             )}
+                            {!annotateMode && predModelList.length > 0 && (
+                                <div style={{ padding: '0 0 8px', borderBottom: '1px solid var(--border)', marginBottom: '8px' }}>
+                                    <div style={{ padding: '0 2px 6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                                        <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-muted)' }}>模型显隐</span>
+                                        <div style={{ display: 'flex', gap: '4px' }}>
+                                            <button
+                                                type="button"
+                                                className="vbtn vbtn-neutral"
+                                                style={{ padding: '0 6px', fontSize: '10px' }}
+                                                onClick={() => onUpdateVisiblePredModels && onUpdateVisiblePredModels(new Set(predModelList))}
+                                            >全显</button>
+                                            <button
+                                                type="button"
+                                                className="vbtn vbtn-neutral"
+                                                style={{ padding: '0 6px', fontSize: '10px' }}
+                                                onClick={() => onUpdateVisiblePredModels && onUpdateVisiblePredModels(new Set())}
+                                            >全隐</button>
+                                        </div>
+                                    </div>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                        {predModelList.map(model => {
+                                            const isOn = !visiblePredModels || visiblePredModels.has(model);
+                                            const n = (predAnnsByModel[model] || []).length;
+                                            return (
+                                                <button
+                                                    key={model}
+                                                    type="button"
+                                                    onClick={() => togglePredModelInViewer(model)}
+                                                    className="vbtn"
+                                                    style={{
+                                                        fontSize: '10px',
+                                                        padding: '1px 7px',
+                                                        borderRadius: '10px',
+                                                        border: `1px solid ${isOn ? 'var(--accent)' : 'var(--border)'}`,
+                                                        background: isOn ? 'rgba(95,140,255,0.14)' : 'transparent',
+                                                        color: isOn ? 'var(--accent)' : 'var(--text-muted)',
+                                                        maxWidth: '100%',
+                                                        overflow: 'hidden',
+                                                        textOverflow: 'ellipsis',
+                                                        whiteSpace: 'nowrap',
+                                                    }}
+                                                    title={`${isOn ? '隐藏' : '显示'} ${model}（${n}）`}
+                                                >
+                                                    {isOn ? '◉' : '○'} {model} ({n})
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
                             {annotateMode ? (
                                 (() => {
                                     const predAnns = (currentImage.pred_annotations || []).filter(a => !visiblePredModels || visiblePredModels.has(a._pred_source));
@@ -8465,37 +8639,63 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                     );
                                 })()
                             ) : (
-                                (currentImage.pred_annotations || []).map((ann, idx) => {
-                                    if (!passesConfThreshold(ann, confThresholdPred)) return null;
-                                    const modelHidden = visiblePredModels && !visiblePredModels.has(ann._pred_source);
+                                predModelList.map((modelName) => {
+                                    const modelItems = predAnnsByModel[modelName] || [];
+                                    const modelHidden = visiblePredModels && !visiblePredModels.has(modelName);
+                                    const visibleCount = modelItems.filter(({ ann }) => passesConfThreshold(ann, confThresholdPred)).length;
                                     return (
-                                        <div
-                                            key={idx}
-                                            className={`viewer-ann-item ${hiddenPredAnns.has(idx) || modelHidden ? 'hidden' : ''} ${(hoveredPredAnnIdx === idx || linkedPredIdxSet.has(idx)) ? 'viewer-ann-item-hovered' : ''}`}
-                                            style={{ borderLeftColor: getCategoryColor(palette, ann.category) }}
-                                            onClick={() => { if (!modelHidden && !hiddenPredAnns.has(idx)) centerOnAnnotation(ann.bbox); }}
-                                            onMouseEnter={() => setHoveredPredAnnIdx(idx)}
-                                            onMouseLeave={() => setHoveredPredAnnIdx(null)}
-                                        >
-                                            <div className="viewer-ann-color" style={{ background: getCategoryColor(palette, ann.category) }}></div>
-                                            <span className="viewer-ann-text" title={ann._pred_source || ''}>{ann.category}</span>
-                                            {ann.score != null && <span className="viewer-ann-score">{(Number(ann.score) * 100).toFixed(1)}%</span>}
-                                            <button
-                                                className="vbtn vbtn-neutral"
-                                                title="隐藏/显示此预测框"
-                                                style={{ marginLeft: 'auto', padding: '0 4px', fontSize: '10px' }}
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    setHiddenPredAnns(prev => {
-                                                        const next = new Set(prev);
-                                                        if (next.has(idx)) next.delete(idx); else next.add(idx);
-                                                        return next;
-                                                    });
-                                                }}
-                                            >
-                                                {hiddenPredAnns.has(idx) ? '○ 显示' : '● 隐藏'}
-                                            </button>
-                    </div>
+                                        <div key={modelName} style={{ marginBottom: '6px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 4px 4px' }}>
+                                                <span
+                                                    title={modelName}
+                                                    style={{ fontSize: '11px', color: modelHidden ? 'var(--text-muted)' : 'var(--text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                                >
+                                                    {modelName}
+                                                </span>
+                                                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{visibleCount}/{modelItems.length}</span>
+                                                <button
+                                                    type="button"
+                                                    className="vbtn vbtn-neutral"
+                                                    style={{ padding: '0 6px', fontSize: '10px' }}
+                                                    onClick={() => togglePredModelInViewer(modelName)}
+                                                    title={modelHidden ? `显示 ${modelName}` : `隐藏 ${modelName}`}
+                                                >
+                                                    {modelHidden ? '○ 显示模型' : '● 隐藏模型'}
+                                                </button>
+                                            </div>
+                                            {modelItems.map(({ ann, idx }) => {
+                                                if (!passesConfThreshold(ann, confThresholdPred)) return null;
+                                                return (
+                                                    <div
+                                                        key={idx}
+                                                        className={`viewer-ann-item ${hiddenPredAnns.has(idx) || modelHidden ? 'hidden' : ''} ${(hoveredPredAnnIdx === idx || linkedPredIdxSet.has(idx)) ? 'viewer-ann-item-hovered' : ''}`}
+                                                        style={{ borderLeftColor: getCategoryColor(palette, ann.category) }}
+                                                        onClick={() => { if (!modelHidden && !hiddenPredAnns.has(idx)) centerOnAnnotation(ann.bbox); }}
+                                                        onMouseEnter={() => setHoveredPredAnnIdx(idx)}
+                                                        onMouseLeave={() => setHoveredPredAnnIdx(null)}
+                                                    >
+                                                        <div className="viewer-ann-color" style={{ background: getCategoryColor(palette, ann.category) }}></div>
+                                                        <span className="viewer-ann-text" title={modelName}>{ann.category}</span>
+                                                        {ann.score != null && <span className="viewer-ann-score">{(Number(ann.score) * 100).toFixed(1)}%</span>}
+                                                        <button
+                                                            className="vbtn vbtn-neutral"
+                                                            title="隐藏/显示此预测框"
+                                                            style={{ marginLeft: 'auto', padding: '0 4px', fontSize: '10px' }}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setHiddenPredAnns(prev => {
+                                                                    const next = new Set(prev);
+                                                                    if (next.has(idx)) next.delete(idx); else next.add(idx);
+                                                                    return next;
+                                                                });
+                                                            }}
+                                                        >
+                                                            {hiddenPredAnns.has(idx) ? '○ 显示' : '● 隐藏'}
+                                                        </button>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
                                     );
                                 })
                             )}
@@ -8573,22 +8773,60 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                         })()}
                     <div className="viewer-sidebar-form">
                             <label className="viewer-form-label">{multiSelectCat ? '主分类 (1–9 快捷键)' : '图片分类 (1–9 快捷键)'}</label>
-                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' }}>
-                            <select className="viewer-form-select" style={{ marginBottom: 0, flex: 1 }} value={currentCategory} onChange={handleCategoryChange}>
-                            {catList.map((cat, i) => (
-                                <option key={cat} value={cat}>{i < 9 ? `${i + 1}. ${cat}` : cat}</option>
-                            ))}
-                        </select>
-                            <button
-                                type="button"
-                                className="vbtn-neutral"
-                                style={{ padding: '4px 9px', whiteSpace: 'nowrap' }}
-                                title="新增图片分类"
-                                onClick={addImageCategoryInline}
-                            >
-                                +
-                            </button>
-                        </div>
+                        {viewer.imageCategoryExpandedByDefault !== false ? (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+                                {catList.map((cat, i) => {
+                                    const selected = currentCategory === cat;
+                                    const color = (imageCategoryColors || config.imageCategoryColors || {})[cat] || '#666';
+                                    return (
+                                        <button
+                                            key={cat}
+                                            type="button"
+                                            onClick={() => handleCategoryChange({ target: { value: cat } })}
+                                            title={i < 9 ? `${i + 1}. ${cat}` : cat}
+                                            style={{
+                                                fontSize: '12px',
+                                                padding: '3px 8px',
+                                                borderRadius: '999px',
+                                                cursor: 'pointer',
+                                                border: `1px solid ${selected ? color : 'var(--border)'}`,
+                                                background: selected ? `${color}22` : 'transparent',
+                                                color: selected ? color : 'var(--text-secondary)',
+                                                fontWeight: selected ? 700 : 500,
+                                            }}
+                                        >
+                                            {i < 9 ? `${i + 1}. ` : ''}{cat}
+                                        </button>
+                                    );
+                                })}
+                                <button
+                                    type="button"
+                                    className="vbtn-neutral"
+                                    style={{ padding: '3px 10px', borderRadius: '999px' }}
+                                    title="新增图片分类"
+                                    onClick={addImageCategoryInline}
+                                >
+                                    + 新增
+                                </button>
+                            </div>
+                        ) : (
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' }}>
+                                <select className="viewer-form-select" style={{ marginBottom: 0, flex: 1 }} value={currentCategory} onChange={handleCategoryChange}>
+                                {catList.map((cat, i) => (
+                                    <option key={cat} value={cat}>{i < 9 ? `${i + 1}. ${cat}` : cat}</option>
+                                ))}
+                            </select>
+                                <button
+                                    type="button"
+                                    className="vbtn-neutral"
+                                    style={{ padding: '4px 9px', whiteSpace: 'nowrap' }}
+                                    title="新增图片分类"
+                                    onClick={addImageCategoryInline}
+                                >
+                                    +
+                                </button>
+                            </div>
+                        )}
                         <input
                             className="viewer-form-select"
                             style={{ marginBottom: '10px', height: '30px' }}
