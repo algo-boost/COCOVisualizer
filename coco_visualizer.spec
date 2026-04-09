@@ -80,3 +80,18 @@ coll = COLLECT(
     upx_exclude=[],
     name='COCO-Visualizer',
 )
+
+# macOS：生成可双击的 .app（拖入「应用程序」或从 DMG 安装）
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        coll,
+        name='COCO-Visualizer.app',
+        bundle_identifier='com.cocovisualizer.app',
+        info_plist={
+            'CFBundleName': 'COCO Visualizer',
+            'CFBundleDisplayName': 'COCO Visualizer',
+            'CFBundleShortVersionString': '1.0.0',
+            'CFBundleVersion': '1.0.0',
+            'NSHighResolutionCapable': True,
+        },
+    )

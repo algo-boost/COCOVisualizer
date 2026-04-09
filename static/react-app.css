@@ -1356,6 +1356,50 @@ html, body, #root {
     color: var(--accent);
 }
 
+/* 加载页内联提示（替代系统 alert） */
+.load-inline-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    border-radius: var(--radius-md, 10px);
+    border: 1px solid var(--border);
+    background: var(--bg-raised);
+    font-size: var(--font-sm, 13px);
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+.load-inline-banner--error {
+    border-color: rgba(231, 76, 60, 0.45);
+    background: rgba(231, 76, 60, 0.08);
+    color: var(--text-primary);
+}
+.load-inline-banner--info {
+    border-color: rgba(69, 105, 224, 0.35);
+    background: rgba(69, 105, 224, 0.06);
+}
+.load-inline-banner-text {
+    flex: 1;
+    min-width: 0;
+}
+.load-inline-banner-dismiss {
+    flex-shrink: 0;
+    margin: -2px -4px -2px 0;
+    padding: 4px 8px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+}
+.load-inline-banner-dismiss:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: var(--text-primary);
+}
+
 .load-page {
     flex: 1;
     display: flex;

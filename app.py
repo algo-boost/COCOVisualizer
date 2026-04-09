@@ -118,6 +118,12 @@ def _infer_image_category_definitions(coco_data: dict):
             if s:
                 collected.append(s)
 
+    # COCO 未写入 image_category_definitions.categories，且各图也无任何图片级标签时，
+    # 不生成仅含「未分类」的占位定义，否则前端会用它覆盖应用内全局默认的多级图片分类列表。
+    explicit_in_file = isinstance(existing_cats, list) and len(existing_cats) > 0
+    if not explicit_in_file and len(collected) == 0:
+        return None
+
     # 去重并保持顺序；固定把“未分类”放第一位
     ordered = []
     seen = set()

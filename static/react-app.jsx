@@ -177,6 +177,22 @@ const DEFAULT_CONFIG = {
 
 const UNCLASSIFIED_LABEL = '未分类';
 
+/** 看图图像调整：与 CSS filter / canvas ctx.filter 一致（亮度、对比度、饱和度） */
+function imageAdjustStyle(brightness, contrast, saturation) {
+    const b = Number(brightness) || 100;
+    const c = Number(contrast) || 100;
+    const s = Number(saturation) || 100;
+    if (b === 100 && c === 100 && s === 100) return undefined;
+    return { filter: `brightness(${b}%) contrast(${c}%) saturate(${s}%)` };
+}
+function imageAdjustCtxFilter(brightness, contrast, saturation) {
+    const b = Number(brightness) || 100;
+    const c = Number(contrast) || 100;
+    const s = Number(saturation) || 100;
+    if (b === 100 && c === 100 && s === 100) return 'none';
+    return `brightness(${b}%) contrast(${c}%) saturate(${s}%)`;
+}
+
 function mergeConfig(defaults, overrides) {
     if (!overrides || typeof overrides !== 'object') return defaults;
     const out = { ...defaults };
@@ -187,10 +203,20 @@ function mergeConfig(defaults, overrides) {
             out[key] = overrides[key];
         }
     }
+    // 未配置或空列表时回退为内置默认（注意：[] 在 JS 中为真值，不能仅靠 || 默认）
+    if (!Array.isArray(out.imageCategories) || out.imageCategories.length === 0) {
+        out.imageCategories = [...DEFAULT_CONFIG.imageCategories];
+    }
     // 固定首项为「未分类」，不可被配置覆盖
     if (out.imageCategories && Array.isArray(out.imageCategories) && out.imageCategories.length > 0) {
         out.imageCategories = [UNCLASSIFIED_LABEL, ...out.imageCategories.filter(c => c !== UNCLASSIFIED_LABEL)];
     }
+    if (!Array.isArray(out.defaultAnnotationCategories) || out.defaultAnnotationCategories.length === 0) {
+        out.defaultAnnotationCategories = [...DEFAULT_CONFIG.defaultAnnotationCategories];
+    }
+    const defCols = DEFAULT_CONFIG.imageCategoryColors || {};
+    const userCols = (out.imageCategoryColors && typeof out.imageCategoryColors === 'object' && !Array.isArray(out.imageCategoryColors)) ? out.imageCategoryColors : {};
+    out.imageCategoryColors = { ...defCols, ...userCols };
     return out;
 }
 
@@ -356,8 +382,7 @@ function App() {
         const effectiveAnnCats = serverAnnCats || fallbackAnn;
         setDatasetData({ ...data, categories: effectiveAnnCats });
         setCategories(effectiveAnnCats);
-        // 若 COCO 文件含有本软件写入的分类定义，完全按原定义加载（保持顺序、颜色、快捷键绑定）
-        // 否则清空活跃定义，回退到用户自己的 config
+        // 规则：COCO 若提供图片级分类定义，则严格按 COCO；否则回退到本地默认配置
         const catDefs = data.image_category_definitions;
         if (catDefs && Array.isArray(catDefs.categories) && catDefs.categories.length > 0) {
             setActiveImageCategories(catDefs.categories);
@@ -389,7 +414,11 @@ function App() {
         if (imgData.success) {
             setImages(imgData.images || []);
             const initClass = {};
-            const defaultCat = (activeImageCategories && activeImageCategories[0]) || (config.imageCategories && config.imageCategories[0]) || '未分类';
+            const nextActiveCats =
+                catDefs && Array.isArray(catDefs.categories) && catDefs.categories.length > 0
+                    ? catDefs.categories
+                    : null;
+            const defaultCat = (nextActiveCats && nextActiveCats[0]) || (config.imageCategories && config.imageCategories[0]) || '未分类';
             (imgData.images || []).forEach(img => {
                 const cats = img.image_categories;
                 initClass[img.image_id] = Array.isArray(cats) && cats.length > 0 ? cats : (img.image_category ? [img.image_category] : [defaultCat]);
@@ -1186,6 +1215,15 @@ function PathPickerModal({ initialPath, onSelect, onClose }) {
 // ==================== 加载页面 ====================
 const RECENT_LOADS_KEY = 'coco_viz_recent_loads';
 
+/** 将 fetch 失败转为用户可读的说明（避免仅显示 “Failed to fetch”） */
+function formatClientFetchError(err) {
+    const msg = err && err.message != null ? String(err.message) : String(err || '');
+    if (/failed to fetch|networkerror|network request failed|load failed|aborted/i.test(msg)) {
+        return '无法连接到后端。请确认已在终端启动应用（如 python app.py），浏览器地址与端口一致；若使用系统代理/VPN，可尝试对本机地址关闭代理后再试。';
+    }
+    return msg;
+}
+
 function LoadPage({ onLoad, onLoadMerged, loading }) {
     const config = useConfig();
     const lp = config.loadPage || DEFAULT_CONFIG.loadPage;
@@ -1198,6 +1236,7 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
     const [scanning, setScanning] = useState(false);
     const [selectedIndices, setSelectedIndices] = useState(new Set());
     const [showPathPicker, setShowPathPicker] = useState(false);
+    const [loadNotice, setLoadNotice] = useState(null); // { kind: 'error' | 'info', text: string }
     const [recentLoads, setRecentLoads] = useState(() => {
         try { return JSON.parse(localStorage.getItem(RECENT_LOADS_KEY) || '[]'); } catch { return []; }
     });
@@ -1250,7 +1289,11 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
     };
 
     const handleScan = async () => {
-        if (!rootPath.trim()) { alert('请输入根目录路径'); return; }
+        if (!rootPath.trim()) {
+            setLoadNotice({ kind: 'error', text: '请先填写或拖入根目录路径。' });
+            return;
+        }
+        setLoadNotice(null);
         setScanning(true);
         try {
             const res = await fetch('/api/scan_folder', {
@@ -1258,17 +1301,25 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ root_path: rootPath.trim() })
             });
-            const data = await res.json();
+            let data;
+            try {
+                data = await res.json();
+            } catch {
+                setLoadNotice({ kind: 'error', text: `扫描失败：服务器返回非 JSON（HTTP ${res.status}）。请确认后端已正常启动。` });
+                return;
+            }
             if (data.success) {
                 setScanItems(data.items || []);
                 setSelectedIndices(new Set((data.items || []).map((_, i) => i)));
+                setLoadNotice(null);
             } else {
-                alert('扫描失败: ' + (data.error || '未知错误'));
+                setLoadNotice({ kind: 'error', text: '扫描失败：' + (data.error || '未知错误') });
             }
         } catch (err) {
-            alert('扫描错误: ' + err.message);
+            setLoadNotice({ kind: 'error', text: '扫描失败：' + formatClientFetchError(err) });
+        } finally {
+            setScanning(false);
         }
-        setScanning(false);
     };
 
     const toggleSelectAll = () => {
@@ -1456,12 +1507,18 @@ function LoadPage({ onLoad, onLoadMerged, loading }) {
                     <div className="load-subtitle">专业的计算机视觉数据查看、修正与评估工具</div>
                     
                     <div className="load-tabs">
-                        <div className={`load-tab ${loadTab === 'scan' ? 'active' : ''}`} onClick={() => setLoadTab('scan')}>📁 多目录合并扫描</div>
-                        <div className={`load-tab ${loadTab === 'single' ? 'active' : ''}`} onClick={() => setLoadTab('single')}>📄 单文件精准加载</div>
+                        <div className={`load-tab ${loadTab === 'scan' ? 'active' : ''}`} onClick={() => { setLoadTab('scan'); setLoadNotice(null); }}>📁 多目录合并扫描</div>
+                        <div className={`load-tab ${loadTab === 'single' ? 'active' : ''}`} onClick={() => { setLoadTab('single'); setLoadNotice(null); }}>📄 单文件精准加载</div>
                     </div>
                 </div>
 
                 <div className="load-body-area">
+                    {loadNotice && (
+                        <div className={`load-inline-banner ${loadNotice.kind === 'error' ? 'load-inline-banner--error' : 'load-inline-banner--info'}`} role="alert">
+                            <span className="load-inline-banner-text">{loadNotice.text}</span>
+                            <button type="button" className="load-inline-banner-dismiss" onClick={() => setLoadNotice(null)} aria-label="关闭">✕</button>
+                        </div>
+                    )}
                     {loadTab === 'scan' && (
                 <div className="load-section">
                             <p className="load-section-desc">约定：自动扫描指定目录及其子目录下的 <code>_annotations.coco.json</code> 文件。支持拖入或粘贴路径。</p>
@@ -6092,7 +6149,7 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
 
 // ==================== 标注类别选择弹窗 ====================
 // C10: 对比面板（独立可缩放/平移）
-function ComparePane({ syncState, image, imageUrl, type, palette, lineWidth, annFill, hiddenCats, brightness, contrast, visiblePredModels, confOpacity, confThreshold = 0 }) {
+function ComparePane({ syncState, image, imageUrl, type, palette, lineWidth, annFill, hiddenCats, brightness, contrast, saturation, visiblePredModels, confOpacity, confThreshold = 0 }) {
     const canvasRef = useRef(null);
     const imgRef = useRef(null);
     const containerRef = useRef(null);
@@ -6243,7 +6300,7 @@ function ComparePane({ syncState, image, imageUrl, type, palette, lineWidth, ann
     }, [image.image_id, syncState]); // eslint-disable-line
 
     const iw = (image.width || 1) * zoom, ih = (image.height || 1) * zoom;
-    const filterStyle = brightness !== 100 || contrast !== 100 ? { filter:`brightness(${brightness}%) contrast(${contrast}%)` } : {};
+    const filterStyle = imageAdjustStyle(brightness, contrast, saturation) || {};
 
     return (
         <div style={{position:'absolute', inset:0, overflow:'hidden', cursor: dragRef.current ? 'grabbing' : 'grab'}} ref={containerRef}
@@ -6268,7 +6325,7 @@ function ComparePane({ syncState, image, imageUrl, type, palette, lineWidth, ann
 }
 
 // 包装组件：实现双栏状态同步
-function CompareLayout({ currentImage, imageUrl, palette, lineWidth, annFill, hiddenCats, brightness, contrast, visiblePredModels, confOpacity, confThresholdGT, confThresholdPred }) {
+function CompareLayout({ currentImage, imageUrl, palette, lineWidth, annFill, hiddenCats, brightness, contrast, saturation, visiblePredModels, confOpacity, confThresholdGT, confThresholdPred }) {
     const [zoom, setZoom] = useState(0.5);
     const [panX, setPanX] = useState(0);
     const [panY, setPanY] = useState(0);
@@ -6299,14 +6356,14 @@ function CompareLayout({ currentImage, imageUrl, palette, lineWidth, annFill, hi
             <div style={{flex:1, display:'flex', flexDirection:'column', overflow:'hidden', borderRight:'2px solid #333'}}>
                 <div className="compare-pane-label compare-pane-label--gt">✔ GT 标注 ({gtVisCount})</div>
                 <div style={{flex:1, overflow:'hidden', position:'relative', background:'var(--bg-soft)'}}>
-                    <ComparePane syncState={syncState} image={currentImage} imageUrl={imageUrl} type="gt" palette={palette} lineWidth={lineWidth} annFill={annFill} hiddenCats={hiddenCats} brightness={brightness} contrast={contrast} confThreshold={confThresholdGT} />
+                    <ComparePane syncState={syncState} image={currentImage} imageUrl={imageUrl} type="gt" palette={palette} lineWidth={lineWidth} annFill={annFill} hiddenCats={hiddenCats} brightness={brightness} contrast={contrast} saturation={saturation} confThreshold={confThresholdGT} />
                 </div>
             </div>
             {/* 右：预测结果 */}
             <div style={{flex:1, display:'flex', flexDirection:'column', overflow:'hidden'}}>
                 <div className="compare-pane-label compare-pane-label--pred">⋯ 预测结果 ({predVisCount})</div>
                 <div style={{flex:1, overflow:'hidden', position:'relative', background:'var(--bg-soft)'}}>
-                    <ComparePane syncState={syncState} image={currentImage} imageUrl={imageUrl} type="pred" palette={palette} lineWidth={lineWidth} annFill={annFill} hiddenCats={hiddenCats} brightness={brightness} contrast={contrast} visiblePredModels={visiblePredModels} confOpacity={confOpacity} confThreshold={confThresholdPred} />
+                    <ComparePane syncState={syncState} image={currentImage} imageUrl={imageUrl} type="pred" palette={palette} lineWidth={lineWidth} annFill={annFill} hiddenCats={hiddenCats} brightness={brightness} contrast={contrast} saturation={saturation} visiblePredModels={visiblePredModels} confOpacity={confOpacity} confThreshold={confThresholdPred} />
                 </div>
             </div>
         </div>
@@ -6452,6 +6509,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     useEffect(() => { snapEnabledRef.current = snapEnabled; }, [snapEnabled]);
     const [brightness, setBrightness] = useState(100); // B7: 亮度
     const [contrast, setContrast] = useState(100);     // B7: 对比度
+    const [saturation, setSaturation] = useState(100); // B7: 饱和度
     const [annFill, setAnnFill] = useState(false);     // B3: 半透明填充（默认关）
     const [annSearchText, setAnnSearchText] = useState(''); // B6: 标注搜索
     const [showHelp, setShowHelp] = useState(false);   // B9: 帮助面板
@@ -7123,7 +7181,8 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         off.width = offW; off.height = offH + infoH;
         const ctx = off.getContext('2d');
         // 绘制图片
-        if (brightness !== 100 || contrast !== 100) ctx.filter = `brightness(${brightness}%) contrast(${contrast}%)`;
+        const adjF = imageAdjustCtxFilter(brightness, contrast, saturation);
+        if (adjF !== 'none') ctx.filter = adjF;
         ctx.drawImage(img, 0, 0, offW, offH);
         ctx.filter = 'none';
         // 绘制 GT 框
@@ -8287,6 +8346,28 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                     </span>
                 )}
             </div>
+            {/* 看图模式：图像亮度/对比度/饱和度（始终可调，仅显示效果不写入文件） */}
+            {!annotateMode && (
+                <div style={{ display:'flex', alignItems:'center', gap:'6px', padding:'6px 12px', background:'var(--bg-soft)', borderBottom:'1px solid var(--border)', fontSize:'12px', color:'var(--text-muted)', flexWrap:'wrap' }}>
+                    <span style={{ color:'var(--text-secondary)', fontWeight:600, marginRight:'2px' }}>图像</span>
+                    <span style={{ color:'var(--text-muted)', fontSize:'11px' }}>亮度</span>
+                    <input type="range" min="30" max="200" value={brightness} onChange={e => setBrightness(Number(e.target.value))}
+                        style={{ width:'72px', accentColor:'#ffaa00' }} title={`亮度 ${brightness}%`} />
+                    <span style={{ color: brightness !== 100 ? '#ffaa00' : 'var(--text-muted)', fontSize:'10px', minWidth:'32px' }}>{brightness}%</span>
+                    <span style={{ color:'var(--text-muted)', fontSize:'11px' }}>对比度</span>
+                    <input type="range" min="30" max="300" value={contrast} onChange={e => setContrast(Number(e.target.value))}
+                        style={{ width:'72px', accentColor:'#7af' }} title={`对比度 ${contrast}%`} />
+                    <span style={{ color: contrast !== 100 ? '#7af' : 'var(--text-muted)', fontSize:'10px', minWidth:'32px' }}>{contrast}%</span>
+                    <span style={{ color:'var(--text-muted)', fontSize:'11px' }}>饱和度</span>
+                    <input type="range" min="0" max="200" value={saturation} onChange={e => setSaturation(Number(e.target.value))}
+                        style={{ width:'72px', accentColor:'#6b8' }} title={`饱和度 ${saturation}%`} />
+                    <span style={{ color: saturation !== 100 ? '#6b8' : 'var(--text-muted)', fontSize:'10px', minWidth:'32px' }}>{saturation}%</span>
+                    <button type="button" onClick={() => { setBrightness(100); setContrast(100); setSaturation(100); }}
+                        title="重置图像显示"
+                        style={{ fontSize:'10px', padding:'2px 8px', marginLeft:'4px', background: (brightness !== 100 || contrast !== 100 || saturation !== 100) ? 'rgba(255,200,0,0.12)' : 'transparent', border:`1px solid ${(brightness !== 100 || contrast !== 100 || saturation !== 100) ? 'var(--text-muted)' : 'var(--border)'}`, color:'var(--text-secondary)', borderRadius:'4px', cursor:'pointer' }}
+                    >↺ 重置</button>
+                </div>
+            )}
             {/* 标注模式：缩放操作栏 */}
             {annotateMode && (
                 <div style={{ display:'flex', alignItems:'center', gap:'6px', padding:'4px 12px', background:'var(--bg-soft)', borderBottom:'1px solid var(--border)', fontSize:'12px', color:'var(--text-muted)' }}>
@@ -8304,9 +8385,13 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                     <input type="range" min="30" max="300" value={contrast} onChange={e=>setContrast(Number(e.target.value))}
                         style={{width:'70px', accentColor:'#7af'}} title={`对比度 ${contrast}%`} />
                     <span style={{color: contrast!==100?'#7af':'var(--text-muted)', fontSize:'10px', minWidth:'30px'}}>{contrast}%</span>
-                    <button onClick={() => { setBrightness(100); setContrast(100); }}
-                        title="重置亮度和对比度"
-                        style={{fontSize:'10px', padding:'1px 5px', background: (brightness!==100||contrast!==100)?'rgba(255,200,0,0.1)':'transparent', border:`1px solid ${(brightness!==100||contrast!==100)?'var(--text-muted)':'var(--border)'}`, color:(brightness!==100||contrast!==100)?'var(--text-secondary)':'var(--text-muted)', borderRadius:'3px', cursor:'pointer'}}>↺</button>
+                    <span style={{color:'var(--text-muted)', fontSize:'11px'}}>饱和</span>
+                    <input type="range" min="0" max="200" value={saturation} onChange={e=>setSaturation(Number(e.target.value))}
+                        style={{width:'56px', accentColor:'#6b8'}} title={`饱和度 ${saturation}%`} />
+                    <span style={{color: saturation!==100?'#6b8':'var(--text-muted)', fontSize:'10px', minWidth:'28px'}}>{saturation}%</span>
+                    <button onClick={() => { setBrightness(100); setContrast(100); setSaturation(100); }}
+                        title="重置图像显示"
+                        style={{fontSize:'10px', padding:'1px 5px', background: (brightness!==100||contrast!==100||saturation!==100)?'rgba(255,200,0,0.1)':'transparent', border:`1px solid ${(brightness!==100||contrast!==100||saturation!==100)?'var(--text-muted)':'var(--border)'}`, color:(brightness!==100||contrast!==100||saturation!==100)?'var(--text-secondary)':'var(--text-muted)', borderRadius:'3px', cursor:'pointer'}}>↺</button>
                     <span style={{marginLeft:'auto', color:'var(--text-secondary)'}}>{localAnns.length} 个框{selectedAnnIdxSet.size > 0 ? ` | 已多选 ${selectedAnnIdxSet.size}` : ''}</span>
                 </div>
             )}
@@ -8838,6 +8923,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                         hiddenCats={hiddenCats} 
                         brightness={brightness} 
                         contrast={contrast} 
+                        saturation={saturation}
                         visiblePredModels={visiblePredModels} 
                         confOpacity={confOpacity} 
                         confThresholdGT={confThresholdGT}
@@ -8960,7 +9046,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                     
                     <div className="viewer-image-wrapper" ref={wrapperRef} style={{ transform: `translate(${panX}px, ${panY}px)` }}>
                         <img ref={imgRef} src={imageUrl} alt="" onLoad={handleImageLoad} draggable={false}
-                            style={brightness !== 100 || contrast !== 100 ? { filter: `brightness(${brightness}%) contrast(${contrast}%)` } : undefined} />
+                            style={imageAdjustStyle(brightness, contrast, saturation)} />
                         <canvas ref={canvasRef} className="viewer-canvas"></canvas>
                         {/* 标注交互层 Canvas */}
                         <canvas
@@ -9148,20 +9234,6 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                     </div>
                 </div>
             )}
-            {/* B7: 查看模式下的亮度/对比度控制条 */}
-            {!annotateMode && (brightness !== 100 || contrast !== 100) && (
-                <div style={{position:'fixed', bottom: (!annotateMode && showFilmstrip) ? '85px' : '24px', left:'50%', transform:'translateX(-50%)', background:'rgba(15,17,23,0.94)', border:'1px solid var(--border-strong)', borderRadius:'10px', padding:'6px 16px', display:'flex', gap:'12px', alignItems:'center', fontSize:'12px', zIndex:999, backdropFilter:'blur(8px)', boxShadow:'0 8px 24px rgba(0,0,0,0.5)'}}>
-                    <span style={{color:'#ffaa00', fontWeight:'500'}}>图像调整</span>
-                    <span style={{color:'var(--text-muted)'}}>亮度</span>
-                    <input type="range" min="30" max="200" value={brightness} onChange={e=>setBrightness(Number(e.target.value))} style={{width:'80px', accentColor:'#ffaa00'}} />
-                    <span style={{color:'var(--text-secondary)', width:'34px'}}>{brightness}%</span>
-                    <span style={{color:'var(--text-muted)'}}>对比度</span>
-                    <input type="range" min="30" max="300" value={contrast} onChange={e=>setContrast(Number(e.target.value))} style={{width:'80px', accentColor:'#7af'}} />
-                    <span style={{color:'var(--text-secondary)', width:'34px'}}>{contrast}%</span>
-                    <button onClick={() => { setBrightness(100); setContrast(100); }} className="vbtn-neutral" style={{padding:'2px 8px', borderRadius:'4px', cursor:'pointer', fontSize:'11px'}}>重置</button>
-                </div>
-            )}
-            
             {/* 缩略图导航带 (仅在查看模式显示，可隐藏) */}
             {!annotateMode && showFilmstrip && (
                 <Filmstrip 
