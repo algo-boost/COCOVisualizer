@@ -37,6 +37,30 @@ if [[ "$pip_st" -ne 0 ]]; then
   pip install -q Flask==2.3.3 flask-cors==4.0.0 'numpy>=1.26' 'pandas>=2.0.3' Pillow 'pyinstaller>=6'
 fi
 
+# 前端 Vite 构建（OPT-IN）：
+# 当前 frontend/ 仅是脚手架占位（页面尚未从 react-app.jsx 迁出），自动构建会让打包出的 .app
+# 启动后只显示空壳。等 LoadPage/GalleryPage/EDAPage/ChatPage 全部迁完后，把默认改成开。
+# 临时强制构建：BUILD_VITE=1 ./scripts/build_mac_app.sh
+FRONTEND_DIR="${ROOT}/frontend"
+if [[ "${BUILD_VITE:-0}" == "1" && -f "${FRONTEND_DIR}/package.json" ]]; then
+  if command -v npm &>/dev/null; then
+    echo ""
+    echo "构建前端 Vite 产物（BUILD_VITE=1，npm run build）…"
+    pushd "${FRONTEND_DIR}" >/dev/null
+    if [[ ! -d node_modules ]]; then
+      npm install --no-fund --no-audit --silent
+    fi
+    npm run build --silent
+    popd >/dev/null
+    echo "  → ${ROOT}/static/dist/ 已更新"
+  else
+    echo "[警告] BUILD_VITE=1 但未检测到 npm，跳过。" >&2
+  fi
+else
+  # 未显式 opt-in：清掉 dist，确保 .app 走 Babel-in-browser 模式（功能完整）。
+  rm -rf "${ROOT}/static/dist"
+fi
+
 rm -rf build dist
 pyinstaller --noconfirm coco_visualizer.spec
 

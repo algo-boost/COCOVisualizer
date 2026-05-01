@@ -1,0 +1,14 @@
+/*
+ * COCOVisualizer 前端样式入口
+ * 按层次顺序 @import：tokens → base layout → 各页面切片 → responsive
+ * Vite 构建时会合并为单个 assets/main-*.css。
+ */
+
+@import './tokens.css';
+@import './layout.css';
+@import './load-page.css';
+@import './eda.css';
+@import './modals.css';
+@import './annotation.css';
+@import './chat.css';
+@import './responsive.css';

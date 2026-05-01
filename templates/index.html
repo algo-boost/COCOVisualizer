@@ -8,12 +8,22 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600&display=swap" rel="stylesheet">
-    <script src="/static/vendor/react.production.min.js"></script>
-    <script src="/static/vendor/react-dom.production.min.js"></script>
-    <script src="/static/vendor/babel.min.js"></script>
     <script src="/static/vendor/plotly.min.js"></script>
     <script src="/static/vendor/jszip.min.js"></script>
-    <link rel="stylesheet" href="/static/react-app.css">
+    {% if vite_assets %}
+        {# Vite 构建产物（npm run build 后由后端检测 manifest.json 自动启用）。
+           CSS 已由 src/styles/index.css @import 链路打包进 assets/main-*.css，
+           不再单独加载 react-app.css。 #}
+        {% for css in vite_assets.css %}
+            <link rel="stylesheet" href="/static/dist/{{ css }}">
+        {% endfor %}
+    {% else %}
+        {# 开发/兜底模式：旧的 Babel-in-browser + 单文件 react-app.jsx #}
+        <script src="/static/vendor/react.production.min.js"></script>
+        <script src="/static/vendor/react-dom.production.min.js"></script>
+        <script src="/static/vendor/babel.min.js"></script>
+        <link rel="stylesheet" href="/static/react-app.css">
+    {% endif %}
 </head>
 <body>
     <div id="root"></div>
@@ -25,7 +35,7 @@
     <script>
       (function(){
         var t = setTimeout(function(){
-          if (!window.React || !window.ReactDOM) {
+          if (!document.getElementById('root').children.length) {
             document.getElementById('root').style.display = 'none';
             document.getElementById('load-fail').style.display = 'block';
           }
@@ -33,6 +43,10 @@
         window.addEventListener('load', function(){ clearTimeout(t); });
       })();
     </script>
-    <script type="text/babel" src="/static/react-app.jsx"></script>
+    {% if vite_assets %}
+        <script type="module" src="/static/dist/{{ vite_assets.entry }}"></script>
+    {% else %}
+        <script type="text/babel" src="/static/react-app.jsx"></script>
+    {% endif %}
 </body>
 </html>

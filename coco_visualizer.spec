@@ -17,7 +17,7 @@ datas = [
 ]
 
 # 隐藏导入（PyInstaller 可能无法自动检测）
-# 注意：不要排除 PIL/Pillow，app 用其读取图片尺寸（_fill_image_dimensions）
+# 注意：不要排除 PIL/Pillow，app 用其读取图片尺寸（image_service.fill_image_dimensions）
 hiddenimports = [
     'flask',
     'flask_cors',
@@ -28,8 +28,39 @@ hiddenimports = [
     'markupsafe',
     'PIL',
     'PIL.Image',
-    'coco_eda_utils',
-    'experiment_export',
+    # backend 包（PyInstaller 可能漏检子模块）
+    'backend',
+    'backend.config',
+    'backend.errors',
+    'backend.json_utils',
+    'backend.blueprints',
+    'backend.blueprints.uploads_bp',
+    'backend.blueprints.datasets_bp',
+    'backend.blueprints.images_bp',
+    'backend.blueprints.annotations_bp',
+    'backend.blueprints.versions_bp',
+    'backend.blueprints.export_bp',
+    'backend.blueprints.agent_modules_bp',
+    'backend.blueprints.chat_bp',
+    'backend.repositories',
+    'backend.repositories.datasets_repo',
+    'backend.repositories.versions_repo',
+    'backend.repositories.loader_record_repo',
+    'backend.repositories.agent_modules_repo',
+    'backend.repositories.temp_files_repo',
+    'backend.services',
+    'backend.services.coco_eda',
+    'backend.services.dataset_service',
+    'backend.services.annotation_service',
+    'backend.services.image_service',
+    'backend.services.export_engine',
+    'backend.services.export_service',
+    'backend.services.skill_service',
+    'backend.services.chat_service',
+    'backend.services.agent_service',
+    'backend.agent_runtime',
+    'backend.agent_runtime.builtins',
+    'backend.agent_runtime.sandbox',
 ]
 
 a = Analysis(

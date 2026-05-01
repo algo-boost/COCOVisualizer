@@ -1,5 +1,6 @@
-// COCO数据集可视化工具 - React版本
-const { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } = React;
+import React, { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } from 'react';
+/* global Plotly */
+
 
 // 默认配置
 const DEFAULT_CONFIG = {
@@ -315,6 +316,11 @@ function App() {
     const [imageClassifications, setImageClassifications] = useState({}); // {image_id: category}
     const [imageNotes, setImageNotes] = useState({}); // {image_id: note}
 
+    // 活跃分类定义：提前声明，后续 useCallback 依赖数组需要引用（避免 TDZ）
+    const [activeImageCategories, setActiveImageCategories] = useState(null);
+    const [activeImageCategoryColors, setActiveImageCategoryColors] = useState(null);
+    const [activeImageCategoryMultiSelect, setActiveImageCategoryMultiSelect] = useState(null);
+
     // 最近加载历史工具函数（localStorage）
     const RECENT_LOADS_KEY = 'coco_viz_recent_loads';
     const saveRecentLoad = (entry) => {
@@ -509,11 +515,7 @@ function App() {
     const _autoSaveTimer = useRef(null);
     const [autoSaveStatus, setAutoSaveStatus] = useState('idle'); // 'idle' | 'pending' | 'saved' | 'error'
 
-    // 活跃分类定义：若 COCO 文件中有本软件写入的定义则优先采用，否则回退到 config
-    const [activeImageCategories, setActiveImageCategories] = useState(null);
-    const [activeImageCategoryColors, setActiveImageCategoryColors] = useState(null);
-    const [activeImageCategoryMultiSelect, setActiveImageCategoryMultiSelect] = useState(null);
-
+    // activeImageCategories/Colors/MultiSelect 已提前声明（见函数顶部），此处只保留派生值
     const imageCategories = activeImageCategories || config.imageCategories || DEFAULT_CONFIG.imageCategories;
     const imageCategoryColors = activeImageCategoryColors || config.imageCategoryColors || DEFAULT_CONFIG.imageCategoryColors;
     const imageCategoryMultiSelect = (activeImageCategoryMultiSelect ?? (config.imageCategoryMultiSelect ?? DEFAULT_CONFIG.imageCategoryMultiSelect));
@@ -977,156 +979,581 @@ function SidebarNav({ page, setPage, datasetLoaded, onOpenSettings, onOpenHelp }
 
 // ==================== 完整使用文档 (User Guide) ====================
 function HelpModal({ onClose }) {
-    const [activeTab, setActiveTab] = useState('overview');
+    const SECTIONS = [
+        { id: 'intro',    label: '产品简介' },
+        { id: 'start',    label: '启动方式' },
+        { id: 'ui',       label: '界面总览' },
+        { id: 'load',     label: '加载数据集' },
+        { id: 'gallery',  label: '图库浏览' },
+        { id: 'viewer',   label: '图片查看器' },
+        { id: 'annotate', label: '画框与打标' },
+        { id: 'eda',      label: '数据分析 EDA' },
+        { id: 'agent',    label: 'AI 智能助手' },
+        { id: 'export',   label: '导出功能' },
+        { id: 'version',  label: '版本管理' },
+        { id: 'settings', label: '设置' },
+        { id: 'shortcuts', label: '快捷键速查' },
+        { id: 'faq',      label: '常见问题' },
+    ];
+    const [active, setActive] = useState('intro');
+
+    const pre = (code) => (
+        <pre style={{ background: 'var(--bg-soft)', border: '1px solid var(--border)', padding: '10px 14px', borderRadius: '6px', overflowX: 'auto', fontSize: '12px', lineHeight: 1.6, margin: '8px 0' }}>{code}</pre>
+    );
+    const kv = (rows) => (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', margin: '8px 0' }}>
+            <tbody>
+                {rows.map(([k, v], i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                        <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', fontFamily: 'monospace', background: 'var(--bg-soft)', color: 'var(--accent)', borderRadius: '4px', minWidth: '160px' }}>{k}</td>
+                        <td style={{ padding: '6px 12px', color: 'var(--text-secondary)' }}>{v}</td>
+                    </tr>
+                ))}
+            </tbody>
+        </table>
+    );
+    const H = ({ children }) => <h4 style={{ margin: '0 0 10px', fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)', borderBottom: '2px solid var(--accent-dim)', paddingBottom: '6px' }}>{children}</h4>;
+    const H2 = ({ children }) => <h5 style={{ margin: '16px 0 6px', fontSize: '12px', fontWeight: 600, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{children}</h5>;
+    const ul = (items) => <ul style={{ paddingLeft: '18px', margin: '6px 0', lineHeight: 1.7 }}>{items.map((it, i) => <li key={i} style={{ marginBottom: '4px' }}>{it}</li>)}</ul>;
+    const C = ({ children }) => <code style={{ background: 'var(--bg-soft)', border: '1px solid var(--border)', borderRadius: '3px', padding: '1px 5px', fontSize: '12px', fontFamily: 'monospace' }}>{children}</code>;
+
+    const content = {
+        intro: (
+            <div>
+                <H>产品简介</H>
+                <p style={{ marginBottom: 12 }}>
+                    <b>COCOVisualizer</b> 是面向计算机视觉工程师的本地 COCO 数据集管理与分析工具，
+                    专为数据审查、图片打标、分布分析、AI 辅助查询与实验导出设计。
+                </p>
+                <H2>核心能力</H2>
+                {ul([
+                    <span><b>数据浏览</b>：按类别/分类/元数据/代码多维筛选，图库宫格或查看器逐张审查</span>,
+                    <span><b>图片打标</b>：为每张图附加自定义分类标签（误检/漏检等），自动保存至 COCO 文件</span>,
+                    <span><b>标注编辑</b>：查看器内拉框、移框、删框，支持撤销重做，可接受预测框为 GT</span>,
+                    <span><b>数据分析</b>：类别分布、框尺度、中心点、密度等 10+ 维度统计图表，点击联动跳转</span>,
+                    <span><b>AI 助手</b>：内置 Agent，用自然语言提问并执行 Python 代码分析当前数据集</span>,
+                    <span><b>实验导出</b>：按分类或 train/val 比例导出子集 ZIP，支持服务端路径保存</span>,
+                    <span><b>版本管理</b>：每次保存生成快照，可追溯可回滚</span>,
+                ])}
+                <H2>支持的数据格式</H2>
+                {kv([
+                    ['标准 COCO JSON', 'images / annotations / categories 三段式'],
+                    ['含预测框的 COCO', '标注中含 score 字段，支持置信度过滤与 GT 对比'],
+                    ['多目录合并', '约定每子目录含 _annotations.coco.json，自动合并为单数据集'],
+                    ['图片级分类扩展', 'image_category_definitions 字段，自动加载分类定义与颜色'],
+                ])}
+            </div>
+        ),
+        start: (
+            <div>
+                <H>启动方式</H>
+                <H2>Python 源码模式（推荐）</H2>
+                {pre(`pip install -r requirements.txt
+python app.py                  # 默认端口 6010，自动打开浏览器
+python app.py --port 8080      # 指定端口
+python app.py --no-browser     # 不自动打开浏览器`)}
+                <H2>macOS 应用包</H2>
+                {ul([
+                    '将 COCO-Visualizer.app 拖入「应用程序」，双击启动',
+                    '首次启动如提示「无法验证」→ 系统设置 → 隐私与安全性 → 仍要打开',
+                ])}
+                <H2>远程服务器访问（SSH 隧道）</H2>
+                {pre(`# 服务器端
+python app.py --port 6010
+
+# 本机 SSH 隧道
+ssh -L 6010:127.0.0.1:6010 user@server
+
+# 浏览器访问
+http://127.0.0.1:6010`)}
+                <H2>前端开发热重载</H2>
+                {pre(`# 终端 1：后端
+python app.py --port 6010
+
+# 终端 2：前端热重载（访问 :5173）
+cd frontend && npm install && npm run dev`)}
+            </div>
+        ),
+        ui: (
+            <div>
+                <H>界面总览</H>
+                <H2>侧边导航栏图标</H2>
+                {kv([
+                    ['CD（品牌）', '点击返回加载页'],
+                    ['📂 加载', '扫描目录或加载单个 COCO 文件'],
+                    ['🖼 图库', '图片宫格浏览（需先加载数据集）'],
+                    ['📊 分析', 'EDA 数据分析（需先加载数据集）'],
+                    ['💬 Chat', 'AI 智能助手（任意时刻可用）'],
+                    ['⚙️ 设置', '主题 / 分类定义 / 线宽 / 背景'],
+                    ['❓ 帮助', '本使用手册'],
+                ])}
+                <H2>自动保存状态栏</H2>
+                {ul([
+                    '图库工具栏右侧显示自动保存状态：idle → pending → 已自动保存',
+                    '分类或备注变更后 1 秒防抖触发，写入 COCO 文件但不生成版本快照',
+                    '手动点击「💾 保存」可填写版本说明并生成可追溯快照',
+                ])}
+            </div>
+        ),
+        load: (
+            <div>
+                <H>加载数据集</H>
+
+                {/* ── 核心：预测结果加载 ── */}
+                <div style={{ background: 'var(--accent-dim)', border: '1px solid var(--accent)', borderRadius: '8px', padding: '12px 16px', marginBottom: '16px' }}>
+                    <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--accent)', marginBottom: '8px' }}>⚡ 加载预测结果（GT 对比核心功能）</div>
+                    <p style={{ fontSize: '13px', margin: '0 0 8px' }}>
+                        将预测 COCO 文件放到与 GT COCO 文件<b>同一目录</b>，按照以下命名规则命名，重新加载数据集后自动识别，无需任何额外操作：
+                    </p>
+                    {pre(`# 命名规则
+_annotations.<模型名>.pred.coco.json
+
+# 示例（3 个模型同时对比）
+/data/dataset/
+├── _annotations.coco.json               ← GT（主文件，正常加载）
+├── _annotations.yolov8.pred.coco.json   ← YOLOv8 预测结果
+├── _annotations.rtdetr.pred.coco.json   ← RT-DETR 预测结果
+└── _annotations.v1.pred.coco.json       ← 任意自定义名称`)}
+                    <p style={{ fontSize: '13px', margin: '8px 0 0', color: 'var(--text-secondary)' }}>
+                        <b>加载后效果：</b>查看器左侧出现预测框面板，可设置置信度阈值；图库卡片显示预测框数；可点击对比模式查看 GT vs 预测；Agent 沙箱中 <C>pred_annotations</C> 字段可直接访问。
+                    </p>
+                </div>
+
+                <H2>预测文件 COCO 格式</H2>
+                <p style={{ marginBottom: 6, fontSize: '13px' }}>标准 COCO JSON 格式，annotations 中加 <C>score</C> 字段（0–1）：</p>
+                {pre(`{
+  "images": [
+    {"id": 1, "file_name": "images/0001.jpg"}
+  ],
+  "annotations": [
+    {"id": 1, "image_id": 1, "category_id": 1,
+     "bbox": [100, 200, 300, 150], "score": 0.92},
+    {"id": 2, "image_id": 1, "category_id": 1,
+     "bbox": [400, 300, 120, 80],  "score": 0.45}
+  ],
+  "categories": [{"id": 1, "name": "defect"}]
+}`)}
+                {ul([
+                    <span><b>score 字段：</b>取值 0–1，工具据此提供置信度阈值滑块；无 score 时仍可显示，但无法过滤</span>,
+                    <span><b>file_name 匹配：</b>按文件名 basename 匹配 GT 图片（忽略目录前缀），例如 GT 中的 <C>images/0001.jpg</C> 与预测中的 <C>0001.jpg</C> 可自动对应</span>,
+                    <span><b>categories 可与 GT 不同：</b>类别名称取自预测文件自身的 categories，与 GT 独立渲染</span>,
+                ])}
+
+                <H2>多目录合并扫描（推荐）</H2>
+                <p style={{ marginBottom: 8, fontSize: '13px' }}>适合 Magic-Fox / 约定命名的多子目录数据集。</p>
+                {ul([
+                    '切换至「多目录合并扫描」标签',
+                    '粘贴根目录路径（多个路径用 ; 分隔或每行一个），或直接拖拽文件夹到输入区',
+                    '点击「开始扫描」，勾选需要合并的子目录',
+                    '填写合并后数据集名称（可选）→ 点击「合并加载」',
+                ])}
+                <p style={{ margin: '4px 0 4px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                    约定：自动扫描 <C>{'<根目录>/**/_annotations.coco.json'}</C>，同目录的 <C>*.pred.coco.json</C> 也会一并自动挂载。
+                </p>
+
+                <H2>单文件精准加载</H2>
+                {ul([
+                    '切换至「单文件精准加载」标签',
+                    '填写 GT COCO JSON 路径（必填）',
+                    '填写图片目录（可选，留空从 JSON 同目录推断）',
+                    '填写数据集名称（可选）→ 点击「加载」',
+                    <span>预测文件只需与 GT 文件在同一目录且命名符合约定，<b>无需单独指定路径</b></span>,
+                ])}
+
+                <H2>GT COCO JSON 最小模板</H2>
+                {pre(`{
+  "images": [
+    {"id": 1, "file_name": "images/0001.jpg", "width": 1920, "height": 1080}
+  ],
+  "annotations": [
+    {"id": 1, "image_id": 1, "category_id": 1,
+     "bbox": [100, 200, 300, 150], "area": 45000, "iscrowd": 0}
+  ],
+  "categories": [{"id": 1, "name": "defect"}]
+}`)}
+                {ul([
+                    <span><b>必填关系：</b><C>annotations.image_id</C> 必须关联到 <C>images.id</C>；<C>category_id</C> 必须在 <C>categories.id</C> 中存在</span>,
+                    <span><b>bbox 格式：</b><C>[x, y, w, h]</C>（COCO 标准），宽高须大于 0</span>,
+                    <span><b>路径规范：</b>file_name 是相对路径时，需在加载页填写图片目录</span>,
+                    <span><b>宽高建议：</b>写入 width/height 可提高缩放稳定性，否则工具会尝试从图片文件读取</span>,
+                ])}
+
+                <H2>最近加载记录</H2>
+                <p style={{ fontSize: '13px' }}>加载页底部显示最近 6 条记录，点击一键重新加载。</p>
+                <H2>服务端路径浏览</H2>
+                <p style={{ fontSize: '13px' }}>点击「浏览目录...」在<b>运行后端的机器</b>上浏览目录结构，适合远程 SSH 部署场景。</p>
+            </div>
+        ),
+        gallery: (
+            <div>
+                <H>图库浏览</H>
+                <H2>筛选方式（7 种）</H2>
+                {kv([
+                    ['GT 标注类别', '顶部下拉框，只显示含该类别标注的图片'],
+                    ['图片分类', '右侧统计面板点击分类标签（如误检、漏检）'],
+                    ['元数据筛选', '时间范围 / SN号 / 位置，点击「应用筛选」'],
+                    ['文件名搜索', '顶部搜索框，模糊匹配'],
+                    ['⚠ 无 GT', '工具栏按钮，只显示无任何 GT 框的图片'],
+                    ['Agent 联动', 'Chat 中运行代码后自动同步过滤图库'],
+                    ['代码筛选', '工具栏「代码筛选」，最后一行返回 image_id 列表'],
+                ])}
+                <H2>代码筛选示例</H2>
+                {pre(`# 筛选 GT 框数 > 5 的图片
+[img['image_id'] for img in images
+ if len(img.get('annotations', [])) > 5]
+
+# 筛选文件名含 "front" 的图片
+[img['image_id'] for img in images
+ if 'front' in img.get('file_name', '')]`)}
+                <H2>批量操作</H2>
+                {ul([
+                    '勾选图片（顶部「全选当页」快速全选）',
+                    '右侧面板点击分类按钮 → 批量设置图片分类',
+                    '工具栏「🗑 清空 GT」→ 批量清除选中图片的全部 GT 标注（不可撤销）',
+                ])}
+                <H2>图片排序</H2>
+                {ul([
+                    '默认顺序（image_id） / 文件名 A→Z / Z→A',
+                    'GT 框数量 多→少 / 少→多',
+                    '文件大小 大→小 / 小→大',
+                    '修改时间 新→旧 / 旧→新',
+                ])}
+            </div>
+        ),
+        viewer: (
+            <div>
+                <H>图片查看器</H>
+                <p style={{ marginBottom: 10, fontSize: '13px' }}>点击图库中任意图片卡片进入查看器。</p>
+                <H2>图片导航</H2>
+                {kv([
+                    ['‹ / ›', '上一张 / 下一张（或键盘 ← A / → D）'],
+                    ['序号输入框', '输入数字 + 回车跳转指定图片'],
+                    ['底部缩略图条', '点击「🎞 缩略图」显示/隐藏，横向点击跳转'],
+                ])}
+                <H2>缩放与平移</H2>
+                {kv([
+                    ['滚轮', '缩放（可在设置中改为 Ctrl+滚轮）'],
+                    ['左键拖动', '平移图片'],
+                    ['+ / −', '逐步放大 / 缩小'],
+                    ['百分比输入框', '输入数字精确设置缩放比'],
+                    ['⊡ 或键盘 0', '适应窗口，重置缩放与位置'],
+                ])}
+                <H2>图像调整</H2>
+                {ul([
+                    '亮度 / 对比度 / 饱和度滑块：仅影响显示，不修改原图',
+                    '点击「↺ 重置」一键恢复 100%',
+                ])}
+                <H2>图片分类打标</H2>
+                {ul([
+                    '右侧「分类与筛选」面板点击分类按钮',
+                    <span>键盘快捷键 <C>1</C>–<C>9</C> 对应第 1–9 个分类</span>,
+                    '多分类模式：在设置中开启后可为一张图打多个标签',
+                    '修改后 1 秒防抖自动保存至 COCO 文件',
+                ])}
+                <H2>标注列表</H2>
+                {ul([
+                    '右侧「标注」标签列出所有 GT 框，点击高亮对应框',
+                    '搜索框过滤指定类别；「隐藏全部」临时关闭所有框',
+                    '含预测框时出现置信度阈值滑块',
+                ])}
+                <H2>对比模式</H2>
+                {ul([
+                    '点击工具栏「⊞ 对比」，左侧预测 / 右侧 GT 同步缩放',
+                    'GT 与预测各自独立置信度阈值',
+                    '悬停框项时对端 IoU 达阈值框联动高亮',
+                ])}
+                <H2>属性面板</H2>
+                <p style={{ fontSize: '13px' }}>切换「属性」标签，查看 width / height / c_time / product_id 等全部元数据。</p>
+            </div>
+        ),
+        annotate: (
+            <div>
+                <H>画框与打标</H>
+                <H2>进入标注模式</H2>
+                {ul([
+                    '点击查看器顶部「✏️ 标注」按钮',
+                    <span>或直接在图片上<b>双击空白处</b>进入画框；<b>双击已有 GT 框</b>进入选中编辑</span>,
+                ])}
+                <H2>工具切换</H2>
+                {kv([
+                    ['B 键', '画框工具：拖拽创建矩形框'],
+                    ['V 键 / Tab', '选择工具：单击选中，拖拽移动/缩放，支持多选'],
+                    ['Space + 拖拽', '画框模式下临时切换为手形工具平移画布'],
+                ])}
+                <H2>框精细操作</H2>
+                {kv([
+                    ['拖拽边角/边线', '调整框大小'],
+                    ['方向键', '微调框位置（每次 1px）'],
+                    ['Shift + 方向键', '快速移动（每次 10px）'],
+                    ['Del / Backspace', '删除选中框'],
+                    ['Ctrl+C / Ctrl+V', '复制 / 粘贴（支持跨图粘贴）'],
+                    ['Ctrl+Z / Ctrl+Y', '撤销 / 重做（全链路）'],
+                ])}
+                <H2>预测框转 GT</H2>
+                {ul([
+                    '预测框列表中点击「+GT」将单条接受为 GT',
+                    '「全部接受」批量把所有预测框导入为 GT 标注',
+                ])}
+                <H2>保存</H2>
+                {ul([
+                    '标注修改后工具栏出现「保存标注」按钮，点击写入 COCO 文件',
+                    '自动保存只存图片级分类/备注，不存标注框变更，需手动保存框的修改',
+                ])}
+            </div>
+        ),
+        eda: (
+            <div>
+                <H>数据分析（EDA）</H>
+                <p style={{ marginBottom: 10, fontSize: '13px' }}>点击侧边栏「📊」进入，需已加载数据集。</p>
+                <H2>可用图表</H2>
+                {kv([
+                    ['类别分布', '饼图 + 柱状图，点击类别 → 跳转图库过滤'],
+                    ['框面积', '分布直方图（原始面积 & 平方根面积）'],
+                    ['框尺寸', '长边分布 / 宽高分布'],
+                    ['比例', '宽高比 / 长短边比分布'],
+                    ['空间分布', '中心点散点图，点击散点 → 跳转并打开该图片'],
+                    ['BBox 分布', '宽×高 2D 热力散点图'],
+                    ['密度分布', '标注密度图'],
+                    ['置信度分布', '按类别分组的 score 直方图（含预测框时显示）'],
+                ])}
+                <H2>图表交互（Plotly.js）</H2>
+                {ul([
+                    '鼠标悬停查看详细数值',
+                    '框选或滚轮局部缩放；双击重置缩放',
+                    '点击图例隐藏/显示数据系列',
+                ])}
+            </div>
+        ),
+        agent: (
+            <div>
+                <H>AI 智能助手</H>
+                <p style={{ marginBottom: 10, fontSize: '13px' }}>点击侧边栏「💬」进入，无需加载数据集也可单独使用。</p>
+                <H2>配置 LLM（首次使用）</H2>
+                <p style={{ marginBottom: 6, fontSize: '13px' }}>在 <C>static/config.json</C> 中添加：</p>
+                {pre(`{
+  "llm": {
+    "apiUrl": "https://api.openai.com/v1/chat/completions",
+    "apiKey": "sk-xxxxx",
+    "model": "gpt-4o",
+    "maxTokens": 4000
+  }
+}`)}
+                <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                    支持任何兼容 OpenAI 接口的服务（Ollama、DeepSeek、通义千问、Claude 等）。
+                </p>
+                <H2>代码沙箱内置变量</H2>
+                {kv([
+                    ['images', 'list[dict] — 当前数据集所有图片（含 annotations）'],
+                    ['dataset_id', 'str — 当前数据集 ID'],
+                    ['show_chart(data)', '在 Chat 气泡内渲染 Plotly 图表'],
+                    ['show_table(data)', '渲染交互式数据表格'],
+                    ['filter_gallery(ids)', '用 image_id 列表过滤图库并跳转'],
+                    ['navigate(page)', '切换页面（gallery / eda / load）'],
+                    ['export_csv(data, name)', '导出 CSV 文件供下载'],
+                    ['export_json(data, name)', '导出 JSON 文件供下载'],
+                ])}
+                <H2>示例提问</H2>
+                {ul([
+                    '「筛出预测框数量 > 10 且包含漏检的图片，在图库里只显示这些图。」',
+                    '「统计各类别误检数量，生成表格并导出 CSV。」',
+                    '「画一个各类别 bbox 面积的箱线图。」',
+                    '「当前数据集哪些图片没有标注？导出它们的 image_id 列表。」',
+                ])}
+                <H2>自定义 Agent 模块</H2>
+                {ul([
+                    '设置 → Agent 模块 → 上传自定义 .py 文件',
+                    '文件中定义的函数自动注入沙箱，可调用内部 API、计算自定义指标',
+                    '支持热重载，修改文件后无需重启后端',
+                ])}
+            </div>
+        ),
+        export: (
+            <div>
+                <H>导出功能</H>
+                <p style={{ marginBottom: 10, fontSize: '13px' }}>图库页工具栏「📤 导出」按钮，弹出导出弹窗。</p>
+                <H2>按分类导出</H2>
+                {ul([
+                    '切换至「按分类」标签，勾选要导出的图片分类',
+                    '点击「导出」→ 浏览器自动下载 ZIP',
+                    <span>ZIP 结构：每分类一个子目录（<C>{'<分类名>/images/'}</C> + <C>_annotations.coco.json</C>）</span>,
+                ])}
+                <H2>实验数据集（train / valid）</H2>
+                {kv([
+                    ['训练集比例', '0.0–1.0，剩余为验证集（默认 0.8）'],
+                    ['随机种子', '固定后划分结果可复现（默认 42）'],
+                    ['ZIP 文件名', '输出压缩包名称'],
+                    ['服务端保存路径', '可选，留空则触发浏览器下载'],
+                    ['丢弃重名图片', '同文件名只保留 image_id 最小的一张（推荐开启）'],
+                ])}
+                <p style={{ marginTop: 8, fontSize: '12px', color: 'var(--text-muted)' }}>
+                    <b>注意：</b>实验导出使用当前已加载的<b>全部图片</b>，图库中的筛选状态不影响导出范围。<br />
+                    ZIP 结构：<C>train/images/</C> + <C>train/_annotations.coco.json</C> + <C>valid/...</C>
+                </p>
+            </div>
+        ),
+        version: (
+            <div>
+                <H>版本管理</H>
+                <H2>创建版本</H2>
+                {ul([
+                    '图库工具栏「💾 保存」→ 填写版本说明（必填）→ 确认',
+                    '版本快照保存在 COCO 文件同目录的 .coco_visualizer/ 隐藏文件夹',
+                    '自动保存不生成版本，只更新分类/备注',
+                ])}
+                <H2>查看与回滚</H2>
+                {ul([
+                    '图库工具栏「📋 版本」按钮，显示每条版本的时间与说明',
+                    '点击「回滚到此版本」→ 确认，COCO 文件恢复为该版本，图库同步刷新',
+                    '回滚操作本身也生成一条新版本记录（便于反悔再次回滚）',
+                ])}
+                <H2>版本共享</H2>
+                <p style={{ fontSize: '13px' }}>将 <C>.coco_visualizer/</C> 目录连同 COCO 文件一起打包分发，其他机器打开时版本记录即可还原。</p>
+            </div>
+        ),
+        settings: (
+            <div>
+                <H>设置</H>
+                <p style={{ marginBottom: 10, fontSize: '13px' }}>点击侧边栏「⚙️」打开。</p>
+                <H2>界面主题</H2>
+                {kv([
+                    ['深色（Dark）', '默认，适合长时间标注'],
+                    ['浅色（Light）', '高亮环境适用'],
+                    ['柔和暗色（Dim）', '介于两者之间，偏暖'],
+                ])}
+                <H2>图片级分类定义</H2>
+                {ul([
+                    '点击「+ 添加分类」，输入名称并选择颜色',
+                    '拖动调整顺序（第 1 项对应键盘 1 键，第 9 项上限）',
+                    '点击「恢复默认」回到出厂设置',
+                    <span><b>优先级：</b>COCO 文件内嵌 <C>image_category_definitions</C> {'>'} 此处全局设置</span>,
+                ])}
+                <H2>GT 框标注类别（默认）</H2>
+                <p style={{ fontSize: '13px' }}>当数据集 categories 为空时，使用此处类别列表供打框操作使用（至少保留一项）。</p>
+                <H2>其他</H2>
+                {kv([
+                    ['查看器背景', '马赛克棋盘格（推荐） / 纯色（自定义颜色）'],
+                    ['默认线宽', '标注框显示线宽 0.1–1.0，查看器工具栏可实时调整'],
+                    ['底部缩略图条', '查看器中是否默认显示，关闭后可临时点击开启'],
+                ])}
+            </div>
+        ),
+        shortcuts: (
+            <div>
+                <H>键盘快捷键速查</H>
+                <H2>图片查看器</H2>
+                {kv([
+                    ['← / A', '上一张图片'],
+                    ['→ / D', '下一张图片'],
+                    ['0', '适应窗口（缩放复位）'],
+                    ['N', '聚焦备注输入框'],
+                    ['1 – 9', '将图片设为第 1–9 个分类'],
+                    ['滚轮', '缩放（可设置为 Ctrl+滚轮）'],
+                    ['左键拖动', '平移图片'],
+                    ['Esc', '输入框内退出聚焦；否则关闭查看器'],
+                ])}
+                <H2>标注模式专属</H2>
+                {kv([
+                    ['B', '切换到画框工具'],
+                    ['V / Tab', '切换到选择工具'],
+                    ['Space + 拖拽', '临时平移（画框模式下）'],
+                    ['双击空白', '创建新矩形框'],
+                    ['双击已有框', '选中该框进入编辑'],
+                    ['方向键', '微调框位置（每次 1px）'],
+                    ['Shift + 方向键', '快速移动（每次 10px）'],
+                    ['Del / Backspace', '删除选中框'],
+                    ['Ctrl+C / Ctrl+V', '复制 / 粘贴框（支持跨图）'],
+                    ['Ctrl+Z / Ctrl+Y', '撤销 / 重做'],
+                ])}
+            </div>
+        ),
+        faq: (
+            <div>
+                <H>常见问题</H>
+                <H2>页面显示「脚本加载失败」</H2>
+                {ul([
+                    '确认 python app.py 已正常启动且无报错',
+                    '检查 static/vendor/ 目录是否包含 plotly.min.js 等文件',
+                    '离线环境请运行 python packaging/fetch_vendor_js.py 下载依赖',
+                ])}
+                <H2>图片显示空白或 404</H2>
+                {ul([
+                    '在「单文件精准加载」中手动指定「图片目录」字段',
+                    '确认图片文件与 COCO JSON 在同一机器上可访问',
+                    <span>若 file_name 含绝对路径（如 <C>/data/xxx.jpg</C>），确保该路径在服务器上存在</span>,
+                ])}
+                <H2>AI Chat 报错「请求失败」</H2>
+                {ul([
+                    <span>检查 <C>static/config.json</C> 中 <C>llm.apiKey</C> 是否填写</span>,
+                    '检查 apiUrl 是否可访问（使用系统代理时注意本地环回地址的代理设置）',
+                    '查看终端后端日志，区分 API 错误与网络错误',
+                ])}
+                <H2>扫描目录后找不到数据集</H2>
+                {ul([
+                    <span>工具只扫描文件名为 <C>_annotations.coco.json</C> 的文件</span>,
+                    '确认文件名符合约定，或切换「单文件精准加载」手动指定路径',
+                ])}
+                <H2>多人同时访问会冲突吗</H2>
+                {ul([
+                    'Flask 支持多客户端同时连接，多人同时浏览不冲突',
+                    '多人同时修改<b>不同图片</b>的分类/备注不会冲突',
+                    '不建议多人同时对<b>同一张图片</b>进行标注修改操作',
+                ])}
+                <H2>如何批量修改分类而不影响其他图片</H2>
+                {ul([
+                    '在图库中勾选目标图片 → 右侧面板点击分类按钮 → 批量设置',
+                    '也可在查看器中逐张修改，所有修改自动防抖聚合后一次性写入',
+                ])}
+            </div>
+        ),
+    };
 
     return (
         <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-content help-modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', width: '90vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
-                <div className="modal-header">
-                    <h3>📖 COCOVisualizer 完整使用文档</h3>
+            <div
+                className="modal-content"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                    maxWidth: '920px', width: '92vw', maxHeight: '88vh',
+                    display: 'flex', flexDirection: 'column', borderRadius: '12px', overflow: 'hidden',
+                }}
+            >
+                <div className="modal-header" style={{ flexShrink: 0, padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 600 }}>📖 使用手册</h3>
                     <button className="modal-close" onClick={onClose}>✕</button>
                 </div>
-                <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--bg-raised)' }}>
-                    {[
-                        { id: 'overview', label: '功能总览' },
-                        { id: 'load', label: '加载与COCO模板' },
-                        { id: 'gallery', label: '图库与筛选' },
-                        { id: 'viewer', label: '看图与对比' },
-                        { id: 'annotate', label: '画框与打标' },
-                        { id: 'agent', label: 'Agent 使用' },
-                        { id: 'shortcuts', label: '快捷键' }
-                    ].map(tab => (
-                        <button
-                            key={tab.id}
-                            style={{
-                                flex: 1, padding: '12px 0', border: 'none', background: activeTab === tab.id ? 'var(--bg-surface)' : 'transparent',
-                                color: activeTab === tab.id ? 'var(--accent)' : 'var(--text-secondary)',
-                                borderBottom: activeTab === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
-                                cursor: 'pointer', fontWeight: activeTab === tab.id ? 'bold' : 'normal', fontSize: '14px'
-                            }}
-                            onClick={() => setActiveTab(tab.id)}
-                        >{tab.label}</button>
-                    ))}
+                <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+                    <nav style={{
+                        width: '152px', flexShrink: 0, overflowY: 'auto',
+                        borderRight: '1px solid var(--border)', background: 'var(--bg-raised)',
+                        padding: '8px 0',
+                    }}>
+                        {SECTIONS.map(s => (
+                            <button
+                                key={s.id}
+                                onClick={() => setActive(s.id)}
+                                style={{
+                                    display: 'block', width: '100%', textAlign: 'left',
+                                    padding: '8px 14px', border: 'none', cursor: 'pointer',
+                                    fontSize: '13px', lineHeight: 1.3,
+                                    background: active === s.id ? 'var(--accent-dim)' : 'transparent',
+                                    color: active === s.id ? 'var(--accent)' : 'var(--text-secondary)',
+                                    fontWeight: active === s.id ? 600 : 400,
+                                    borderLeft: active === s.id ? '2px solid var(--accent)' : '2px solid transparent',
+                                    transition: 'background 0.12s, color 0.12s',
+                                }}
+                            >{s.label}</button>
+                        ))}
+                    </nav>
+                    <div style={{
+                        flex: 1, overflowY: 'auto', padding: '20px 26px',
+                        fontSize: '13px', lineHeight: '1.65', color: 'var(--text-primary)',
+                        background: 'var(--bg-surface)',
+                    }}>
+                        {content[active]}
+                    </div>
                 </div>
-                <div className="modal-body help-modal-body" style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', lineHeight: '1.6', fontSize: '14px', color: 'var(--text-primary)' }}>
-                    {activeTab === 'overview' && (
-                        <div>
-                            <h4>🚀 功能总览</h4>
-                            <p>COCOVisualizer 是一个面向目标检测项目的 <b>数据浏览、对比评估、标注修正、智能分析</b> 一体化工具。</p>
-                            <ol style={{ paddingLeft: '20px', marginTop: '10px' }}>
-                                <li><b>加载数据：</b>导入 COCO JSON + 图片目录，快速启动可视化。</li>
-                                <li><b>图库筛选：</b>按类别、目录、置信度、Python 代码等条件定位目标图片。</li>
-                                <li><b>看图对比：</b>同屏查看 GT 与预测，支持独立阈值和联动高亮。</li>
-                                <li><b>标注修正：</b>进入编辑模式增删改框，并可接受预测框为 GT。</li>
-                                <li><b>智能分析：</b>在 Agent 中用自然语言完成筛图、统计、导出。</li>
-                                <li><b>保存回滚：</b>版本化保存，可追溯可回滚。</li>
-                            </ol>
-                        </div>
-                    )}
-                    {activeTab === 'load' && (
-                        <div>
-                            <h4>📂 加载数据与 COCO JSON 模板（重点）</h4>
-                            <p>建议优先保证 COCO 结构规范，再加载到系统。最小可用模板如下：</p>
-                            <pre style={{ background: 'var(--bg-soft)', border: '1px solid var(--border)', padding: '10px', borderRadius: '8px', overflowX: 'auto', fontSize: '12px' }}>
-{`{
-  "images": [{"id": 1, "file_name": "images/0001.jpg", "width": 1920, "height": 1080}],
-  "annotations": [{"id": 1, "image_id": 1, "category_id": 1, "bbox": [100, 200, 300, 150], "area": 45000, "iscrowd": 0}],
-  "categories": [{"id": 1, "name": "defect"}]
-}`}
-                            </pre>
-                            <ul style={{ paddingLeft: '20px' }}>
-                                <li><b>必填关系：</b><code>annotations.image_id</code> 必须能关联到 <code>images.id</code>；<code>category_id</code> 必须存在于 <code>categories.id</code>。</li>
-                                <li><b>bbox 格式：</b><code>[x, y, w, h]</code>，宽高必须大于 0。</li>
-                                <li><b>路径规范：</b>若 <code>file_name</code> 是相对路径，请在加载页填写图片目录。</li>
-                                <li><b>宽高建议：</b>建议在 <code>images</code> 中写入 <code>width/height</code>，可提高显示与缩放稳定性。</li>
-                            </ul>
-                            <p><b>加载步骤：</b>选择 COCO → 选择图片目录（可选）→ 填写数据集名 → 点击加载。</p>
-                        </div>
-                    )}
-                    {activeTab === 'gallery' && (
-                        <div>
-                            <h4>🖼 图库与代码筛选</h4>
-                            <ul style={{ paddingLeft: '20px' }}>
-                                <li><b>快速筛选：</b>按 GT 类别、图片级分类、目录、关键词快速过滤；工具栏「无 GT」仅保留无任何 GT 框的图片（与图片级「未分类」无关）。</li>
-                                <li><b>代码筛选：</b>点击工具栏「代码筛选」打开弹窗，编写 Python（与 Agent 消息里代码块相同执行环境）。最后一行表达式为 <code>image_id</code> 列表时应用为图库筛选；也可运行统计/导出类脚本在弹窗内查看报告。</li>
-                                <li><b>排序：</b>可按文件名、GT 框数、预测框数、文件大小、时间排序。</li>
-                                <li><b>批量操作：</b>支持批量打图片级分类、批量清理标注。</li>
-                                <li><b>实验导出：</b>「实验 train/valid」：默认同 basename 只保留最小 image_id，其余丢弃；可关闭为遇重名报错。ZIP 默认同数据集名。</li>
-                                <li><b>自动联动：</b>Agent 聊天中运行代码块筛选结果会跳转图库；图库内运行筛选与之一致。</li>
-                            </ul>
-                        </div>
-                    )}
-                    {activeTab === 'viewer' && (
-                        <div>
-                            <h4>🔍 看图与对比</h4>
-                            <ul style={{ paddingLeft: '20px' }}>
-                                <li><b>缩放平移：</b>滚轮缩放，拖拽平移，支持全屏与适应窗口。</li>
-                                <li><b>双侧栏：</b>左侧预测、右侧 GT/编辑；无预测时左栏自动隐藏。</li>
-                                <li><b>独立阈值：</b>GT 与预测可分开设置置信度阈值。</li>
-                                <li><b>联动高亮：</b>悬停一侧框项，另一侧 IoU 达阈值的框会联动高亮（阈值在设置中可调）。</li>
-                                <li><b>对比模式：</b>一键切换 GT vs 预测双栏同步对比。</li>
-                                <li><b>缩略图导航：</b>底部快速切图，连续审查更高效。</li>
-                            </ul>
-                        </div>
-                    )}
-                    {activeTab === 'annotate' && (
-                        <div>
-                            <h4>✏️ 画框与打标</h4>
-                            <p>在看图模式下：<b>双击空白处</b>进入画框模式；<b>双击已有 GT 框</b>进入选择模式并选中该框（可拖拽、改类别）。也可点击 <b>✏️ 标注</b>。</p>
-                            <ul style={{ paddingLeft: '20px' }}>
-                                <li><b>画框：</b>B 键切画框工具，拖拽即可新建框。</li>
-                                <li><b>选框：</b>V 键切选择工具，支持移动/缩放/多选；双击框可快速进入。</li>
-                                <li><b>精修：</b>方向键微调，Shift+方向键快速移动，坐标面板可精确改数值。</li>
-                                <li><b>预测转 GT：</b>支持单条 <b>+GT</b> 和批量“全部接受”。</li>
-                                <li><b>撤销重做：</b><code>Ctrl+Z / Ctrl+Y</code> 全链路可回退。</li>
-                                <li><b>保存机制：</b>支持自动保存与手动保存，建议每轮修订及时保存。</li>
-                            </ul>
-                        </div>
-                    )}
-                    {activeTab === 'agent' && (
-                        <div>
-                            <h4>🤖 Agent 使用方法（重点）</h4>
-                            <p>Agent 支持用自然语言驱动筛图、统计、导出、页面联动与技能调用。建议按“目标 + 条件 + 输出”提问。</p>
-                            <ul style={{ paddingLeft: '20px' }}>
-                                <li><b>高效提问模板：</b>“请筛出【条件】的图片，并【输出动作】”。</li>
-                                <li><b>结果类型：</b>可返回筛选列表、统计表格、图表、导出文件。</li>
-                                <li><b>技能调用：</b>在技能面板启用/固定后，可直接让 Agent “使用某技能完成任务”。</li>
-                                <li><b>推荐流程：</b>先筛图 → 再解释原因 → 最后导出复核材料。</li>
-                            </ul>
-                            <p style={{ marginTop: '8px' }}><b>示例指令：</b></p>
-                            <ul style={{ paddingLeft: '20px' }}>
-                                <li>“筛出预测框数量&gt;10 且包含漏检的图片，并在图库里只显示这些图。”</li>
-                                <li>“统计各类别误检数量，生成表格并导出 CSV。”</li>
-                                <li>“使用已启用的验证技能，对当前数据批次生成评估报告。”</li>
-                            </ul>
-                        </div>
-                    )}
-                    {activeTab === 'shortcuts' && (
-                        <div>
-                            <h4>⌨ 快捷键清单</h4>
-                            <table className="help-shortcut-table" style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px' }}>
-                        <tbody>
-                                    <tr style={{borderBottom:'1px solid var(--border)'}}><td style={{padding:'8px', fontWeight:'bold'}}>通用 & 导航</td><td></td></tr>
-                                    <tr><td className="help-key">← / A 或 → / D</td><td>上一张 / 下一张图片（自带预加载，零延迟秒切）</td></tr>
-                                    <tr><td className="help-key">Tab / Shift+Tab</td><td>在当前图的不同标注框之间循环切换并居中高亮</td></tr>
-                                    <tr><td className="help-key">N</td><td>快速聚焦到备注输入框</td></tr>
-                                    <tr><td className="help-key">0</td><td>图片缩放比例复位（适应窗口大小）</td></tr>
-                                    <tr><td className="help-key">F</td><td>全屏 / 退出全屏模式</td></tr>
-                                    
-                                    <tr style={{borderBottom:'1px solid var(--border)'}}><td style={{padding:'8px', fontWeight:'bold', paddingTop:'16px'}}>标注模式专属</td><td></td></tr>
-                                    <tr><td className="help-key">B / V</td><td>切换 画框工具(B) / 选中工具(V)</td></tr>
-                                    <tr><td className="help-key">Del / Backspace</td><td>删除选中的标注框</td></tr>
-                                    <tr><td className="help-key">Ctrl+C / Ctrl+V</td><td>复制 / 粘贴选中的标注框（支持跨图片粘贴）</td></tr>
-                                    <tr><td className="help-key">Ctrl+Z / Ctrl+Y</td><td>撤销 (Undo) / 重做 (Redo)</td></tr>
-                                    <tr><td className="help-key">方向键</td><td>微调选中框位置（加按 Shift 每次移动 10px）</td></tr>
-                                    <tr><td className="help-key">Space + 拖拽</td><td>画框模式下临时切换为手形工具平移画布</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-                    )}
-                </div>
-                <div className="modal-footer" style={{ borderTop: '1px solid var(--border)' }}>
-                    <button type="button" className="btn btn-primary" onClick={onClose}>了解，关闭</button>
+                <div className="modal-footer" style={{ flexShrink: 0, borderTop: '1px solid var(--border)', padding: '10px 20px', display: 'flex', justifyContent: 'flex-end' }}>
+                    <button type="button" className="btn btn-primary" onClick={onClose}>关闭</button>
                 </div>
             </div>
         </div>
@@ -8431,7 +8858,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         <div className={`viewer-modal${annotateMode ? ' viewer-modal--annotate' : ''}`} ref={viewerModalRef}>
             <div className="viewer-header">
                 <div className="viewer-nav">
-                    <button className="viewer-nav-btn" disabled={imageIdx <= 0} onClick={() => navigate(-1)}>‹ 上一张</button>
+                    <button className="viewer-nav-btn" title="上一张（← / A）" disabled={imageIdx <= 0} onClick={() => navigate(-1)}>‹</button>
                     <span className="viewer-info" style={{display:'flex', alignItems:'center', gap:'4px'}}>
                         <input
                             type="number" min={1} max={images.length}
@@ -8452,7 +8879,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                         />
                         <span style={{color:'var(--text-muted)', fontSize:'12px'}}>/ {images.length}</span>
                     </span>
-                    <button className="viewer-nav-btn" disabled={imageIdx >= images.length - 1} onClick={() => navigate(1)}>下一张 ›</button>
+                    <button className="viewer-nav-btn" title="下一张（→ / D）" disabled={imageIdx >= images.length - 1} onClick={() => navigate(1)}>›</button>
                 </div>
                 <div className="viewer-info" style={{display:'flex', alignItems:'center', gap:'6px'}}>
                     <span title={currentImage.file_name}>{currentImage.file_name.split('/').pop()}</span>
@@ -8487,7 +8914,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                                 />
                                 <span style={{fontSize:'11px', color:'var(--text-muted)'}}>%</span>
                                 <button type="button" className="viewer-nav-btn" onClick={() => setZoom(z => Math.max(viewer?.zoomMin ?? 0.01, z / 1.2))}>−</button>
-                    <button type="button" className="viewer-nav-btn" onClick={() => { setZoom(fitZoom()); setPanX(0); setPanY(0); }}>适应窗口</button>
+                    <button type="button" className="viewer-nav-btn" title="适应窗口（0）" onClick={() => { setZoom(fitZoom()); setPanX(0); setPanY(0); }}>⊡</button>
                             </div>
                             <div className="viewer-toolbar-group">
                                 <span style={{color: 'var(--text-muted)', fontSize: 'var(--font-sm)'}}>线宽:</span>
@@ -10298,6 +10725,6 @@ function EDAPage({ datasetData, images, onJumpToGallery, onJumpToImage }) {
     );
 }
 
-// 渲染应用（从 /static/config.json 加载配置并合并到默认配置）
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<ConfigProvider><App /></ConfigProvider>);
+
+export { ConfigProvider };
+export default App;
