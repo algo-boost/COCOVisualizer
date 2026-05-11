@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -63,3 +64,37 @@ import re as _re
 PRED_ANNOTATION_PATTERN = _re.compile(r'^_annotations\.(.+)\.pred\.coco\.json$')
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tiff', '.tif', '.gif'}
 META_FILTER_PRODUCT_IDS_LIMIT = 200
+
+
+def _read_app_version() -> str:
+    """读取 version.txt，frozen 模式下会被打包进 _MEIPASS 根目录。"""
+    candidates = []
+    if getattr(sys, 'frozen', False):
+        meipass = Path(getattr(sys, '_MEIPASS', ''))
+        if meipass:
+            candidates.append(meipass / 'version.txt')
+        candidates.append(Path(sys.executable).parent / 'version.txt')
+    else:
+        candidates.append(APP_DIR / 'version.txt')
+    for p in candidates:
+        if p.is_file():
+            for line in p.read_text(encoding='utf-8').splitlines():
+                s = line.strip()
+                if s and not s.startswith('#'):
+                    return s
+    return '0.0.0'
+
+
+APP_VERSION = _read_app_version()
+
+# 检查更新使用的 GitHub 仓库（owner/repo），可通过环境变量覆盖
+UPDATE_REPO = os.environ.get('COCO_VIZ_UPDATE_REPO', 'algo-boost/COCOVisualizer')
+# /api/app/check_update 调用 GitHub API 的超时时间（秒）
+UPDATE_CHECK_TIMEOUT = float(os.environ.get('COCO_VIZ_UPDATE_TIMEOUT', '4'))
+# 国内常用的 GitHub 镜像前缀。第一个空前缀代表 GitHub 官方。
+UPDATE_MIRRORS = (
+    {'name': 'GitHub 官方', 'prefix': ''},
+    {'name': 'ghproxy 镜像', 'prefix': 'https://mirror.ghproxy.com/'},
+    {'name': 'gh-proxy 镜像', 'prefix': 'https://gh-proxy.com/'},
+    {'name': 'ghps 镜像', 'prefix': 'https://ghps.cc/'},
+)

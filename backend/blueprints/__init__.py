@@ -13,9 +13,11 @@ def register_blueprints(app: Flask) -> None:
     from .export_bp import bp as export_bp
     from .agent_modules_bp import bp as agent_modules_bp
     from .chat_bp import bp as chat_bp
+    from .app_meta_bp import bp as app_meta_bp
 
     for bp in (
         uploads_bp, datasets_bp, images_bp, annotations_bp,
         versions_bp, export_bp, agent_modules_bp, chat_bp,
+        app_meta_bp,
     ):
         app.register_blueprint(bp)

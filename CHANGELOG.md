@@ -2,6 +2,19 @@
 
 发版时 GitHub Actions 会按 `version.txt` 截取本节中对应 `## [x.y.z]` 写入 Release 说明。
 
+## [1.7.0] - 2026-05-11
+
+### 新增
+
+- **应用内更新提示**：启动后右上角自动检测 GitHub Releases，发现新版本时显示横幅，含 macOS / Windows 直链、Release 详情和国内镜像入口；可关闭并按版本号记忆，下一版再提示。
+- **后端接口**：`GET /api/app/version`、`GET /api/app/check_update`；检查结果在内存中缓存 30 分钟，可通过 `?force=1` 强制刷新。
+- **可配置环境变量**：`COCO_VIZ_UPDATE_REPO`（owner/repo）、`COCO_VIZ_UPDATE_TIMEOUT`（秒）。
+- **README**：新增「下载安装包」「国内镜像加速」「应用内更新提示」三节，便于国内用户快速取得安装包。
+
+### 打包
+
+- `coco_visualizer.spec` 把 `version.txt` 打入 `_MEIPASS`，运行时可读取应用版本（之前 frozen 模式只能拿到 `0.0.0`）。
+
 ## [1.6.0] - 2026-05-11
 
 ### 修复

@@ -4,6 +4,49 @@
 
 ---
 
+## 下载安装包
+
+[![GitHub release](https://img.shields.io/github/v/release/algo-boost/COCOVisualizer?label=latest&color=brightgreen)](https://github.com/algo-boost/COCOVisualizer/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/algo-boost/COCOVisualizer/total?color=blue)](https://github.com/algo-boost/COCOVisualizer/releases)
+
+| 平台 | 推荐文件 | 下载入口 |
+|------|----------|----------|
+| **macOS**（Apple Silicon / Intel） | `COCO-Visualizer-mac-<版本>.dmg` | [GitHub Releases](https://github.com/algo-boost/COCOVisualizer/releases/latest) |
+| **Windows 安装版** | `COCO-Visualizer-Setup-<版本>.exe` | [GitHub Releases](https://github.com/algo-boost/COCOVisualizer/releases/latest) |
+| **Windows 免安装** | `COCO-Visualizer-Windows-x64-<版本>.zip` | [GitHub Releases](https://github.com/algo-boost/COCOVisualizer/releases/latest) |
+
+> macOS 双击 DMG → 把 **COCO-Visualizer.app** 拖到「应用程序」。首次启动**右键 .app → 打开 → 仍要打开**（应用已 ad-hoc 签名但未做 Apple 付费公证）。
+
+### 国内镜像加速
+
+GitHub 在国内访问可能较慢/不稳。直接把下载链接里的 `https://github.com/` 加上下列任一前缀即可大幅提速：
+
+| 镜像 | URL 前缀 |
+|------|----------|
+| ghproxy（推荐） | `https://mirror.ghproxy.com/` |
+| gh-proxy | `https://gh-proxy.com/` |
+| ghps | `https://ghps.cc/` |
+
+示例（拼接到原 GitHub URL 之前）：
+
+```text
+原始: https://github.com/algo-boost/COCOVisualizer/releases/latest
+加速: https://mirror.ghproxy.com/https://github.com/algo-boost/COCOVisualizer/releases/latest
+```
+
+> 镜像稳定性会波动。首选 GitHub 官方，遇慢再换镜像。
+
+### 应用内更新提示
+
+应用启动后会在**右上角**自动检测是否有新版本（调用 `/api/app/check_update` → GitHub Releases API，结果缓存 30 分钟）：
+
+- 有新版本时显示横幅，含 **macOS / Windows 直链**、**Release 详情**与**国内镜像**入口
+- 点击横幅右上 `×` 关闭，关闭后该版本不再提示，**直到下一次发布**
+- 可通过环境变量 `COCO_VIZ_UPDATE_REPO=owner/repo` 指向自托管仓库
+- 检查超时由 `COCO_VIZ_UPDATE_TIMEOUT`（秒）控制，网络异常静默忽略
+
+---
+
 ## 功能概览
 
 - 多目录合并扫描与单文件加载 COCO

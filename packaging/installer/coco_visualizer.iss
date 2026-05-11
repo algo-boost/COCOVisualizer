@@ -5,7 +5,7 @@
 #define MyAppName "COCO Visualizer"
 ; 默认占位；CI / 本地打包由 ISCC 传入 /DMyAppVersion=… 覆盖（与 version.txt 一致）
 #ifndef MyAppVersion
-#define MyAppVersion "0.0.0"
+#define MyAppVersion "1.7.0"
 #endif
 #define MyAppPublisher "COCO Visualizer"
 #define MyAppURL "https://github.com"
