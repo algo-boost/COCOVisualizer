@@ -3,7 +3,10 @@
 ; 或直接运行: .\packaging\build.ps1 -CreateInstaller
 
 #define MyAppName "COCO Visualizer"
-#define MyAppVersion "1.6.0"
+; 默认占位；CI / 本地打包由 ISCC 传入 /DMyAppVersion=… 覆盖（与 version.txt 一致）
+#ifndef MyAppVersion
+#define MyAppVersion "0.0.0"
+#endif
 #define MyAppPublisher "COCO Visualizer"
 #define MyAppURL "https://github.com"
 #define MyAppExeName "COCO-Visualizer.exe"

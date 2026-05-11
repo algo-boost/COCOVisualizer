@@ -6,6 +6,7 @@
 
 ### 修复
 
+- **Windows / CI**：Inno Setup 使用 `ISCC /DMyAppVersion=<version.txt>`，安装包文件名与版本号一致；编译失败或未安装 Inno 时 **build.ps1 非零退出**，避免静默失败导致无 Release。
 - **Windows**：在运行 PyInstaller **之前** 生成 `logo.ico`，安装包与 `.exe` 恢复自定义图标（此前仅在 Inno 步骤才生成 ico，导致可执行文件为默认图标）。
 - **macOS**：由 `static/logo.png` 生成 `logo.icns`，写入 `.app` / DMG；保留 `LSBackgroundOnly=false`，避免双击无前台反应。
 - **依赖**：`numpy` / `pandas` 版本范围兼容 Python 3.12，CI 与本机打包可稳定安装。

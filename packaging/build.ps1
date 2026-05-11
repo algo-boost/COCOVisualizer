@@ -95,17 +95,20 @@ Write-Host "Created: $zipPath" -ForegroundColor Green
 if ($CreateInstaller) {
     $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
     if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe" }
-    if (Test-Path $iscc) {
-        Write-Host ""
-        Write-Host "Creating installer (Inno Setup)..." -ForegroundColor Yellow
-        & $iscc (Join-Path $ProjectRoot "packaging\installer\coco_visualizer.iss")
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Installer created in dist\" -ForegroundColor Green
-        }
-    } else {
-        Write-Host ""
-        Write-Host "Inno Setup not found. Install from: https://jrsoftware.org/isinfo.php" -ForegroundColor Yellow
+    if (-not (Test-Path $iscc)) {
+        Write-Host "Inno Setup 6 未找到（CreateInstaller 已开启）。请先安装或使用 choco install innosetup -y" -ForegroundColor Red
+        exit 1
     }
+    $issPath = Join-Path $ProjectRoot "packaging\installer\coco_visualizer.iss"
+    $innoVer = $version
+    Write-Host ""
+    Write-Host "Creating installer (Inno Setup), /DMyAppVersion=$innoVer ..." -ForegroundColor Yellow
+    & $iscc "/DMyAppVersion=$innoVer" $issPath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ISCC 编译失败，退出码: $LASTEXITCODE" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "Installer created in dist\" -ForegroundColor Green
 }
 
 Write-Host ""
