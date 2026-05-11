@@ -67,7 +67,10 @@ jobs:
           echo "TAG=$tag" >> $env:GITHUB_OUTPUT
 
       - name: 从 CHANGELOG 生成本版 Release 说明
-        run: python packaging/extract_changelog_for_release.py
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: python -X utf8 packaging/extract_changelog_for_release.py
 
       - name: 创建 Release 并上传
         uses: softprops/action-gh-release@v2

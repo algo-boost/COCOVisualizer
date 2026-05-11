@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""从 CHANGELOG.md 截取当前版本小节，写入 release_body.md（供 GitHub Release 使用）。"""
+"""Extract current version section from CHANGELOG.md into release_body.md.
+
+Print messages are ASCII-only to avoid Windows console encoding errors in CI.
+"""
 from __future__ import annotations
 
 import re
@@ -9,9 +12,10 @@ from pathlib import Path
 
 def main() -> int:
     root = Path(__file__).resolve().parent.parent
+
     vf = root / "version.txt"
     if not vf.is_file():
-        print("version.txt 不存在", file=sys.stderr)
+        print("ERROR: version.txt not found", file=sys.stderr)
         return 1
     ver = ""
     for line in vf.read_text(encoding="utf-8").splitlines():
@@ -20,12 +24,12 @@ def main() -> int:
             ver = s
             break
     if not ver:
-        print("version.txt 中无有效版本号", file=sys.stderr)
+        print("ERROR: no valid version in version.txt", file=sys.stderr)
         return 1
 
     cl = root / "CHANGELOG.md"
     if not cl.is_file():
-        print("CHANGELOG.md 不存在", file=sys.stderr)
+        print("ERROR: CHANGELOG.md not found", file=sys.stderr)
         return 1
     text = cl.read_text(encoding="utf-8")
 
@@ -38,17 +42,22 @@ def main() -> int:
 
     out = root / "release_body.md"
     if found:
-        footer = "\n\n更早年份与完整条目见仓库根目录 **`CHANGELOG.md`**。\n"
-        out.write_text(found + footer, encoding="utf-8")
-        print(f"已写入 release_body.md（版本 {ver}）")
+        footer = (
+            "\n\nFull changelog: see `CHANGELOG.md` in repository root.\n"
+        )
+        out.write_bytes((found + footer).encode("utf-8"))
+        print(f"OK: wrote release_body.md (version {ver})")
         return 0
 
     fallback = (
         f"## COCO Visualizer {ver}\n\n"
-        f"尚未在 `CHANGELOG.md` 中找到 `## [{ver}]` 小节。\n"
+        f"No `## [{ver}]` section found in CHANGELOG.md.\n"
     )
-    out.write_text(fallback, encoding="utf-8")
-    print(f"警告: CHANGELOG 无 [{ver}] 小节，已写入占位 release_body.md", file=sys.stderr)
+    out.write_bytes(fallback.encode("utf-8"))
+    print(
+        f"WARN: no [{ver}] section in CHANGELOG; wrote placeholder release_body.md",
+        file=sys.stderr,
+    )
     return 0
 
 
