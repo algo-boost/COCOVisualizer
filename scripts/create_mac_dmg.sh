@@ -19,7 +19,14 @@ trap 'rm -rf "$STAGE"' EXIT
 cp -R "$APP" "$STAGE/"
 ln -sf /Applications "$STAGE/Applications"
 
+# 进入 stage 后再清一次扩展属性，避免拷贝过程中 macOS 添加 com.apple.metadata 等
+/usr/bin/xattr -cr "${STAGE}" || true
+
 rm -f "$DMG_OUT"
 hdiutil create -volname "$VOL" -srcfolder "$STAGE" -ov -format UDZO "$DMG_OUT"
+
+# 对 DMG 自身做 ad-hoc 签名（Gatekeeper 会先校验 DMG 容器再校验内部 .app）
+/usr/bin/codesign --force --sign - "$DMG_OUT" || true
+/usr/bin/xattr -cr "$DMG_OUT" || true
 
 echo "已生成: $DMG_OUT"

@@ -11,10 +11,20 @@
 - **macOS**：由 `static/logo.png` 生成 `logo.icns`，写入 `.app` / DMG；保留 `LSBackgroundOnly=false`，避免双击无前台反应。
 - **依赖**：`numpy` / `pandas` 版本范围兼容 Python 3.12，CI 与本机打包可稳定安装。
 - **打包**：关闭 UPX 压缩，降低个别环境下可执行文件异常的概率。
+- **macOS / 签名**：对 `.app` 递归做 ad-hoc 签名，DMG 自身也 ad-hoc 签名并清扩展属性，缓解 Gatekeeper 反复拦截问题。
 
-### 说明
+### 安装说明（macOS）
 
-- macOS 未做 Apple 公证，若被拦截请对 `.app` **右键 → 打开**，或对已拷贝的 `.app` 执行 `xattr -cr`。
+1. 打开 `.dmg`，把 **COCO-Visualizer.app** 拖到 **「应用程序」**。
+2. 第一次启动：在「应用程序」中**右键 `.app` → 打开 → 仍要打开**。  
+   之后系统会记住这次授权，**双击直接启动**。
+3. 若提示「已损坏 / 来自身份不明的开发者」无法绕过，在终端执行：
+
+   ```bash
+   xattr -cr "/Applications/COCO-Visualizer.app"
+   ```
+
+   再次双击即可。该应用未做 Apple 付费公证，但已 ad-hoc 签名，可被 Gatekeeper 校验通过。
 
 ## [1.4.7] 及更早
 

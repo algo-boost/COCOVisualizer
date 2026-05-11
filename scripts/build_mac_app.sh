@@ -64,6 +64,20 @@ fi
 rm -rf build dist
 pyinstaller --noconfirm coco_visualizer.spec
 
+# ad-hoc 签名 + 清除扩展属性
+# 目的：保证 .app 内全部二进制 / 嵌套 framework 的签名一致；用户从 DMG
+# 拖到「应用程序」首次右键打开后，Gatekeeper 不会再每次都拦截。
+APP_PATH="${ROOT}/dist/COCO-Visualizer.app"
+if [[ -d "${APP_PATH}" ]]; then
+  echo ""
+  echo "对 .app 递归 ad-hoc 签名并清除扩展属性…"
+  /usr/bin/xattr -cr "${APP_PATH}" || true
+  /usr/bin/codesign --force --deep --sign - --timestamp=none \
+    -o runtime "${APP_PATH}" || \
+    /usr/bin/codesign --force --deep --sign - "${APP_PATH}"
+  /usr/bin/codesign --verify --deep --strict --verbose=2 "${APP_PATH}" || true
+fi
+
 echo ""
 echo "完成（版本 ${VERSION}）。输出："
 echo "  ${ROOT}/dist/COCO-Visualizer.app   （双击启动；访达「显示简介」可见版本 ${VERSION}）"
