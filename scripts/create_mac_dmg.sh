@@ -4,8 +4,10 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${ROOT}/dist/COCO-Visualizer.app"
-VOL="${DMG_VOLUME_NAME:-COCO Visualizer}"
-DMG_OUT="${ROOT}/dist/COCO-Visualizer-mac.dmg"
+VERSION="$(sed -n '1p' "${ROOT}/version.txt" 2>/dev/null | tr -d '\r\t ' || true)"
+[[ -z "${VERSION}" ]] && VERSION="0.0.0"
+VOL="${DMG_VOLUME_NAME:-COCO Visualizer ${VERSION}}"
+DMG_OUT="${ROOT}/dist/COCO-Visualizer-mac-${VERSION}.dmg"
 
 if [[ ! -d "$APP" ]]; then
   echo "未找到 ${APP}，请先运行 ./scripts/build_mac_app.sh" >&2

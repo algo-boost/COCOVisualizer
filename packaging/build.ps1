@@ -42,6 +42,16 @@ if ($LASTEXITCODE -ne 0) {
 if (Test-Path "dist") { Remove-Item -Recurse -Force dist }
 if (Test-Path "build") { Remove-Item -Recurse -Force build }
 
+# 图标必须在 PyInstaller 之前生成，否则 .exe / 目录版无自定义图标
+Write-Host ""
+Write-Host "Generating logo.ico (for PyInstaller + Inno)..." -ForegroundColor Yellow
+& $pythonCmd -m pip install Pillow -q 2>$null
+& $pythonCmd (Join-Path $ProjectRoot "packaging\convert_logo_ico.py")
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "convert_logo_ico.py failed" -ForegroundColor Red
+    exit 1
+}
+
 # Fetch frontend vendor (for offline use, bundled into exe)
 Write-Host ""
 Write-Host "Fetching frontend vendor (static/vendor/)..." -ForegroundColor Yellow
@@ -87,10 +97,7 @@ if ($CreateInstaller) {
     if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe" }
     if (Test-Path $iscc) {
         Write-Host ""
-        Write-Host "Converting logo to ICO..." -ForegroundColor Yellow
-        & $pythonCmd -m pip install Pillow -q 2>$null
-        & $pythonCmd (Join-Path $ProjectRoot "packaging\convert_logo_ico.py")
-        Write-Host "Creating installer..." -ForegroundColor Yellow
+        Write-Host "Creating installer (Inno Setup)..." -ForegroundColor Yellow
         & $iscc (Join-Path $ProjectRoot "packaging\installer\coco_visualizer.iss")
         if ($LASTEXITCODE -eq 0) {
             Write-Host "Installer created in dist\" -ForegroundColor Green

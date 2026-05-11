@@ -1,70 +1,97 @@
 # -*- mode: python ; coding: utf-8 -*-
 # COCO Visualizer - PyInstaller 打包配置
-# 用法: pyinstaller coco_visualizer.spec
+# 用法: 先运行 packaging/convert_logo_ico.py（Windows）及 convert_logo_icns.py（macOS），再 pyinstaller coco_visualizer.spec
 
 import sys
 from pathlib import Path
 
 block_cipher = None
 
-# 项目根目录
 project_dir = Path(SPECPATH)
 
-# 需要打包的数据文件（只读资源，data/uploads 在运行时创建于可执行文件旁）
+_installer = project_dir / "packaging" / "installer"
+_logo_ico = _installer / "logo.ico"
+_logo_icns = _installer / "logo.icns"
+
+
+def _read_app_version() -> str:
+    vf = project_dir / "version.txt"
+    if vf.is_file():
+        for line in vf.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if s and not s.startswith("#"):
+                return s
+    return "0.0.0"
+
+
+_app_version = _read_app_version()
+
+
+def _exe_icon_arg():
+    if sys.platform == "win32":
+        return str(_logo_ico) if _logo_ico.is_file() else None
+    if sys.platform == "darwin":
+        return str(_logo_icns) if _logo_icns.is_file() else None
+    return None
+
+
+def _bundle_icon_arg():
+    if sys.platform != "darwin":
+        return None
+    return str(_logo_icns) if _logo_icns.is_file() else None
+
+
 datas = [
-    (str(project_dir / 'templates'), 'templates'),
-    (str(project_dir / 'static'), 'static'),
+    (str(project_dir / "templates"), "templates"),
+    (str(project_dir / "static"), "static"),
 ]
 
-# 隐藏导入（PyInstaller 可能无法自动检测）
-# 注意：不要排除 PIL/Pillow，app 用其读取图片尺寸（image_service.fill_image_dimensions）
 hiddenimports = [
-    'flask',
-    'flask_cors',
-    'werkzeug',
-    'numpy',
-    'pandas',
-    'jinja2',
-    'markupsafe',
-    'PIL',
-    'PIL.Image',
-    # backend 包（PyInstaller 可能漏检子模块）
-    'backend',
-    'backend.config',
-    'backend.errors',
-    'backend.json_utils',
-    'backend.blueprints',
-    'backend.blueprints.uploads_bp',
-    'backend.blueprints.datasets_bp',
-    'backend.blueprints.images_bp',
-    'backend.blueprints.annotations_bp',
-    'backend.blueprints.versions_bp',
-    'backend.blueprints.export_bp',
-    'backend.blueprints.agent_modules_bp',
-    'backend.blueprints.chat_bp',
-    'backend.repositories',
-    'backend.repositories.datasets_repo',
-    'backend.repositories.versions_repo',
-    'backend.repositories.loader_record_repo',
-    'backend.repositories.agent_modules_repo',
-    'backend.repositories.temp_files_repo',
-    'backend.services',
-    'backend.services.coco_eda',
-    'backend.services.dataset_service',
-    'backend.services.annotation_service',
-    'backend.services.image_service',
-    'backend.services.export_engine',
-    'backend.services.export_service',
-    'backend.services.skill_service',
-    'backend.services.chat_service',
-    'backend.services.agent_service',
-    'backend.agent_runtime',
-    'backend.agent_runtime.builtins',
-    'backend.agent_runtime.sandbox',
+    "flask",
+    "flask_cors",
+    "werkzeug",
+    "numpy",
+    "pandas",
+    "jinja2",
+    "markupsafe",
+    "PIL",
+    "PIL.Image",
+    "backend",
+    "backend.config",
+    "backend.errors",
+    "backend.json_utils",
+    "backend.blueprints",
+    "backend.blueprints.uploads_bp",
+    "backend.blueprints.datasets_bp",
+    "backend.blueprints.images_bp",
+    "backend.blueprints.annotations_bp",
+    "backend.blueprints.versions_bp",
+    "backend.blueprints.export_bp",
+    "backend.blueprints.agent_modules_bp",
+    "backend.blueprints.chat_bp",
+    "backend.repositories",
+    "backend.repositories.datasets_repo",
+    "backend.repositories.versions_repo",
+    "backend.repositories.loader_record_repo",
+    "backend.repositories.agent_modules_repo",
+    "backend.repositories.temp_files_repo",
+    "backend.services",
+    "backend.services.coco_eda",
+    "backend.services.dataset_service",
+    "backend.services.annotation_service",
+    "backend.services.image_service",
+    "backend.services.export_engine",
+    "backend.services.export_service",
+    "backend.services.skill_service",
+    "backend.services.chat_service",
+    "backend.services.agent_service",
+    "backend.agent_runtime",
+    "backend.agent_runtime.builtins",
+    "backend.agent_runtime.sandbox",
 ]
 
 a = Analysis(
-    [str(project_dir / 'app.py')],
+    [str(project_dir / "app.py")],
     pathex=[str(project_dir)],
     binaries=[],
     datas=datas,
@@ -73,7 +100,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'tkinter', 'matplotlib', 'cv2', 'scipy', 'sklearn',
+        "tkinter", "matplotlib", "cv2", "scipy", "sklearn",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -83,22 +110,25 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+_exe_icon = _exe_icon_arg()
+
 exe = EXE(
     pyz,
     a.scripts,
     [],
     exclude_binaries=True,
-    name='COCO-Visualizer',
+    name="COCO-Visualizer",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    console=True,  # 显示控制台窗口，便于查看日志；设为 False 可隐藏
+    upx=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=_exe_icon,
 )
 
 coll = COLLECT(
@@ -107,22 +137,24 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
-    name='COCO-Visualizer',
+    name="COCO-Visualizer",
 )
 
-# macOS：生成可双击的 .app（拖入「应用程序」或从 DMG 安装）
-if sys.platform == 'darwin':
+if sys.platform == "darwin":
+    _bic = _bundle_icon_arg()
     app = BUNDLE(
         coll,
-        name='COCO-Visualizer.app',
-        bundle_identifier='com.cocovisualizer.app',
+        name="COCO-Visualizer.app",
+        icon=_bic,
+        bundle_identifier="com.cocovisualizer.app",
         info_plist={
-            'CFBundleName': 'COCO Visualizer',
-            'CFBundleDisplayName': 'COCO Visualizer',
-            'CFBundleShortVersionString': '1.0.0',
-            'CFBundleVersion': '1.0.0',
-            'NSHighResolutionCapable': True,
+            "CFBundleName": "COCO Visualizer",
+            "CFBundleDisplayName": "COCO Visualizer",
+            "CFBundleShortVersionString": _app_version,
+            "CFBundleVersion": _app_version,
+            "NSHighResolutionCapable": True,
+            "LSBackgroundOnly": False,
         },
     )

@@ -12,6 +12,7 @@ ENV/
 build/
 develop-eggs/
 dist/
+release_body.md
 downloads/
 eggs/
 .eggs/
@@ -59,6 +60,10 @@ data/agent_skills.json
 # PyInstaller 打包输出
 *.manifest
 *.spec.bak
+# 由 packaging/convert_logo_*.py 从 static/logo.png 生成，勿提交
+packaging/installer/logo.ico
+packaging/installer/logo.icns
+packaging/installer/logo.png
 
 # 前端构建（Vite）
 frontend/node_modules/

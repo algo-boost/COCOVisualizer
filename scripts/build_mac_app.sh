@@ -5,6 +5,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+VERSION="$(sed -n '1p' "${ROOT}/version.txt" 2>/dev/null | tr -d '\r\t ' || true)"
+[[ -z "${VERSION}" ]] && VERSION="0.0.0"
+echo "打包版本: ${VERSION}（来自 version.txt）"
+echo ""
+
 PY="${PYTHON:-}"
 if [[ -z "$PY" ]]; then
   for cand in python3.12 python3.11 python3.10 python3; do
@@ -27,20 +32,16 @@ fi
 source "$VENV/bin/activate"
 
 pip install -q -U pip setuptools wheel
-# 使用与仓库兼容的版本；Python 3.12+ 上 numpy==1.24 可能无 wheel，则退回到兼容组合
-set +e
 pip install -q -r requirements.txt -r requirements-build.txt
-pip_st=$?
-set -e
-if [[ "$pip_st" -ne 0 ]]; then
-  echo "提示: 严格 requirements 安装失败，改用 numpy>=1.26 等与当前 Python 兼容的版本…" >&2
-  pip install -q Flask==2.3.3 flask-cors==4.0.0 'numpy>=1.26' 'pandas>=2.0.3' Pillow 'pyinstaller>=6'
-fi
 
-# 前端 Vite 构建（OPT-IN）：
-# 当前 frontend/ 仅是脚手架占位（页面尚未从 react-app.jsx 迁出），自动构建会让打包出的 .app
-# 启动后只显示空壳。等 LoadPage/GalleryPage/EDAPage/ChatPage 全部迁完后，把默认改成开。
-# 临时强制构建：BUILD_VITE=1 ./scripts/build_mac_app.sh
+# 图标必须在 PyInstaller 之前生成（.icns + .ico）
+echo ""
+echo "生成应用图标（logo.icns / logo.ico）…"
+"$PY" -m pip install -q Pillow
+"$PY" "${ROOT}/packaging/convert_logo_ico.py"
+"$PY" "${ROOT}/packaging/convert_logo_icns.py"
+
+# 前端 Vite 构建（OPT-IN）
 FRONTEND_DIR="${ROOT}/frontend"
 if [[ "${BUILD_VITE:-0}" == "1" && -f "${FRONTEND_DIR}/package.json" ]]; then
   if command -v npm &>/dev/null; then
@@ -57,7 +58,6 @@ if [[ "${BUILD_VITE:-0}" == "1" && -f "${FRONTEND_DIR}/package.json" ]]; then
     echo "[警告] BUILD_VITE=1 但未检测到 npm，跳过。" >&2
   fi
 else
-  # 未显式 opt-in：清掉 dist，确保 .app 走 Babel-in-browser 模式（功能完整）。
   rm -rf "${ROOT}/static/dist"
 fi
 
@@ -65,8 +65,8 @@ rm -rf build dist
 pyinstaller --noconfirm coco_visualizer.spec
 
 echo ""
-echo "完成。输出："
-echo "  ${ROOT}/dist/COCO-Visualizer.app   （双击启动）"
+echo "完成（版本 ${VERSION}）。输出："
+echo "  ${ROOT}/dist/COCO-Visualizer.app   （双击启动；访达「显示简介」可见版本 ${VERSION}）"
 echo "  ${ROOT}/dist/COCO-Visualizer/      （目录版，可执行文件在内）"
 echo ""
-echo "可选：生成 DMG 便于分发 → ./scripts/create_mac_dmg.sh"
+echo "可选：生成带版本号的 DMG → ./scripts/create_mac_dmg.sh"

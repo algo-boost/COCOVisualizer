@@ -3,7 +3,7 @@
 ; 或直接运行: .\packaging\build.ps1 -CreateInstaller
 
 #define MyAppName "COCO Visualizer"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.6.0"
 #define MyAppPublisher "COCO Visualizer"
 #define MyAppURL "https://github.com"
 #define MyAppExeName "COCO-Visualizer.exe"
