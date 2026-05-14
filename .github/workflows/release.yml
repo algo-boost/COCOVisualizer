@@ -5,8 +5,8 @@
 #      → 自动构建 Windows + macOS，并创建 GitHub Release，上传 .exe / .zip / .dmg
 #   2) 手动：Actions → Release → Run workflow（可填版本号，生成预发布/手动构建）
 #
-# 说明：仅把提交 push 到 main 不会触发本工作流。若希望每次 push 都生成安装包（不上传 Release），
-#       使用工作流「Push build (artifacts)」（.github/workflows/push-build-artifacts.yml）。
+# 说明：仅把提交 push 到 main 不会触发本工作流。若希望每次 push 都生成安装包并挂到 Releases，
+#       使用工作流「Push build (artifacts + CI release)」（会创建 Pre-release，标签形如 v*.*.*-ci.<run_id>）。
 name: Release
 
 on:

@@ -1,9 +1,9 @@
-# 每次推送到默认分支时自动构建安装包产物，上传到 Actions「Artifacts」
-# （不创建 GitHub Release；正式发布仍请用 release.yml：打 v1.x.x 标签或手动 Release）
+# 每次推送到默认分支时：构建 Windows + macOS，上传 Artifacts，并创建一条 GitHub **Pre-release**
+#（标签形如 v1.7.2-ci.<run_id>，每次运行唯一，含重跑；不会设为 latest；正式发布仍用 release.yml：打 v*.*.* 标签）
 #
-# 下载：仓库 → Actions → 选中本次运行 → Artifacts
+# 下载：Releases 里筛选「Pre-release」；或 Actions → 本次运行 → Artifacts
 
-name: Push build (artifacts)
+name: Push build (artifacts + CI release)
 
 on:
   push:
@@ -70,6 +70,56 @@ jobs:
       - name: 上传 macOS DMG
         uses: actions/upload-artifact@v4
         with:
-          name: macos-${{ steps.version.outputs.VERSION }}-${{ github.run_id }}
+          name: macos-${{ github.run_id }}
           path: dist/COCO-Visualizer-mac-${{ steps.version.outputs.VERSION }}.dmg
           if-no-files-found: error
+
+  publish-ci-release:
+    name: Publish CI pre-release (GitHub Releases)
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 检出代码（读取 version.txt）
+        uses: actions/checkout@v4
+
+      - name: 解析版本与 CI 标签
+        id: meta
+        run: |
+          VER=$(sed -n '1p' version.txt | tr -d '\r\t ')
+          echo "VERSION=$VER" >> "$GITHUB_OUTPUT"
+          echo "TAG=v${VER}-ci.${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: 下载 Windows 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-${{ github.run_id }}
+          path: ci-assets/win
+
+      - name: 下载 macOS 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-${{ github.run_id }}
+          path: ci-assets/mac
+
+      - name: 列出待发布文件
+        run: find ci-assets -type f -print
+
+      - name: 创建 Pre-release 并上传资产
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.TAG }}
+          name: COCO Visualizer ${{ steps.meta.outputs.VERSION }} (CI #${{ github.run_number }}, ${{ steps.meta.outputs.TAG }})
+          prerelease: true
+          make_latest: false
+          generate_release_notes: true
+          body: |
+            由 **Push build** 工作流在分支 **`${{ github.ref_name }}`** 上自动构建的 CI 预发布包（非正式版）。
+
+            - 提交：`${{ github.sha }}`
+            - 工作流运行：[#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          files: |
+            ci-assets/win/*.zip
+            ci-assets/win/*.exe
+            ci-assets/mac/*.dmg
