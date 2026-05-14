@@ -76,6 +76,23 @@ if [[ -d "${APP_PATH}" ]]; then
     -o runtime "${APP_PATH}" || \
     /usr/bin/codesign --force --deep --sign - "${APP_PATH}"
   /usr/bin/codesign --verify --deep --strict --verbose=2 "${APP_PATH}" || true
+
+  # 防止未生成 .icns 或 PyInstaller 未写入图标时仍产出「无 Dock/访达图标」的 .app（与 v1.7.0 起流水线一致，仅多一道显式校验）
+  PLIST="${APP_PATH}/Contents/Info.plist"
+  ICON_KEY="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "${PLIST}" 2>/dev/null || true)"
+  if [[ -z "${ICON_KEY}" ]]; then
+    echo "错误: ${PLIST} 缺少 CFBundleIconFile，请检查 packaging/installer/logo.icns 是否在 PyInstaller 之前已生成。" >&2
+    exit 1
+  fi
+  ICON_BASE="${ICON_KEY%.icns}"
+  ICON_FILE="${APP_PATH}/Contents/Resources/${ICON_KEY}"
+  if [[ ! -f "${ICON_FILE}" ]]; then
+    ICON_FILE="${APP_PATH}/Contents/Resources/${ICON_BASE}.icns"
+  fi
+  if [[ ! -f "${ICON_FILE}" ]]; then
+    echo "错误: 未找到 bundle 图标文件（CFBundleIconFile=${ICON_KEY}），期望类似 ${APP_PATH}/Contents/Resources/logo.icns" >&2
+    exit 1
+  fi
 fi
 
 echo ""
