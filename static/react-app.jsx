@@ -1,6 +1,9 @@
 // COCO数据集可视化工具 - React版本
 const { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } = React;
 
+const REMOTE_PROFILES_INDEX_URL =
+    'https://raw.githubusercontent.com/algo-boost/COCOVisualizer/main/static/remote-profiles/presets-index.json';
+
 // 默认配置
 const DEFAULT_CONFIG = {
     appName: 'COCO Dataset Visualizer',
@@ -65,7 +68,14 @@ const DEFAULT_CONFIG = {
             c_time: 'c_time',
             product_id: 'product_id',
             position: 'position'
-        }
+        },
+        /** 图库「元数据筛选」中除时间/SN/位置外的可配置字符串字段（模糊匹配），id 用于请求键、column 为 COCO images 中的键名 */
+        metaFilterExtraFields: [
+            { id: 'result_product_type', label: '具体款型', column: 'result_product_type' }
+        ],
+        /** 图库非时间类字符串筛选：both=模糊+下拉；fuzzy_only；select_only（无枚举值时自动回退为模糊） */
+        metaStringFilterUiMode: 'both',
+        brightnessSliderMax: 350
     },
     settings: {
         modalTitle: '设置',
@@ -89,7 +99,57 @@ const DEFAULT_CONFIG = {
         resetCategoriesButton: '恢复默认',
         resetAnnotationCategoriesButton: '恢复 GT 默认',
         categoryScopeSummary: '何时用「设置」里的类别？何时以 COCO 文件为准？',
-        closeButtonText: '关闭'
+        brightnessSliderMaxLabel: '看图亮度滑块上限 (%)',
+        brightnessSliderMaxHint: '仅影响查看器内「亮度」滑条的最大值（默认 350%）。可设 150～800，越大可拉得越亮；仅显示效果，不写入图片文件。',
+        metaFilterExtraFieldsTitle: '额外元数据筛选字段',
+        metaFilterExtraFieldsHint: '在图库「元数据筛选」栏增加字符串模糊筛选。字段键 id 须唯一；列名 column 对应 COCO images 里的键。',
+        metaFilterExtraFieldIdLabel: '字段键 id',
+        metaFilterExtraFieldLabelLabel: '显示名称',
+        metaFilterExtraFieldColumnLabel: 'COCO 列名',
+        metaFilterExtraFieldModeLabel: '筛选交互',
+        metaFilterExtraFieldModeHint: '「跟随全局」与下方「字符串筛选」一致；可单独设为仅模糊或仅下拉。',
+        metaStringFilterUiModeLabel: '字符串类元数据筛选（非时间）',
+        metaStringFilterUiModeHint: '作用于 SN、位置及所有「额外元数据字段」：默认「模糊 + 下拉」；仅下拉在无可选值时会自动显示模糊框。',
+        metaStringFilterUiModeBoth: '模糊 + 下拉',
+        metaStringFilterUiModeFuzzy: '仅模糊',
+        metaStringFilterUiModeSelect: '仅下拉',
+        metaFilterExtraFieldModeInherit: '跟随全局',
+        addMetaFilterExtraFieldButton: '添加字段',
+        removeMetaFilterExtraFieldTitle: '移除此项',
+        settingsTabAboutLabel: '关于',
+        appCurrentVersionLabel: '当前版本',
+        appCheckUpdateButton: '检查更新',
+        appCheckingUpdate: '正在连接 GitHub 检查…',
+        appUpdateUpToDate: '已是最新版本。',
+        appUpdateAvailableTitle: '发现新版本',
+        appUpdateCheckFailed: '检查失败（网络不可达或未配置更新仓库）。',
+        appUpdateOpenRelease: 'Release 详情',
+        appUpdateHintAutoBanner: '打开页面时也会在后台自动检查；若有新版本，右上角会出现下载提示横幅。',
+        closeButtonText: '关闭',
+        settingsTabConfigProfileLabel: '配置同步',
+        configProfileIntro: '将当前生效配置导出为 JSON；他人导入即可对齐。默认远程索引已指向官方仓库 algo-boost/COCOVisualizer（GitHub raw，main 分支）；推送代码后即可在「配置同步」直接加载列表。每项含名称、作者、说明；选择后等价于下载 JSON 再写入本机设置。',
+        configProfileExportSection: '导出',
+        configProfileExportNameLabel: '配置名称（可选，写入 JSON）',
+        configProfileIncludeApiKey: '导出时包含 AI API Key（勿分享给不可信的人）',
+        configProfileExportButton: '下载 JSON 配置文件',
+        configProfileImportSection: '导入',
+        configProfileImportButton: '选择 JSON 文件…',
+        configProfileImportHint: '将覆盖本机已保存的设置并立即生效（与部署目录下 config.json 仍会合并，本机优先）。',
+        configProfileRemoteSection: '远程预设',
+        configProfileIndexUrlLabel: '预设列表 JSON 的 URL（须 HTTPS，如 GitHub raw）',
+        configProfileIndexUrlHint: '索引含 presets 数组；每项支持 name、author、description，以及 url（HTTPS）或 path（相对索引所在目录，如 default-profile.json）。仓库推 GitHub 后用 raw 索引 URL 即可。',
+        configProfileFetchListButton: '加载列表',
+        configProfileSelectPresetLabel: '选择配置',
+        configProfileApplyPresetButton: '下载并加载',
+        configProfilePresetMetaAuthor: '作者',
+        configProfilePresetMetaDesc: '说明',
+        configProfileImportOk: '已导入配置。',
+        configProfileImportFail: '无法解析：请确认是有效的 JSON，且为本工具导出格式或顶层字段与 config 类似的对象。',
+        configProfileFetchFail: '无法加载索引（网络、CORS 或 URL 无效）。',
+        configProfilePresetFetchFail: '无法加载该预设 URL。',
+        configProfileConfirmImport: '将用导入内容覆盖本机当前设置，是否继续？',
+        configProfileConfirmRemote: '将用远程预设覆盖本机当前设置，是否继续？',
+        configProfileIndexEmpty: '索引中暂无有效项（每项需含 HTTPS 的 url，或与索引同目录的 path）。'
     },
     help: {
         title: '快捷键说明',
@@ -174,7 +234,8 @@ const DEFAULT_CONFIG = {
         chartBbox: 'BBox分布（宽×高）',
         chartDensity: '密度分布',
         chartScore: '置信度分布（按类别）'
-    }
+    },
+    profilePresetIndexUrl: REMOTE_PROFILES_INDEX_URL
 };
 
 const UNCLASSIFIED_LABEL = '未分类';
@@ -219,6 +280,12 @@ function mergeConfig(defaults, overrides) {
     const defCols = DEFAULT_CONFIG.imageCategoryColors || {};
     const userCols = (out.imageCategoryColors && typeof out.imageCategoryColors === 'object' && !Array.isArray(out.imageCategoryColors)) ? out.imageCategoryColors : {};
     out.imageCategoryColors = { ...defCols, ...userCols };
+    if (out.viewer != null && typeof out.viewer === 'object' && !Array.isArray(out.viewer.metaFilterExtraFields)) {
+        out.viewer = {
+            ...out.viewer,
+            metaFilterExtraFields: [...(DEFAULT_CONFIG.viewer.metaFilterExtraFields || [])]
+        };
+    }
     return out;
 }
 
@@ -228,6 +295,153 @@ function useConfig() { return useContext(ConfigContext); }
 function useSettings() { return useContext(SettingsContext); }
 
 const SETTINGS_STORAGE_KEY = 'cocoViewerSettings';
+
+const PROFILE_EXPORT_FORMAT = 'coco-visualizer-profile';
+const PROFILE_EXPORT_VERSION = 1;
+const PROFILE_TOP_LEVEL_KEYS = Object.keys(DEFAULT_CONFIG);
+
+function deepCloneViaJson(obj) {
+    try {
+        return JSON.parse(JSON.stringify(obj));
+    } catch {
+        return null;
+    }
+}
+
+function pickProfileSettingsFromMerged(mergedConfig) {
+    if (!mergedConfig || typeof mergedConfig !== 'object') return {};
+    const out = {};
+    for (let i = 0; i < PROFILE_TOP_LEVEL_KEYS.length; i++) {
+        const k = PROFILE_TOP_LEVEL_KEYS[i];
+        if (!Object.prototype.hasOwnProperty.call(mergedConfig, k)) continue;
+        const c = deepCloneViaJson(mergedConfig[k]);
+        if (c !== null) out[k] = c;
+    }
+    return out;
+}
+
+function redactProfileForShare(settings, { includeApiKey }) {
+    if (!settings || typeof settings !== 'object') return {};
+    const c = deepCloneViaJson(settings);
+    if (!c) return {};
+    if (!includeApiKey && c.llm && typeof c.llm === 'object') {
+        c.llm = { ...c.llm, apiKey: '' };
+    }
+    return c;
+}
+
+function buildProfileExportDocument(mergedConfig, { name, author, description, includeApiKey }) {
+    const settings = redactProfileForShare(pickProfileSettingsFromMerged(mergedConfig), { includeApiKey });
+    const doc = {
+        format: PROFILE_EXPORT_FORMAT,
+        version: PROFILE_EXPORT_VERSION,
+        exportedAt: new Date().toISOString(),
+        app: 'COCOVisualizer',
+        name: (name || '').trim(),
+        settings,
+    };
+    const au = (author || '').trim();
+    const de = (description || '').trim();
+    if (au) doc.author = au;
+    if (de) doc.description = de;
+    return doc;
+}
+
+function sanitizeImportedProfileSettings(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+    const out = {};
+    for (let i = 0; i < PROFILE_TOP_LEVEL_KEYS.length; i++) {
+        const k = PROFILE_TOP_LEVEL_KEYS[i];
+        if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+        out[k] = obj[k];
+    }
+    return out;
+}
+
+function parseProfileImportDocument(rawParsed) {
+    if (!rawParsed || typeof rawParsed !== 'object' || Array.isArray(rawParsed)) {
+        return { error: 'invalid_root' };
+    }
+    if (rawParsed.format === PROFILE_EXPORT_FORMAT && rawParsed.settings && typeof rawParsed.settings === 'object' && !Array.isArray(rawParsed.settings)) {
+        return { settings: sanitizeImportedProfileSettings(rawParsed.settings) };
+    }
+    return { settings: sanitizeImportedProfileSettings(rawParsed) };
+}
+
+function toAbsolutePresetIndexUrl(input) {
+    if (typeof window === 'undefined' || !window.location) return String(input || '').trim();
+    const s = String(input || '').trim();
+    if (!s) return '';
+    if (/^https?:\/\//i.test(s)) return s;
+    if (s.startsWith('/')) return `${window.location.origin}${s}`;
+    try {
+        return new URL(s, window.location.href).href;
+    } catch {
+        return s;
+    }
+}
+
+/** 允许拉取配置 JSON：HTTPS、本机 http、或与当前页同源（含 /static/... 相对路径解析结果） */
+function isAllowedProfileFetchUrl(url) {
+    try {
+        const abs = new URL(String(url).trim(), typeof window !== 'undefined' && window.location ? window.location.href : 'https://local/');
+        if (abs.protocol === 'https:') return true;
+        if (abs.protocol === 'http:' && (abs.hostname === 'localhost' || abs.hostname === '127.0.0.1')) return true;
+        if (typeof window !== 'undefined' && window.location && abs.origin === window.location.origin) return true;
+        return false;
+    } catch {
+        return false;
+    }
+}
+
+function resolvePresetProfileUrl(indexBaseUrl, item) {
+    if (!item || typeof item !== 'object') return '';
+    const direct = typeof item.url === 'string' ? item.url.trim() : '';
+    if (direct && isAllowedProfileFetchUrl(direct)) return direct;
+    const rel = typeof item.path === 'string' ? item.path.trim() : '';
+    const base = String(indexBaseUrl || '').trim();
+    if (!rel || !base) return '';
+    try {
+        const resolved = new URL(rel, base).href;
+        if (isAllowedProfileFetchUrl(resolved)) return resolved;
+    } catch {
+        /* ignore */
+    }
+    return '';
+}
+
+function normalizePresetIndexList(payload, indexBaseUrl) {
+    if (!payload) return [];
+    const rows = Array.isArray(payload) ? payload : (payload.presets && Array.isArray(payload.presets) ? payload.presets : []);
+    if (!rows.length) return [];
+    const base = String(indexBaseUrl || '').trim();
+    const out = [];
+    for (let idx = 0; idx < rows.length; idx++) {
+        const p = rows[idx];
+        if (!p || typeof p !== 'object') continue;
+        const url = resolvePresetProfileUrl(base, p);
+        if (!url) continue;
+        const name = String(p.name != null && String(p.name).trim() !== '' ? p.name : (p.label != null && String(p.label).trim() !== '' ? p.label : (p.id != null ? p.id : `preset-${idx + 1}`))).trim() || `预设 ${idx + 1}`;
+        const author = String(p.author != null ? p.author : '').trim();
+        const description = String(p.description != null ? p.description : '').trim();
+        const id = String(p.id != null && String(p.id).trim() !== '' ? p.id : name).trim() || String(idx);
+        out.push({ id, name, author, description, url, label: name });
+    }
+    return out;
+}
+
+function downloadJsonFile(filename, dataObj) {
+    const blob = new Blob([JSON.stringify(dataObj, null, 2)], { type: 'application/json;charset=utf-8' });
+    const a = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    a.href = url;
+    a.download = filename;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
 
 function loadStoredSettings() {
     try {
@@ -252,17 +466,93 @@ function passesConfThreshold(ann, confThreshold) {
     return confThreshold <= 0 || ann.score == null || Number(ann.score) >= confThreshold;
 }
 
+function normalizeMetaFilterExtraFields(viewerCfg) {
+    const raw = viewerCfg && viewerCfg.metaFilterExtraFields;
+    if (!Array.isArray(raw) || raw.length === 0) return [];
+    const out = [];
+    const seen = new Set();
+    for (const row of raw) {
+        if (!row || typeof row !== 'object') continue;
+        let id = String(row.id || row.column || '').trim().replace(/\s+/g, '_');
+        const col = String(row.column || row.id || '').trim();
+        const label = String(row.label || '').trim() || col;
+        if (!col) continue;
+        if (!id) id = col;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const im = row.inputMode;
+        const inputMode = (im === 'both' || im === 'fuzzy_only' || im === 'select_only') ? im : undefined;
+        out.push({ id, label, column: col, inputMode });
+    }
+    return out;
+}
+
 function getMetaFilterMapping(viewerCfg) {
     const m = (viewerCfg && viewerCfg.metaFilterFieldMap) || {};
     const pick = (k, d) => {
         const v = String(m[k] || '').trim();
         return v || d;
     };
+    const extras = normalizeMetaFilterExtraFields(viewerCfg);
+    const string_filter_columns = {};
+    extras.forEach((e) => {
+        string_filter_columns[e.id] = e.column;
+    });
     return {
         c_time: pick('c_time', 'c_time'),
         product_id: pick('product_id', 'product_id'),
-        position: pick('position', 'position')
+        position: pick('position', 'position'),
+        string_filter_columns
     };
+}
+
+const META_STRING_UI_MODES = new Set(['both', 'fuzzy_only', 'select_only']);
+
+function resolveMetaStringUiMode(viewerCfg, extraRow) {
+    const g = viewerCfg && viewerCfg.metaStringFilterUiMode;
+    const globalMode = META_STRING_UI_MODES.has(g) ? g : 'both';
+    if (extraRow && extraRow.inputMode && META_STRING_UI_MODES.has(extraRow.inputMode)) return extraRow.inputMode;
+    return globalMode;
+}
+
+/** 图库元数据：非时间字符串字段（模糊 + 可选枚举下拉） */
+function MetaFilterStringGroup({ label, value, onChange, options, mode }) {
+    const m = META_STRING_UI_MODES.has(mode) ? mode : 'both';
+    const optList = Array.isArray(options) ? options : [];
+    const showSelect = m !== 'fuzzy_only' && optList.length > 0;
+    const showFuzzy = m !== 'select_only' || !showSelect;
+    return (
+        <div className="meta-filter-chip">
+            <span className="meta-filter-chip__label">{label}</span>
+            <div className="meta-filter-chip__row">
+                {showFuzzy && (
+                    <input
+                        type="text"
+                        className="meta-filter-chip__input"
+                        placeholder="模糊查询"
+                        value={value}
+                        onChange={(e) => onChange(e.target.value)}
+                    />
+                )}
+                {showFuzzy && showSelect && <span className="meta-filter-chip__or">或</span>}
+                {showSelect && (
+                    <select
+                        className="meta-filter-chip__select"
+                        value={value}
+                        onChange={(e) => onChange(e.target.value)}
+                        title="从已有值中选择（与左侧模糊可二选一或配合子串）"
+                    >
+                        <option value="">全部</option>
+                        {optList.map((opt) => (
+                            <option key={String(opt)} value={opt} title={String(opt)}>
+                                {String(opt).length > 22 ? `${String(opt).slice(0, 19)}…` : String(opt)}
+                            </option>
+                        ))}
+                    </select>
+                )}
+            </div>
+        </div>
+    );
 }
 
 /** 底部缩略图条占用高度（含下边距），适应窗口时从可视高度扣除，避免压住主图 */
@@ -406,6 +696,9 @@ function App() {
             if (metaFilters.c_time_end) body.c_time_end = metaFilters.c_time_end;
             if (metaFilters.product_id_query) body.product_id_query = metaFilters.product_id_query;
             if (metaFilters.position) body.position = metaFilters.position;
+            if (metaFilters.meta_string_queries && typeof metaFilters.meta_string_queries === 'object' && Object.keys(metaFilters.meta_string_queries).length > 0) {
+                body.meta_string_queries = metaFilters.meta_string_queries;
+            }
         }
         const imgRes = await fetch('/api/get_images_by_category', {
             method: 'POST',
@@ -435,7 +728,7 @@ function App() {
         setPage('gallery');
     };
 
-    // 按图片元数据筛选后重新拉取列表（c_time / product_id / position）
+    // 按图片元数据筛选后重新拉取列表（时间 / SN / 位置 / 自定义字符串字段）
     const refetchImagesWithMetaFilters = useCallback(async (filters) => {
         if (!datasetData) return;
         const body = { dataset_id: datasetData.dataset_id, selected_categories: categories, meta_filter_mapping: getMetaFilterMapping(config.viewer || DEFAULT_CONFIG.viewer) };
@@ -444,6 +737,9 @@ function App() {
             if (filters.c_time_end) body.c_time_end = filters.c_time_end;
             if (filters.product_id_query) body.product_id_query = filters.product_id_query;
             if (filters.position) body.position = filters.position;
+            if (filters.meta_string_queries && typeof filters.meta_string_queries === 'object' && Object.keys(filters.meta_string_queries).length > 0) {
+                body.meta_string_queries = filters.meta_string_queries;
+            }
         }
         try {
             const res = await fetch('/api/get_images_by_category', {
@@ -628,7 +924,8 @@ function App() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     dataset_id: datasetData.dataset_id,
-                    selected_categories: categories
+                    selected_categories: categories,
+                    meta_filter_mapping: getMetaFilterMapping(config.viewer || DEFAULT_CONFIG.viewer)
                 })
             });
             const data = await res.json();
@@ -648,7 +945,7 @@ function App() {
         } catch (err) {
             console.warn('refetch after rollback failed', err);
         }
-    }, [datasetData, categories]);
+    }, [datasetData, categories, config.viewer]);
 
     const [showSettingsModal, setShowSettingsModal] = useState(false);
     const [showHelpModal, setShowHelpModal] = useState(false);
@@ -1047,7 +1344,7 @@ function HelpModal({ onClose }) {
                         <div>
                             <h4>🖼 图库与代码筛选</h4>
                             <ul style={{ paddingLeft: '20px' }}>
-                                <li><b>快速筛选：</b>按 GT 类别、图片级分类、目录、关键词快速过滤；工具栏「无 GT」仅保留无任何 GT 框的图片（与图片级「未分类」无关）。</li>
+                                <li><b>快速筛选：</b>按 GT 类别、图片级分类、目录、关键词快速过滤；图库标题旁「GT 全部 / 有GT / 无GT」可只看待标图或完全无 GT 框的图（与图片级「未分类」无关）。</li>
                                 <li><b>代码筛选：</b>点击工具栏「代码筛选」打开弹窗，编写 Python（与 Agent 消息里代码块相同执行环境）。最后一行表达式为 <code>image_id</code> 列表时应用为图库筛选；也可运行统计/导出类脚本在弹窗内查看报告。</li>
                                 <li><b>排序：</b>可按文件名、GT 框数、预测框数、文件大小、时间排序。</li>
                                 <li><b>批量操作：</b>支持批量打图片级分类、批量清理标注。</li>
@@ -3301,6 +3598,12 @@ function ChatPage({ datasetData, images, onFilterByIds,
 
 // ==================== 预测评估工具函数 ====================
 
+/** 不参与统计的标注类别名列表 → Set，空则返回 null（表示不排除） */
+function predEvalExcludeCategorySet(excludeCategories) {
+    if (!excludeCategories || excludeCategories.length === 0) return null;
+    return new Set(excludeCategories);
+}
+
 // AUC-PR 方式计算 AP（与 COCO 评估脚本一致）
 function computeAP(precisions, recalls) {
     if (precisions.length === 0) return 0;
@@ -3315,9 +3618,11 @@ function computeAP(precisions, recalls) {
 }
 
 // 在指定 IoU 阈值下计算各类别 AP 及统计指标，同时返回 PR 曲线数据
-function computeMapAtIou(images, model, iouThreshold, scoreThreshold) {
+function computeMapAtIou(images, model, iouThreshold, scoreThreshold, excludeSet = null) {
     const categories = new Set();
-    images.forEach(img => (img.annotations || []).forEach(a => { if (a.category && a.bbox) categories.add(a.category); }));
+    images.forEach(img => (img.annotations || []).forEach(a => {
+        if (a.category && a.bbox && !(excludeSet && excludeSet.has(a.category))) categories.add(a.category);
+    }));
     const perClass = {};
     const prCurves = {};
     categories.forEach(cat => {
@@ -3367,10 +3672,12 @@ function computeMapAtIou(images, model, iouThreshold, scoreThreshold) {
 }
 
 // 类别无关指标：忽略缺陷类型，只看有没有检出框与GT框重叠
-function computeClassAgnosticAtIou(images, model, iouThreshold, scoreThreshold) {
+function computeClassAgnosticAtIou(images, model, iouThreshold, scoreThreshold, excludeSet = null) {
     const gtByImg = {};
     images.forEach(img => {
-        const gts = (img.annotations || []).filter(a => a.bbox && a.bbox.length >= 4);
+        const gts = (img.annotations || []).filter(a =>
+            a.bbox && a.bbox.length >= 4 && !(excludeSet && a.category != null && excludeSet.has(a.category))
+        );
         if (gts.length > 0) gtByImg[img.image_id] = gts.map(g => ({ bbox: g.bbox, matched: false }));
     });
     const numGT = Object.values(gtByImg).reduce((s, gts) => s + gts.length, 0);
@@ -3378,6 +3685,7 @@ function computeClassAgnosticAtIou(images, model, iouThreshold, scoreThreshold) 
     images.forEach(img => {
         (img.pred_annotations || [])
             .filter(a => a._pred_source === model && a.bbox && a.bbox.length >= 4)
+            .filter(a => !(excludeSet && a.category != null && excludeSet.has(a.category)))
             .filter(a => a.score == null || Number(a.score) >= scoreThreshold)
             .forEach(a => preds.push({ bbox: a.bbox, score: Number(a.score) || 0, image_id: img.image_id }));
     });
@@ -3409,11 +3717,12 @@ function computeClassAgnosticAtIou(images, model, iouThreshold, scoreThreshold) 
 }
 
 // 计算完整报告：mAP@50/75/50:95 + 类别无关 + PR 曲线数据
-function computeFullMapReport(images, model, scoreThreshold) {
+function computeFullMapReport(images, model, scoreThreshold, excludeCategories) {
+    const exSet = predEvalExcludeCategorySet(excludeCategories);
     const iouThresholds = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
-    const at50 = computeMapAtIou(images, model, 0.5, scoreThreshold);
-    const at75 = computeMapAtIou(images, model, 0.75, scoreThreshold);
-    const allIou = iouThresholds.map(iou => computeMapAtIou(images, model, iou, scoreThreshold));
+    const at50 = computeMapAtIou(images, model, 0.5, scoreThreshold, exSet);
+    const at75 = computeMapAtIou(images, model, 0.75, scoreThreshold, exSet);
+    const allIou = iouThresholds.map(iou => computeMapAtIou(images, model, iou, scoreThreshold, exSet));
     const mAP50_95 = allIou.reduce((s, r) => s + r.mAP, 0) / iouThresholds.length;
     const perClassAP75 = Object.fromEntries(Object.keys(at75.perClass).map(c => [c, at75.perClass[c].ap]));
     const perClassAP50_95 = {};
@@ -3421,9 +3730,9 @@ function computeFullMapReport(images, model, scoreThreshold) {
         perClassAP50_95[cat] = allIou.reduce((s, r) => s + (r.perClass[cat]?.ap || 0), 0) / iouThresholds.length;
     });
     // 类别无关
-    const agn50 = computeClassAgnosticAtIou(images, model, 0.5, scoreThreshold);
-    const agn75 = computeClassAgnosticAtIou(images, model, 0.75, scoreThreshold);
-    const allIouAgn = iouThresholds.map(iou => computeClassAgnosticAtIou(images, model, iou, scoreThreshold));
+    const agn50 = computeClassAgnosticAtIou(images, model, 0.5, scoreThreshold, exSet);
+    const agn75 = computeClassAgnosticAtIou(images, model, 0.75, scoreThreshold, exSet);
+    const allIouAgn = iouThresholds.map(iou => computeClassAgnosticAtIou(images, model, iou, scoreThreshold, exSet));
     const agnAP50_95 = allIouAgn.reduce((s, r) => s + r.ap, 0) / iouThresholds.length;
     return {
         mAP50: at50.mAP, mAP75: at75.mAP, mAP50_95,
@@ -3538,7 +3847,7 @@ function PRCurveCanvas({ prCurves, agnosticCurve }) {
 }
 
 // ==================== mAP 报告弹窗 ====================
-function MapReportModal({ images, model, scoreThresh, onClose }) {
+function MapReportModal({ images, model, scoreThresh, excludeCategories, onClose }) {
     const config = useConfig();
     const uiTheme = config.uiTheme || DEFAULT_CONFIG.uiTheme || 'dark';
     const prCurveColors = React.useMemo(() => getPRCurveColors(uiTheme), [uiTheme]);
@@ -3547,13 +3856,14 @@ function MapReportModal({ images, model, scoreThresh, onClose }) {
     const [activeTab, setActiveTab] = React.useState('table'); // 'table' | 'agnostic' | 'pr'
 
     React.useEffect(() => {
+        setComputing(true);
         const t = setTimeout(() => {
-            try { setReport(computeFullMapReport(images, model, scoreThresh)); }
+            try { setReport(computeFullMapReport(images, model, scoreThresh, excludeCategories)); }
             catch (e) { console.error(e); }
             setComputing(false);
         }, 30);
         return () => clearTimeout(t);
-    }, []);
+    }, [images, model, scoreThresh, excludeCategories]);
 
     const fmt = v => (v * 100).toFixed(1) + '%';
     const cs = (a = 'center') => ({ padding: '7px 10px', textAlign: a, whiteSpace: 'nowrap' });
@@ -3601,9 +3911,16 @@ function MapReportModal({ images, model, scoreThresh, onClose }) {
                 display: 'flex', flexDirection: 'column',
             }}>
                 {/* 标题栏 */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
-                    <span style={{ fontWeight: 'bold', fontSize: 'var(--font-lg)', color: 'var(--text-primary)' }}>📊 检测指标报告 · <span style={{ color: 'var(--accent)' }}>{model}</span></span>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid var(--border)', gap: '12px' }}>
+                    <div style={{ minWidth: 0 }}>
+                        <span style={{ fontWeight: 'bold', fontSize: 'var(--font-lg)', color: 'var(--text-primary)' }}>📊 检测指标报告 · <span style={{ color: 'var(--accent)' }}>{model}</span></span>
+                        {excludeCategories && excludeCategories.length > 0 && (
+                            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)', marginTop: '8px', lineHeight: 1.45 }}>
+                                已排除类别（GT 与预测框均不参与统计）：<strong style={{ color: 'var(--text-primary)' }}>{[...excludeCategories].sort().join('、')}</strong>
+                            </div>
+                        )}
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
                         <button className="btn btn-sm btn-secondary" onClick={copyTable} disabled={!report}>📋 复制表格</button>
                         <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer', lineHeight: 1 }}>✕</button>
                     </div>
@@ -3781,10 +4098,13 @@ function computeIoU(bbox1, bbox2) {
 // 返回 { hasFP, hasFN, tp, fp, fn }
 // hasFP: 存在误检（预测框无法匹配任何GT框）
 // hasFN: 存在漏检（GT框无法被任何预测框匹配）
-function evalImagePred(image, model, iouThresh, scoreThresh) {
-    const gtAnns = (image.annotations || []).filter(a => a.bbox && a.bbox.length >= 4);
+function evalImagePred(image, model, iouThresh, scoreThresh, excludeSet = null) {
+    const gtAnns = (image.annotations || []).filter(a =>
+        a.bbox && a.bbox.length >= 4 && !(excludeSet && a.category != null && excludeSet.has(a.category))
+    );
     const predAnns = (image.pred_annotations || [])
         .filter(a => a._pred_source === model && a.bbox && a.bbox.length >= 4)
+        .filter(a => !(excludeSet && a.category != null && excludeSet.has(a.category)))
         .filter(a => a.score == null || Number(a.score) >= scoreThresh)
         .sort((a, b) => (b.score || 0) - (a.score || 0));
 
@@ -3811,38 +4131,64 @@ function evalImagePred(image, model, iouThresh, scoreThresh) {
 }
 
 // ==================== 预测评估设置弹窗 ====================
-function PredEvalModal({ predModelNames, initModel, initIou, initScore, onApply, onClose }) {
+function PredEvalModal({ predModelNames, annotationCategories, initModel, initIou, initScore, initExcludeCategories, onApply, onClose }) {
     const [localModel, setLocalModel] = React.useState(initModel || (predModelNames.length === 1 ? predModelNames[0] : null));
     const [localIou, setLocalIou] = React.useState(initIou ?? 0.5);
     const [localScore, setLocalScore] = React.useState(initScore ?? 0.0);
+    const [localExclude, setLocalExclude] = React.useState(() => [...(initExcludeCategories || [])]);
+
+    const sortedAnnCats = React.useMemo(() => [...(annotationCategories || [])].sort((a, b) => String(a).localeCompare(String(b))), [annotationCategories]);
 
     const handleIouSlider = e => setLocalIou(Number(Number(e.target.value).toFixed(2)));
     const handleScoreSlider = e => setLocalScore(Number(Number(e.target.value).toFixed(2)));
     const handleIouInput = e => { const v = parseFloat(e.target.value); if (!isNaN(v)) setLocalIou(Math.min(1, Math.max(0, v))); };
     const handleScoreInput = e => { const v = parseFloat(e.target.value); if (!isNaN(v)) setLocalScore(Math.min(1, Math.max(0, v))); };
 
+    const toggleExcludeCategory = cat => {
+        setLocalExclude(prev => (prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]));
+    };
+
     return (
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-            <div className="modal-dialog" style={{ maxWidth: '420px' }}>
+            <div className="modal-dialog" style={{ maxWidth: '480px' }}>
                 <div className="modal-header">
                     <span className="modal-title">🔬 预测评估设置</span>
                     <button className="modal-close" onClick={onClose}>✕</button>
                 </div>
                 <div className="modal-body">
                     <div style={{ marginBottom: '18px' }}>
-                        <div style={{ fontWeight: 'bold', marginBottom: '8px', fontSize: 'var(--font-md)', color: 'var(--text-secondary)' }}>选择预测模型（单选）</div>
+                        <div style={{ fontWeight: 600, marginBottom: '8px', fontSize: 'var(--font-md)', color: 'var(--text-primary)' }}>选择预测模型（单选）</div>
                         {predModelNames.map(model => (
-                            <label key={model} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px', cursor: 'pointer', padding: '6px 10px', background: localModel === model ? '#2a3a5a' : '#1e1e38', borderRadius: '6px', border: localModel === model ? '1px solid #4a7af0' : '1px solid transparent' }}>
+                            <label key={model} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px', cursor: 'pointer', padding: '8px 12px', background: localModel === model ? 'var(--bg-hover)' : 'var(--bg-raised)', borderRadius: '6px', border: localModel === model ? '1px solid var(--accent)' : '1px solid var(--border)' }}>
                                 <input type="radio" name="pred_eval_model" value={model} checked={localModel === model} onChange={() => setLocalModel(model)} />
-                                <span style={{ fontFamily: 'monospace', fontSize: 'var(--font-md)' }}>{model}</span>
+                                <span style={{ fontFamily: 'monospace', fontSize: 'var(--font-md)', color: 'var(--text-primary)' }}>{model}</span>
                             </label>
                         ))}
                     </div>
 
                     <div style={{ marginBottom: '16px' }}>
-                        <div style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)', marginBottom: '6px' }}>
-                            IoU 阈值：<strong style={{ color: '#7af' }}>{localIou.toFixed(2)}</strong>
-                            <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-muted)', marginLeft: '8px' }}>（预测框与GT框的重叠度 ≥ 此值才算正确）</span>
+                        <div style={{ fontWeight: 600, marginBottom: '8px', fontSize: 'var(--font-md)', color: 'var(--text-primary)' }}>不参与统计的标注类别（可选）</div>
+                        <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-secondary)', marginBottom: '8px', lineHeight: 1.45 }}>
+                            勾选的类别会从 GT 与预测中同时移除，不计入图库「预测正确 / 误检 / 漏检」与「检测指标报告」；适用于不要求检出的类别。
+                        </div>
+                        {sortedAnnCats.length === 0 ? (
+                            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)' }}>当前数据集无标注类别列表。</div>
+                        ) : (
+                            <div style={{ maxHeight: '160px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '6px', padding: '8px', background: 'var(--bg-raised)' }}>
+                                {sortedAnnCats.map(cat => (
+                                    <label key={cat} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 6px', cursor: 'pointer', fontSize: 'var(--font-md)', color: 'var(--text-primary)' }}>
+                                        <input type="checkbox" checked={localExclude.includes(cat)} onChange={() => toggleExcludeCategory(cat)} />
+                                        <span>{cat}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <div style={{ marginBottom: '16px' }}>
+                        <div style={{ fontSize: 'var(--font-md)', color: 'var(--text-primary)', marginBottom: '6px' }}>
+                            IoU 阈值：<strong style={{ color: 'var(--accent)' }}>{localIou.toFixed(2)}</strong>
+                            <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-secondary)', marginLeft: '8px' }}>（预测框与GT框的重叠度 ≥ 此值才算正确）</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                             <input type="range" min="0" max="1" step="0.05" value={localIou} onChange={handleIouSlider} style={{ flex: 1 }} />
@@ -3851,9 +4197,9 @@ function PredEvalModal({ predModelNames, initModel, initIou, initScore, onApply,
                     </div>
 
                     <div style={{ marginBottom: '8px' }}>
-                        <div style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)', marginBottom: '6px' }}>
-                            置信度阈值：<strong style={{ color: '#7af' }}>{localScore.toFixed(2)}</strong>
-                            <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-muted)', marginLeft: '8px' }}>（低于此值的预测框不参与评估）</span>
+                        <div style={{ fontSize: 'var(--font-md)', color: 'var(--text-primary)', marginBottom: '6px' }}>
+                            置信度阈值：<strong style={{ color: 'var(--accent)' }}>{localScore.toFixed(2)}</strong>
+                            <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-secondary)', marginLeft: '8px' }}>（低于此值的预测框不参与评估）</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                             <input type="range" min="0" max="1" step="0.05" value={localScore} onChange={handleScoreSlider} style={{ flex: 1 }} />
@@ -3861,11 +4207,11 @@ function PredEvalModal({ predModelNames, initModel, initIou, initScore, onApply,
                         </div>
                     </div>
 
-                                    <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginTop: '14px', background: 'var(--bg-raised)', padding: '10px', borderRadius: '6px', border: '1px solid var(--border)', lineHeight: '1.7' }}>
+                    <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)', marginTop: '14px', background: 'var(--bg-raised)', padding: '12px', borderRadius: '6px', border: '1px solid var(--border)', lineHeight: '1.7' }}>
                         <div>✓ <strong style={{color:'#52c41a'}}>预测正确</strong>：无误检且无漏检（TP全匹配）</div>
                         <div>⚡ <strong style={{color:'#faad14'}}>误检</strong>：存在未命中GT的预测框（FP &gt; 0）</div>
                         <div>◎ <strong style={{color:'#f5222d'}}>漏检</strong>：存在未被预测框命中的GT框（FN &gt; 0）</div>
-                        <div style={{color:'var(--text-muted)', fontSize:'11px', marginTop:'4px'}}>注：一张图可同时属于误检和漏检</div>
+                        <div style={{color:'var(--text-muted)', fontSize:'11px', marginTop:'4px'}}>注：一张图可同时属于误检和漏检；排除类别后仅基于剩余框判定。</div>
                     </div>
                 </div>
                 <div className="modal-footer">
@@ -3873,7 +4219,12 @@ function PredEvalModal({ predModelNames, initModel, initIou, initScore, onApply,
                     <button
                         className="btn btn-primary"
                         disabled={!localModel}
-                        onClick={() => localModel && onApply({ model: localModel, iouThresh: localIou, scoreThresh: localScore })}
+                        onClick={() => localModel && onApply({
+                            model: localModel,
+                            iouThresh: localIou,
+                            scoreThresh: localScore,
+                            excludeCategories: localExclude.length ? [...localExclude].sort((a, b) => String(a).localeCompare(String(b))) : [],
+                        })}
                     >
                         应用评估
                     </button>
@@ -3892,13 +4243,14 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     const [selectedLabelCategory, setSelectedLabelCategory] = useState('all'); // 标注类别筛选
     const [selectedImageCategory, setSelectedImageCategory] = useState('all'); // 图片分类筛选
     const [selectedDirectory, setSelectedDirectory] = useState('all'); // 目录筛选（多目录合并时）
-    const [showUnannotatedOnly, setShowUnannotatedOnly] = useState(false); // 仅显示无 GT 框（筛选条件，非图片级分类）
+    const [gtPresenceFilter, setGtPresenceFilter] = useState('all'); // 'all' | 'with_gt' | 'without_gt'
     const [searchText, setSearchText] = useState('');
-    // 图片元数据筛选（c_time / product_id / position），仅当 COCO 含对应字段时显示
+    // 图片元数据筛选（时间 / SN / 位置 / metaFilterExtraFields），仅当 COCO 含对应字段或已配置额外字段时显示
     const [metaCtimeStart, setMetaCtimeStart] = useState('');
     const [metaCtimeEnd, setMetaCtimeEnd] = useState('');
     const [metaProductIdQuery, setMetaProductIdQuery] = useState('');
     const [metaPosition, setMetaPosition] = useState('');
+    const [metaStringQueries, setMetaStringQueries] = useState({});
     const [metaFilterApplying, setMetaFilterApplying] = useState(false);
     const [scoreMin, setScoreMin] = useState('');
     const [scoreMax, setScoreMax] = useState('');
@@ -3940,6 +4292,8 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     const [predEvalModel, setPredEvalModel] = useState(null);
     const [predEvalIouThresh, setPredEvalIouThresh] = useState(0.5);
     const [predEvalScoreThresh, setPredEvalScoreThresh] = useState(0.0);
+    /** 不参与预测评估与 mAP 统计的标注类别名（GT 与预测同时忽略） */
+    const [predEvalExcludeCategories, setPredEvalExcludeCategories] = useState([]);
     const [predEvalFilter, setPredEvalFilter] = useState(null); // null | 'correct' | 'fp' | 'fn'
     const [showMapModal, setShowMapModal] = useState(false);
     // 控制哪些预测模型可见（null 表示全显示，Set 表示白名单）
@@ -4004,13 +4358,19 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
         setVisiblePredModels(new Set(predModelNames));
     }, [predModelNames.join(',')]); // eslint-disable-line
 
+    // 类别列表变化时剔除已不存在的排除项
+    useEffect(() => {
+        setPredEvalExcludeCategories(prev => prev.filter(c => categories.includes(c)));
+    }, [categories]);
+
     // 预测评估结果（各图片 image_id → { hasFP, hasFN, tp, fp, fn }）
     const imageEvalResults = React.useMemo(() => {
         if (!predEvalEnabled || !predEvalModel) return {};
         const res = {};
-        images.forEach(img => { res[img.image_id] = evalImagePred(img, predEvalModel, predEvalIouThresh, predEvalScoreThresh); });
+        const exSet = predEvalExcludeCategorySet(predEvalExcludeCategories);
+        images.forEach(img => { res[img.image_id] = evalImagePred(img, predEvalModel, predEvalIouThresh, predEvalScoreThresh, exSet); });
         return res;
-    }, [images, predEvalEnabled, predEvalModel, predEvalIouThresh, predEvalScoreThresh]);
+    }, [images, predEvalEnabled, predEvalModel, predEvalIouThresh, predEvalScoreThresh, predEvalExcludeCategories]);
 
     // 各类别计数（图片可同时属于误检和漏检）
     const evalStats = React.useMemo(() => {
@@ -4033,7 +4393,9 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
         if (agentFilterSet && !agentFilterSet.has(img.image_id)) return false;
         if (selectedDirectory !== 'all' && (img.source_path != null ? img.source_path : '') !== selectedDirectory) return false;
         if (selectedLabelCategory !== 'all' && !img.annotations.some(a => a.category === selectedLabelCategory)) return false;
-        if (showUnannotatedOnly && img.annotations && img.annotations.length > 0) return false;
+        const gtCount = img.annotations?.length || 0;
+        if (gtPresenceFilter === 'with_gt' && gtCount === 0) return false;
+        if (gtPresenceFilter === 'without_gt' && gtCount > 0) return false;
         if (selectedImageCategory !== 'all') {
             const arr = imageClassifications[img.image_id];
             const imgCats = Array.isArray(arr) && arr.length ? arr : [defaultImageCat];
@@ -4060,7 +4422,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
             if (predEvalFilter === 'fn' && !r.hasFN) return false;
         }
         return true;
-    }), [images, selectedDirectory, selectedLabelCategory, selectedImageCategory, searchText, imageClassifications, defaultImageCat, scoreMin, scoreMax, predEvalEnabled, predEvalFilter, imageEvalResults, showUnannotatedOnly, agentFilterSet]);
+    }), [images, selectedDirectory, selectedLabelCategory, selectedImageCategory, searchText, imageClassifications, defaultImageCat, scoreMin, scoreMax, predEvalEnabled, predEvalFilter, imageEvalResults, gtPresenceFilter, agentFilterSet]);
 
     // 排序
     const filteredImages = React.useMemo(() => {
@@ -4126,6 +4488,20 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
 
     const metaOpts = metaFilterOptions || {};
     const metaFieldMap = getMetaFilterMapping(config.viewer || DEFAULT_CONFIG.viewer);
+    const metaFilterExtras = useMemo(
+        () => normalizeMetaFilterExtraFields(config.viewer || DEFAULT_CONFIG.viewer),
+        [JSON.stringify((config.viewer && config.viewer.metaFilterExtraFields) || [])]
+    );
+    const metaFilterExtrasKey = useMemo(() => metaFilterExtras.map(e => `${e.id}:${e.column}`).join('|'), [metaFilterExtras]);
+    useEffect(() => {
+        setMetaStringQueries((prev) => {
+            const next = {};
+            metaFilterExtras.forEach((e) => {
+                next[e.id] = Object.prototype.hasOwnProperty.call(prev, e.id) ? prev[e.id] : '';
+            });
+            return next;
+        });
+    }, [metaFilterExtrasKey, metaFilterExtras]);
     const normalizeMetaLabel = (label, fallbackKey, fallbackZh) => {
         const v = (label || '').toString().trim();
         if (!v) return fallbackZh;
@@ -4136,24 +4512,59 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
     const cTimeLabel = normalizeMetaLabel(metaOpts.c_time_label || metaFieldMap.c_time, 'c_time', '时间');
     const productIdLabel = normalizeMetaLabel(metaOpts.product_id_label || metaFieldMap.product_id, 'product_id', 'SN号');
     const positionLabel = normalizeMetaLabel(metaOpts.position_label || metaFieldMap.position, 'position', '位置');
-    const sampleMeta = (images && images[0] && images[0].image_meta) || {};
-    const hasMetaFilterCapability = !!(
-        (metaOpts.has_c_time || metaOpts.has_product_id || metaOpts.has_position) ||
-        (sampleMeta && typeof sampleMeta === 'object' && (
-            Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.c_time) ||
-            Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.product_id) ||
-            Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.position)
-        ))
-    );
+    const extraStringOpts = metaOpts.extra_string_filters || {};
+    const imageMetaHasKey = (key) => {
+        if (!key || !images || !images.length) return false;
+        return images.some((img) => {
+            const meta = img.image_meta;
+            return meta && typeof meta === 'object' && Object.prototype.hasOwnProperty.call(meta, key);
+        });
+    };
+    const topLevelImgHasKey = (key) => {
+        if (!key || !images || !images.length) return false;
+        return images.some((img) => {
+            const v = img[key];
+            return v != null && String(v).trim() !== '';
+        });
+    };
+    const shouldShowMetaCtime = useMemo(() => {
+        const key = metaFieldMap.c_time;
+        if (metaOpts.has_c_time) return true;
+        if (metaOpts.c_time_min != null && metaOpts.c_time_max != null) return true;
+        return imageMetaHasKey(key);
+    }, [images, metaOpts.has_c_time, metaOpts.c_time_min, metaOpts.c_time_max, metaFieldMap.c_time]);
+    const shouldShowMetaProductId = useMemo(() => {
+        const key = metaFieldMap.product_id;
+        if (metaOpts.has_product_id) return true;
+        if (Array.isArray(metaOpts.product_ids) && metaOpts.product_ids.length > 0) return true;
+        return imageMetaHasKey(key) || topLevelImgHasKey(key);
+    }, [images, metaOpts.has_product_id, metaOpts.product_ids, metaFieldMap.product_id]);
+    const shouldShowMetaPosition = useMemo(() => {
+        const key = metaFieldMap.position;
+        if (metaOpts.has_position) return true;
+        if (Array.isArray(metaOpts.positions) && metaOpts.positions.length > 0) return true;
+        return imageMetaHasKey(key) || topLevelImgHasKey(key);
+    }, [images, metaOpts.has_position, metaOpts.positions, metaFieldMap.position]);
+    const hasExtraMetaCap = metaFilterExtras.some((e) => {
+        const eo = extraStringOpts[e.id];
+        return (eo && eo.has_field) || imageMetaHasKey(e.column);
+    });
+    const hasMetaFilterCapability = !!(shouldShowMetaCtime || shouldShowMetaProductId || shouldShowMetaPosition || hasExtraMetaCap);
     const handleApplyMetaFilters = async () => {
         if (!onApplyMetaFilters) return;
         setMetaFilterApplying(true);
         try {
+            const mq = {};
+            metaFilterExtras.forEach((e) => {
+                const s = (metaStringQueries[e.id] || '').trim();
+                if (s) mq[e.id] = s;
+            });
             await onApplyMetaFilters({
                 c_time_start: metaCtimeStart.trim() || undefined,
                 c_time_end: metaCtimeEnd.trim() || undefined,
                 product_id_query: metaProductIdQuery.trim() || undefined,
-                position: (metaPosition && metaPosition !== 'all') ? metaPosition : undefined
+                position: metaPosition.trim() || undefined,
+                meta_string_queries: Object.keys(mq).length ? mq : undefined
             });
             setCurrentPage(1);
         } finally {
@@ -4206,63 +4617,62 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                     </div>
                 )}
                 {hasMetaFilterCapability && (
-                    <div className="meta-filter-bar">
-                        <span style={{ fontWeight: 600, marginRight: '4px' }}>元数据筛选:</span>
-                        {(metaOpts.has_c_time || Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.c_time)) && (
-                            <>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <span style={{ whiteSpace: 'nowrap' }}>{`${cTimeLabel}起`}</span>
-                                    <input type="datetime-local" value={metaCtimeStart} onChange={(e) => setMetaCtimeStart(e.target.value)} style={{ padding: '4px 8px' }} />
-                                </label>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <span style={{ whiteSpace: 'nowrap' }}>{`${cTimeLabel}止`}</span>
-                                    <input type="datetime-local" value={metaCtimeEnd} onChange={(e) => setMetaCtimeEnd(e.target.value)} style={{ padding: '4px 8px' }} />
-                                </label>
-                            </>
-                        )}
-                        {(metaOpts.has_product_id || Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.product_id)) && (
-                            <>
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <span style={{ whiteSpace: 'nowrap' }}>{productIdLabel}</span>
-                                    <input type="text" placeholder="输入模糊查询" value={metaProductIdQuery} onChange={(e) => setMetaProductIdQuery(e.target.value)} style={{ padding: '4px 8px', minWidth: '140px' }} />
-                                </label>
-                                {metaOpts.product_ids && metaOpts.product_ids.length > 0 && (
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                        <span style={{ whiteSpace: 'nowrap' }}>或选择</span>
-                                        <select
-                                            value={metaProductIdQuery}
-                                            onChange={(e) => setMetaProductIdQuery(e.target.value === '' ? '' : e.target.value)}
-                                            style={{ padding: '4px 8px', minWidth: '160px', maxWidth: '220px' }}
-                                            title={`从已有${productIdLabel}中选择`}
-                                        >
-                                            <option value="">全部</option>
-                                            {metaOpts.product_ids.map(pid => (
-                                                <option key={pid} value={pid} title={pid}>{pid.length > 24 ? pid.slice(0, 21) + '...' : pid}</option>
-                                            ))}
-                                        </select>
+                    <div className="meta-filter-bar meta-filter-bar--chips">
+                        <span className="meta-filter-bar__title">元数据筛选</span>
+                        <div className="meta-filter-bar__chips">
+                        {shouldShowMetaCtime && (
+                            <div className="meta-filter-chip meta-filter-chip--wide">
+                                <span className="meta-filter-chip__label">{cTimeLabel}</span>
+                                <div className="meta-filter-chip__row meta-filter-chip__row--wrap">
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        <span style={{ whiteSpace: 'nowrap', fontSize: 'var(--font-sm)', color: 'var(--text-muted)' }}>起</span>
+                                        <input type="datetime-local" value={metaCtimeStart} onChange={(e) => setMetaCtimeStart(e.target.value)} style={{ padding: '4px 8px' }} />
                                     </label>
-                                )}
-                            </>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        <span style={{ whiteSpace: 'nowrap', fontSize: 'var(--font-sm)', color: 'var(--text-muted)' }}>止</span>
+                                        <input type="datetime-local" value={metaCtimeEnd} onChange={(e) => setMetaCtimeEnd(e.target.value)} style={{ padding: '4px 8px' }} />
+                                    </label>
+                                </div>
+                            </div>
                         )}
-                        {(metaOpts.has_position || Object.prototype.hasOwnProperty.call(sampleMeta, metaFieldMap.position)) && (
-                            <>
-                                {metaOpts.positions && metaOpts.positions.length > 0 ? (
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                        <span style={{ whiteSpace: 'nowrap' }}>{positionLabel}</span>
-                                <select value={metaPosition} onChange={(e) => setMetaPosition(e.target.value)} style={{ padding: '4px 8px' }}>
-                                    <option value="all">全部</option>
-                                            {metaOpts.positions.map(p => <option key={p} value={p}>{p}</option>)}
-                                </select>
-                            </label>
-                                ) : (
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                        <span style={{ whiteSpace: 'nowrap' }}>{positionLabel}</span>
-                                        <input type="text" placeholder="精确匹配" value={metaPosition === 'all' ? '' : metaPosition} onChange={(e) => setMetaPosition(e.target.value || 'all')} style={{ padding: '4px 8px', minWidth: '120px' }} />
-                            </label>
-                                )}
-                            </>
+                        {shouldShowMetaProductId && (
+                            <MetaFilterStringGroup
+                                label={productIdLabel}
+                                value={metaProductIdQuery}
+                                onChange={setMetaProductIdQuery}
+                                options={metaOpts.product_ids || []}
+                                mode={resolveMetaStringUiMode(config.viewer || DEFAULT_CONFIG.viewer, null)}
+                            />
                         )}
-                        <button type="button" className="btn btn-primary btn-sm" onClick={handleApplyMetaFilters} disabled={metaFilterApplying}>
+                        {shouldShowMetaPosition && (
+                            <MetaFilterStringGroup
+                                label={positionLabel}
+                                value={metaPosition}
+                                onChange={setMetaPosition}
+                                options={metaOpts.positions || []}
+                                mode={resolveMetaStringUiMode(config.viewer || DEFAULT_CONFIG.viewer, null)}
+                            />
+                        )}
+                        {metaFilterExtras.map((e) => {
+                            const eoMap = metaOpts.extra_string_filters || {};
+                            const eo = eoMap[e.id] || {};
+                            const show = eo.has_field || imageMetaHasKey(e.column);
+                            if (!show) return null;
+                            const vals = eo.values || [];
+                            const q = metaStringQueries[e.id] != null ? metaStringQueries[e.id] : '';
+                            return (
+                                <MetaFilterStringGroup
+                                    key={e.id}
+                                    label={e.label}
+                                    value={q}
+                                    onChange={(v) => setMetaStringQueries((prev) => ({ ...prev, [e.id]: v }))}
+                                    options={vals}
+                                    mode={resolveMetaStringUiMode(config.viewer || DEFAULT_CONFIG.viewer, e)}
+                                />
+                            );
+                        })}
+                        </div>
+                        <button type="button" className="btn btn-primary btn-sm meta-filter-bar__apply" onClick={handleApplyMetaFilters} disabled={metaFilterApplying}>
                             {metaFilterApplying ? '筛选中...' : '应用筛选'}
                         </button>
                     </div>
@@ -4324,18 +4734,22 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                     return (
                                         <button
                                             key={model}
-                                            className="btn btn-sm"
+                                            type="button"
+                                            className="btn btn-sm btn-secondary"
                                             title={isOn ? `隐藏 ${model} 的预测结果` : `显示 ${model} 的预测结果`}
                                             style={{
-                                                fontSize: 'var(--font-xs)', padding: '2px 8px',
-                                                background: isOn ? '#2a4a7a' : 'transparent',
-                                                color: isOn ? 'var(--accent)' : 'var(--text-muted)',
-                                                border: `1px solid ${isOn ? 'var(--accent)' : 'var(--border)'}`,
-                                                fontWeight: isOn ? 'bold' : 'normal',
+                                                fontSize: 'var(--font-sm)',
+                                                padding: '3px 8px',
+                                                background: 'var(--bg-raised)',
+                                                color: isOn ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                                border: `1px solid ${isOn ? 'var(--text-secondary)' : 'var(--border-strong)'}`,
+                                                borderRadius: 'var(--radius-sm)',
+                                                fontWeight: isOn ? 600 : 400,
                                                 maxWidth: '120px',
                                                 overflow: 'hidden',
                                                 textOverflow: 'ellipsis',
                                                 whiteSpace: 'nowrap',
+                                                boxShadow: 'none',
                                             }}
                                             onClick={() => {
                                                 setVisiblePredModels(prev => {
@@ -4506,15 +4920,37 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                                     <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                                         已标注 <span style={{ color: '#52c41a', fontWeight: 'bold' }}>{annotationProgress.annotated}</span> / {annotationProgress.total}
                                     </span>
-                                    {annotationProgress.unannotated > 0 && (
-                                        <button
-                                            onClick={() => { setShowUnannotatedOnly(v => !v); setCurrentPage(1); }}
-                                            title={showUnannotatedOnly ? '显示全部图片' : `仅显示无任何 GT 标注框的图片（${annotationProgress.unannotated} 张）`}
-                                                style={{ fontSize: 'var(--font-xs)', padding: '2px 8px', background: showUnannotatedOnly ? 'var(--warning)' : 'transparent', color: showUnannotatedOnly ? '#000' : 'var(--warning)', border: '1px solid var(--warning)', borderRadius: '4px', cursor: 'pointer', whiteSpace: 'nowrap' }}
-                                        >
-                                            {showUnannotatedOnly ? '✕ 取消筛选' : `⚠ 无 GT ${annotationProgress.unannotated}`}
-                                        </button>
-                                    )}
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', marginLeft: '4px', flexWrap: 'wrap' }} title="按是否存在 GT 标注框筛选图库">
+                                        <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-muted)', marginRight: '2px' }}>GT</span>
+                                        {[
+                                            { id: 'all', label: '全部' },
+                                            { id: 'with_gt', label: '有GT' },
+                                            { id: 'without_gt', label: '无GT' },
+                                        ].map(({ id, label }) => {
+                                            const active = gtPresenceFilter === id;
+                                            return (
+                                                <button
+                                                    key={id}
+                                                    type="button"
+                                                    onClick={() => { setGtPresenceFilter(id); setCurrentPage(1); }}
+                                                    style={{
+                                                        fontSize: 'var(--font-xs)',
+                                                        padding: '2px 7px',
+                                                        borderRadius: id === 'all' ? '4px 0 0 4px' : id === 'without_gt' ? '0 4px 4px 0' : '0',
+                                                        border: '1px solid var(--border-strong)',
+                                                        borderLeft: id !== 'all' ? 'none' : undefined,
+                                                        background: active ? 'var(--accent)' : 'var(--bg-raised)',
+                                                        color: active ? '#fff' : 'var(--text-secondary)',
+                                                        cursor: 'pointer',
+                                                        whiteSpace: 'nowrap',
+                                                        fontWeight: active ? 600 : 400,
+                                                    }}
+                                                >
+                                                    {label}
+                                                </button>
+                                            );
+                                        })}
+                                    </span>
                                 </div>
                             )}
                             <div className="gallery-actions">
@@ -4550,7 +4986,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                             {pageImages.length === 0 ? (
                                 <div className="gallery-empty">
                                     <p className="gallery-empty-title">当前页没有可显示的图片</p>
-                                    <p className="gallery-empty-hint">可能受分类、搜索、元数据筛选或预测评估条件影响，可放宽条件或清空搜索后再试。</p>
+                                    <p className="gallery-empty-hint">可能受分类、搜索、元数据筛选、GT 有无（全部/有GT/无GT）、预测评估条件影响，可放宽条件或清空搜索后再试。</p>
                                 </div>
                             ) : (
                                 pageImages.map(img => (
@@ -4648,6 +5084,7 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
                     images={images}
                     model={predEvalModel}
                     scoreThresh={predEvalScoreThresh}
+                    excludeCategories={predEvalExcludeCategories}
                     onClose={() => setShowMapModal(false)}
                 />
             )}
@@ -4655,13 +5092,16 @@ function GalleryPage({ datasetData, images, categories, imageClassifications, im
             {predEvalOpen && (
                 <PredEvalModal
                     predModelNames={predModelNames}
+                    annotationCategories={categories}
                     initModel={predEvalModel}
                     initIou={predEvalIouThresh}
                     initScore={predEvalScoreThresh}
-                    onApply={({ model, iouThresh, scoreThresh }) => {
+                    initExcludeCategories={predEvalExcludeCategories}
+                    onApply={({ model, iouThresh, scoreThresh, excludeCategories }) => {
                         setPredEvalModel(model);
                         setPredEvalIouThresh(iouThresh);
                         setPredEvalScoreThresh(scoreThresh);
+                        setPredEvalExcludeCategories(excludeCategories && excludeCategories.length ? excludeCategories : []);
                         setPredEvalEnabled(true);
                         setPredEvalFilter(null);
                         setCurrentPage(1);
@@ -4719,7 +5159,16 @@ function SettingsModal({ onClose, cocoImageCategoryDefsActive = false }) {
     const lineWidthOptions = viewer.lineWidthOptions || [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
     const colorPalette = config.colorPalette || DEFAULT_CONFIG.colorPalette || ['#888'];
     const currentTheme = config.uiTheme || DEFAULT_CONFIG.uiTheme || 'dark';
-    const [activeTab, setActiveTab] = useState('appearance'); // appearance | imageCategories | llm
+    const [activeTab, setActiveTab] = useState('appearance'); // appearance | imageCategories | llm | configProfile | about
+    const [appVersion, setAppVersion] = useState('—');
+    const [updateCheck, setUpdateCheck] = useState(null);
+    const [profileExportName, setProfileExportName] = useState('');
+    const [profileExportIncludeApiKey, setProfileExportIncludeApiKey] = useState(false);
+    const profileImportRef = useRef(null);
+    const [presetIndexInput, setPresetIndexInput] = useState('');
+    const [remotePresets, setRemotePresets] = useState([]);
+    const [presetListStatus, setPresetListStatus] = useState(null);
+    const [selectedRemotePresetUrl, setSelectedRemotePresetUrl] = useState('');
 
     const updateViewer = (key, value) => {
         setSettings(prev => ({ ...prev, viewer: { ...(prev.viewer || {}), [key]: value } }));
@@ -4818,6 +5267,142 @@ function SettingsModal({ onClose, cocoImageCategoryDefsActive = false }) {
         setSettings(prev => ({ ...prev, defaultAnnotationCategories: [...(DEFAULT_CONFIG.defaultAnnotationCategories || ['object'])] }));
     };
 
+    useEffect(() => {
+        if (activeTab !== 'about') return;
+        let cancelled = false;
+        fetch('/api/app/version')
+            .then(r => r.json())
+            .then((j) => {
+                if (!cancelled && j && j.success) setAppVersion(String(j.version != null ? j.version : '—'));
+            })
+            .catch(() => { if (!cancelled) setAppVersion('—'); });
+        return () => { cancelled = true; };
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (activeTab !== 'configProfile') return;
+        setPresetIndexInput(String(config.profilePresetIndexUrl || '').trim());
+    }, [activeTab, config.profilePresetIndexUrl]);
+
+    const pickUpdateAssetKind = (assets, kind) => {
+        const list = assets || [];
+        for (let i = 0; i < list.length; i++) {
+            if (list[i].kind === kind) return list[i];
+        }
+        return null;
+    };
+
+    const handleCheckUpdateClick = async () => {
+        setUpdateCheck({ loading: true });
+        try {
+            const r = await fetch('/api/app/check_update?force=1');
+            const j = await r.json();
+            setUpdateCheck({ loading: false, data: j });
+        } catch {
+            setUpdateCheck({ loading: false, error: true });
+        }
+    };
+
+    const commitProfileSettings = (settingsObj, options) => {
+        const preservePresetIndexUrl = options && options.preservePresetIndexUrl === true;
+        setSettings((prev) => {
+            if (preservePresetIndexUrl) {
+                return { ...settingsObj, profilePresetIndexUrl: prev.profilePresetIndexUrl };
+            }
+            const pin = Object.prototype.hasOwnProperty.call(settingsObj, 'profilePresetIndexUrl')
+                ? settingsObj.profilePresetIndexUrl
+                : prev.profilePresetIndexUrl;
+            return { ...settingsObj, profilePresetIndexUrl: pin };
+        });
+        alert(st.configProfileImportOk || '已导入配置。');
+    };
+
+    const applyImportedSettings = (settingsObj) => {
+        if (!settingsObj || typeof settingsObj !== 'object') return;
+        if (!confirm(st.configProfileConfirmImport || '将用导入内容覆盖本机当前设置，是否继续？')) return;
+        commitProfileSettings(settingsObj, { preservePresetIndexUrl: false });
+    };
+
+    const handleProfileImportFile = (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            try {
+                const parsed = JSON.parse(String(reader.result || ''));
+                const r = parseProfileImportDocument(parsed);
+                if (r.error) {
+                    alert(st.configProfileImportFail || '导入失败');
+                    return;
+                }
+                applyImportedSettings(r.settings);
+            } catch {
+                alert(st.configProfileImportFail || '导入失败');
+            }
+        };
+        reader.readAsText(f);
+        e.target.value = '';
+    };
+
+    const handleProfileExportClick = () => {
+        const doc = buildProfileExportDocument(config, {
+            name: profileExportName,
+            author: '',
+            description: '',
+            includeApiKey: profileExportIncludeApiKey,
+        });
+        const safe = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        downloadJsonFile(`coco-visualizer-profile-${safe}.json`, doc);
+    };
+
+    const handleFetchPresetIndex = async () => {
+        const raw = presetIndexInput.trim();
+        const absIndex = toAbsolutePresetIndexUrl(raw);
+        if (!absIndex || !isAllowedProfileFetchUrl(absIndex)) {
+            setPresetListStatus('error');
+            return;
+        }
+        setSettings((prev) => ({ ...prev, profilePresetIndexUrl: raw }));
+        setPresetListStatus('loading');
+        setRemotePresets([]);
+        setSelectedRemotePresetUrl('');
+        try {
+            const fetchUrl = /^https?:\/\//i.test(raw) ? raw : (raw.startsWith('/') ? raw : absIndex);
+            const r = await fetch(fetchUrl, { method: 'GET', mode: 'cors', cache: 'no-store' });
+            if (!r.ok) throw new Error('bad status');
+            const j = await r.json();
+            const list = normalizePresetIndexList(j, absIndex);
+            setRemotePresets(list);
+            setPresetListStatus(list.length ? 'ok' : 'empty');
+        } catch {
+            setPresetListStatus('error');
+        }
+    };
+
+    const handleApplyRemotePreset = async () => {
+        const url = selectedRemotePresetUrl.trim();
+        if (!isAllowedProfileFetchUrl(url)) return;
+        if (!confirm(st.configProfileConfirmRemote || '将用远程预设覆盖本机当前设置，是否继续？')) return;
+        try {
+            const r = await fetch(url, { method: 'GET', mode: 'cors', cache: 'no-store' });
+            if (!r.ok) throw new Error('bad status');
+            const parsed = await r.json();
+            const pr = parseProfileImportDocument(parsed);
+            if (pr.error) {
+                alert(st.configProfilePresetFetchFail || '加载失败');
+                return;
+            }
+            commitProfileSettings(pr.settings, { preservePresetIndexUrl: true });
+        } catch {
+            alert(st.configProfilePresetFetchFail || '加载失败');
+        }
+    };
+
+    const selectedRemotePreset = React.useMemo(
+        () => remotePresets.find((p) => p.url === selectedRemotePresetUrl),
+        [remotePresets, selectedRemotePresetUrl]
+    );
+
     return (
         <div className="modal-overlay" onClick={onClose}>
             <div className="modal-content settings-modal" onClick={(e) => e.stopPropagation()}>
@@ -4843,6 +5428,16 @@ function SettingsModal({ onClose, cocoImageCategoryDefsActive = false }) {
                                 className={`settings-nav-item ${activeTab === 'llm' ? 'active' : ''}`}
                                 onClick={() => setActiveTab('llm')}
                             >🤖 AI 助手</button>
+                            <button
+                                type="button"
+                                className={`settings-nav-item ${activeTab === 'configProfile' ? 'active' : ''}`}
+                                onClick={() => setActiveTab('configProfile')}
+                            >📦 {st.settingsTabConfigProfileLabel || '配置同步'}</button>
+                            <button
+                                type="button"
+                                className={`settings-nav-item ${activeTab === 'about' ? 'active' : ''}`}
+                                onClick={() => setActiveTab('about')}
+                            >ℹ️ {st.settingsTabAboutLabel || '关于'}</button>
                         </div>
 
                         <div className="settings-panel">
@@ -4888,6 +5483,26 @@ function SettingsModal({ onClose, cocoImageCategoryDefsActive = false }) {
                             {lineWidthOptions.map(v => <option key={v} value={v}>{v}</option>)}
                         </select>
                                         <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginTop: '4px' }}>0.1～1 共十档，查看器内可随时调整</p>
+                    </div>
+                    <div className="form-group">
+                        <label className="form-label">{st.brightnessSliderMaxLabel || '看图亮度滑块上限 (%)'}</label>
+                        <input
+                            type="number"
+                            className="form-input"
+                            style={{ maxWidth: '140px' }}
+                            min={150}
+                            max={800}
+                            step={10}
+                            value={viewer.brightnessSliderMax ?? 350}
+                            onChange={(e) => {
+                                const raw = parseInt(e.target.value, 10);
+                                const n = Number.isFinite(raw) ? raw : 350;
+                                updateViewer('brightnessSliderMax', Math.max(150, Math.min(800, n)));
+                            }}
+                        />
+                        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginTop: '4px' }}>
+                            {st.brightnessSliderMaxHint || '仅影响查看器内亮度滑条上限。'}
+                        </p>
                     </div>
                                     <div className="form-group">
                                         <label className="form-label">底部缩略图导航</label>
@@ -4958,6 +5573,102 @@ function SettingsModal({ onClose, cocoImageCategoryDefsActive = false }) {
                                                 onChange={(e) => updateViewer('metaFilterFieldMap', { ...(viewer.metaFilterFieldMap || {}), position: e.target.value })}
                                                 placeholder="例如 position / station"
                                             />
+                                        </div>
+                                    </div>
+                                    <div className="form-group">
+                                        <label className="form-label">{st.metaStringFilterUiModeLabel || '字符串类元数据筛选（非时间）'}</label>
+                                        <select
+                                            className="form-input"
+                                            style={{ maxWidth: '280px' }}
+                                            value={META_STRING_UI_MODES.has(viewer.metaStringFilterUiMode) ? viewer.metaStringFilterUiMode : 'both'}
+                                            onChange={(e) => updateViewer('metaStringFilterUiMode', e.target.value)}
+                                        >
+                                            <option value="both">{st.metaStringFilterUiModeBoth}</option>
+                                            <option value="fuzzy_only">{st.metaStringFilterUiModeFuzzy}</option>
+                                            <option value="select_only">{st.metaStringFilterUiModeSelect}</option>
+                                        </select>
+                                        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginTop: '4px' }}>
+                                            {st.metaStringFilterUiModeHint}
+                                        </p>
+                                    </div>
+                                    <div className="form-group">
+                                        <label className="form-label">{st.metaFilterExtraFieldsTitle || '额外元数据筛选字段'}</label>
+                                        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                                            {st.metaFilterExtraFieldsHint || '在图库元数据栏增加字符串模糊筛选；id 唯一，对应请求键与设置中的输入状态。'}
+                                        </p>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            {(Array.isArray(viewer.metaFilterExtraFields) ? viewer.metaFilterExtraFields : []).map((row, idx) => (
+                                                <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(120px, 150px) auto', gap: '8px', alignItems: 'center' }}>
+                                                    <input
+                                                        className="form-input"
+                                                        placeholder={st.metaFilterExtraFieldIdLabel || 'id'}
+                                                        value={(row && row.id) || ''}
+                                                        onChange={(e) => {
+                                                            const arr = [...(viewer.metaFilterExtraFields || [])];
+                                                            arr[idx] = { ...(arr[idx] || {}), id: e.target.value };
+                                                            updateViewer('metaFilterExtraFields', arr);
+                                                        }}
+                                                    />
+                                                    <input
+                                                        className="form-input"
+                                                        placeholder={st.metaFilterExtraFieldLabelLabel || '显示名'}
+                                                        value={(row && row.label) || ''}
+                                                        onChange={(e) => {
+                                                            const arr = [...(viewer.metaFilterExtraFields || [])];
+                                                            arr[idx] = { ...(arr[idx] || {}), label: e.target.value };
+                                                            updateViewer('metaFilterExtraFields', arr);
+                                                        }}
+                                                    />
+                                                    <input
+                                                        className="form-input"
+                                                        placeholder={st.metaFilterExtraFieldColumnLabel || 'COCO 列'}
+                                                        value={(row && row.column) || ''}
+                                                        onChange={(e) => {
+                                                            const arr = [...(viewer.metaFilterExtraFields || [])];
+                                                            arr[idx] = { ...(arr[idx] || {}), column: e.target.value };
+                                                            updateViewer('metaFilterExtraFields', arr);
+                                                        }}
+                                                    />
+                                                    <select
+                                                        className="form-input"
+                                                        title={st.metaFilterExtraFieldModeHint || ''}
+                                                        value={(row && row.inputMode && META_STRING_UI_MODES.has(row.inputMode) ? row.inputMode : '')}
+                                                        onChange={(e) => {
+                                                            const arr = [...(viewer.metaFilterExtraFields || [])];
+                                                            const v = e.target.value;
+                                                            const next = { ...(arr[idx] || {}) };
+                                                            if (!v) delete next.inputMode;
+                                                            else next.inputMode = v;
+                                                            arr[idx] = next;
+                                                            updateViewer('metaFilterExtraFields', arr);
+                                                        }}
+                                                    >
+                                                        <option value="">{st.metaFilterExtraFieldModeInherit || '跟随全局'}</option>
+                                                        <option value="both">{st.metaStringFilterUiModeBoth}</option>
+                                                        <option value="fuzzy_only">{st.metaStringFilterUiModeFuzzy}</option>
+                                                        <option value="select_only">{st.metaStringFilterUiModeSelect}</option>
+                                                    </select>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-secondary btn-sm"
+                                                        title={st.removeMetaFilterExtraFieldTitle || '移除'}
+                                                        onClick={() => {
+                                                            const arr = (viewer.metaFilterExtraFields || []).filter((_, i) => i !== idx);
+                                                            updateViewer('metaFilterExtraFields', arr);
+                                                        }}
+                                                    >
+                                                        ✕
+                                                    </button>
+                                                </div>
+                                            ))}
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary btn-sm"
+                                                style={{ alignSelf: 'flex-start' }}
+                                                onClick={() => updateViewer('metaFilterExtraFields', [...(viewer.metaFilterExtraFields || []), { id: '', label: '', column: '', inputMode: '' }])}
+                                            >
+                                                {st.addMetaFilterExtraFieldButton || '添加字段'}
+                                            </button>
                                         </div>
                                     </div>
                                     <div className="form-group">
@@ -5175,6 +5886,201 @@ function SettingsModal({ onClose, cocoImageCategoryDefsActive = false }) {
                                             />
                                         </div>
                                     </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'configProfile' && (
+                                <div className="form-group" style={{ maxWidth: '640px' }}>
+                                    <label className="form-label">📦 {st.settingsTabConfigProfileLabel || '配置同步'}</label>
+                                    <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', lineHeight: 1.55, marginBottom: '16px' }}>
+                                        {st.configProfileIntro}
+                                    </p>
+
+                                    <h4 style={{ fontSize: 'var(--font-md)', margin: '0 0 8px', color: 'var(--text-secondary)' }}>{st.configProfileExportSection || '导出'}</h4>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '18px' }}>
+                                        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                            <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)' }}>{st.configProfileExportNameLabel}</span>
+                                            <input
+                                                className="form-input"
+                                                value={profileExportName}
+                                                onChange={(e) => setProfileExportName(e.target.value)}
+                                                placeholder="例如：产线质检组默认"
+                                            />
+                                        </label>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={profileExportIncludeApiKey}
+                                                onChange={(e) => setProfileExportIncludeApiKey(e.target.checked)}
+                                            />
+                                            <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)' }}>{st.configProfileIncludeApiKey}</span>
+                                        </label>
+                                        <button type="button" className="btn btn-primary btn-sm" style={{ alignSelf: 'flex-start' }} onClick={handleProfileExportClick}>
+                                            {st.configProfileExportButton}
+                                        </button>
+                                    </div>
+
+                                    <h4 style={{ fontSize: 'var(--font-md)', margin: '0 0 8px', color: 'var(--text-secondary)' }}>{st.configProfileImportSection || '导入'}</h4>
+                                    <p style={{ fontSize: 'var(--font-xs)', color: 'var(--text-muted)', marginBottom: '8px' }}>{st.configProfileImportHint}</p>
+                                    <input ref={profileImportRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={handleProfileImportFile} />
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        style={{ marginBottom: '22px' }}
+                                        onClick={() => profileImportRef.current && profileImportRef.current.click()}
+                                    >
+                                        {st.configProfileImportButton}
+                                    </button>
+
+                                    <h4 style={{ fontSize: 'var(--font-md)', margin: '0 0 8px', color: 'var(--text-secondary)' }}>{st.configProfileRemoteSection || '远程预设'}</h4>
+                                    <p style={{ fontSize: 'var(--font-xs)', color: 'var(--text-muted)', marginBottom: '8px' }}>{st.configProfileIndexUrlHint}</p>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
+                                        <input
+                                            className="form-input"
+                                            style={{ flex: '1 1 280px', minWidth: '200px' }}
+                                            value={presetIndexInput}
+                                            onChange={(e) => setPresetIndexInput(e.target.value)}
+                                            placeholder={REMOTE_PROFILES_INDEX_URL}
+                                        />
+                                        <button type="button" className="btn btn-secondary btn-sm" onClick={handleFetchPresetIndex} disabled={presetListStatus === 'loading'}>
+                                            {presetListStatus === 'loading' ? '…' : st.configProfileFetchListButton}
+                                        </button>
+                                    </div>
+                                    {presetListStatus === 'error' && (
+                                        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--accent)', marginBottom: '8px' }}>{st.configProfileFetchFail}</p>
+                                    )}
+                                    {presetListStatus === 'empty' && (
+                                        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginBottom: '8px' }}>{st.configProfileIndexEmpty}</p>
+                                    )}
+                                    {remotePresets.length > 0 && (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', marginBottom: '12px' }}>
+                                            <label style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                {st.configProfileSelectPresetLabel}
+                                                <select
+                                                    className="form-input"
+                                                    style={{ minWidth: '220px' }}
+                                                    value={selectedRemotePresetUrl}
+                                                    onChange={(e) => setSelectedRemotePresetUrl(e.target.value)}
+                                                >
+                                                    <option value="">—</option>
+                                                    {remotePresets.map((p) => (
+                                                        <option key={p.url} value={p.url}>{p.name}</option>
+                                                    ))}
+                                                </select>
+                                            </label>
+                                            <button type="button" className="btn btn-primary btn-sm" onClick={handleApplyRemotePreset} disabled={!selectedRemotePresetUrl}>
+                                                {st.configProfileApplyPresetButton}
+                                            </button>
+                                        </div>
+                                    )}
+                                    {selectedRemotePreset && (
+                                        <div
+                                            style={{
+                                                marginTop: '4px',
+                                                marginBottom: '12px',
+                                                padding: '10px 12px',
+                                                borderRadius: '8px',
+                                                border: '1px solid var(--border)',
+                                                background: 'var(--bg-soft)',
+                                                fontSize: 'var(--font-sm)',
+                                                color: 'var(--text-secondary)',
+                                                lineHeight: 1.55,
+                                            }}
+                                        >
+                                            <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>{selectedRemotePreset.name}</div>
+                                            {selectedRemotePreset.author ? (
+                                                <div>
+                                                    <span style={{ color: 'var(--text-muted)' }}>{st.configProfilePresetMetaAuthor}：</span>
+                                                    {selectedRemotePreset.author}
+                                                </div>
+                                            ) : null}
+                                            {selectedRemotePreset.description ? (
+                                                <div style={{ marginTop: '6px' }}>
+                                                    <span style={{ color: 'var(--text-muted)' }}>{st.configProfilePresetMetaDesc}：</span>
+                                                    {selectedRemotePreset.description}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {activeTab === 'about' && (
+                                <div className="form-group">
+                                    <label className="form-label">ℹ️ {st.settingsTabAboutLabel || '关于'}</label>
+                                    <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+                                        <strong>{st.appCurrentVersionLabel || '当前版本'}</strong>
+                                        <span style={{ fontFamily: 'monospace', marginLeft: '8px' }}>{appVersion}</span>
+                                    </p>
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        disabled={updateCheck && updateCheck.loading}
+                                        onClick={handleCheckUpdateClick}
+                                    >
+                                        {updateCheck && updateCheck.loading ? (st.appCheckingUpdate || '检查中…') : (st.appCheckUpdateButton || '检查更新')}
+                                    </button>
+                                    {updateCheck && !updateCheck.loading && updateCheck.error && (
+                                        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-muted)', marginTop: '10px' }}>
+                                            {st.appUpdateCheckFailed || '检查失败'}
+                                        </p>
+                                    )}
+                                    {updateCheck && !updateCheck.loading && updateCheck.data && (
+                                        <div style={{ marginTop: '12px', fontSize: 'var(--font-sm)', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                                            {!updateCheck.data.success && (
+                                                <p style={{ margin: 0 }}>{st.appUpdateCheckFailed || '检查失败'}</p>
+                                            )}
+                                            {updateCheck.data.success && !updateCheck.data.has_update && (
+                                                <p style={{ margin: 0 }}>
+                                                    {st.appUpdateUpToDate || '已是最新'}
+                                                    {updateCheck.data.latest ? `（远端 ${updateCheck.data.latest}）` : ''}
+                                                </p>
+                                            )}
+                                            {updateCheck.data.success && updateCheck.data.has_update && (
+                                                <>
+                                                    <p style={{ margin: '0 0 8px', color: 'var(--accent)', fontWeight: 600 }}>
+                                                        {st.appUpdateAvailableTitle || '发现新版本'}：{updateCheck.data.latest}
+                                                    </p>
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+                                                        {(() => {
+                                                            const j = updateCheck.data;
+                                                            const mac = pickUpdateAssetKind(j.assets, 'mac-dmg');
+                                                            const win = pickUpdateAssetKind(j.assets, 'win-exe') || pickUpdateAssetKind(j.assets, 'win-zip');
+                                                            const links = [];
+                                                            if (mac && mac.url) links.push(<a key="mac" href={mac.url} target="_blank" rel="noopener noreferrer">⬇️ macOS DMG</a>);
+                                                            if (win && win.url) links.push(<a key="win" href={win.url} target="_blank" rel="noopener noreferrer">⬇️ Windows 安装包</a>);
+                                                            if (j.release_url) links.push(<a key="rel" href={j.release_url} target="_blank" rel="noopener noreferrer">{st.appUpdateOpenRelease || 'Release 详情'}</a>);
+                                                            return links.length ? links : <span style={{ color: 'var(--text-muted)' }}>请前往 GitHub Releases 下载。</span>;
+                                                        })()}
+                                                    </div>
+                                                    {(() => {
+                                                        const j = updateCheck.data;
+                                                        const mac = pickUpdateAssetKind(j.assets, 'mac-dmg');
+                                                        const win = pickUpdateAssetKind(j.assets, 'win-exe') || pickUpdateAssetKind(j.assets, 'win-zip');
+                                                        const primary = mac || win;
+                                                        const mirrors = primary && primary.mirrors && primary.mirrors.length > 1
+                                                            ? primary.mirrors.slice(1)
+                                                            : [];
+                                                        if (!mirrors.length) return null;
+                                                        return (
+                                                            <p style={{ margin: '10px 0 0', fontSize: 'var(--font-xs)', color: 'var(--text-muted)' }}>
+                                                                国内加速：
+                                                                {mirrors.map((m) => (
+                                                                    <React.Fragment key={m.url}>
+                                                                        {' '}
+                                                                        <a href={m.url} target="_blank" rel="noopener noreferrer">{m.name || '镜像'}</a>
+                                                                    </React.Fragment>
+                                                                ))}
+                                                            </p>
+                                                        );
+                                                    })()}
+                                                </>
+                                            )}
+                                        </div>
+                                    )}
+                                    <p style={{ fontSize: 'var(--font-xs)', color: 'var(--text-muted)', marginTop: '14px', lineHeight: 1.55 }}>
+                                        {st.appUpdateHintAutoBanner || '打开页面时也会在后台自动检查；若有新版本，右上角会出现下载提示横幅。'}
+                                    </p>
                                 </div>
                             )}
                         </div>
@@ -6730,6 +7636,12 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     const [hoveredPredAnnIdx, setHoveredPredAnnIdx] = useState(null);
     const crossSidebarIouThreshold = Math.max(0, Math.min(1, Number(viewer.crossSidebarIouThreshold ?? 0.5)));
     const lineWidthOpts = viewer.lineWidthOptions || [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
+    const BRIGHTNESS_SLIDER_MIN = 30;
+    const brightnessMax = useMemo(() => {
+        const v = Number(viewer.brightnessSliderMax);
+        const d = Number.isFinite(v) ? Math.round(v) : 350;
+        return Math.max(101, Math.min(800, d));
+    }, [viewer.brightnessSliderMax]);
     const [lineWidth, setLineWidth] = useState(() => {
         const d = viewer.lineWidthDefault;
         return (typeof d === 'number' && lineWidthOpts.includes(d)) ? d : (lineWidthOpts[4] ?? 0.5);
@@ -6782,6 +7694,13 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     const snapEnabledRef = useRef(true);
     useEffect(() => { snapEnabledRef.current = snapEnabled; }, [snapEnabled]);
     const [brightness, setBrightness] = useState(100); // B7: 亮度
+    useEffect(() => {
+        setBrightness(b => {
+            const n = Number(b);
+            const x = Number.isFinite(n) ? n : 100;
+            return Math.min(brightnessMax, Math.max(BRIGHTNESS_SLIDER_MIN, x));
+        });
+    }, [brightnessMax]);
     const [contrast, setContrast] = useState(100);     // B7: 对比度
     const [saturation, setSaturation] = useState(100); // B7: 饱和度
     const [annFill, setAnnFill] = useState(false);     // B3: 半透明填充（默认关）
@@ -7015,18 +7934,23 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         if (raw[pKey] != null && String(raw[pKey]).trim() !== '') rows.push({ label: '位置', value: formatMetaVal(raw[pKey]) });
         const snKey = metaFieldMap.product_id;
         if (raw[snKey] != null && String(raw[snKey]).trim() !== '') rows.push({ label: 'SN / 产品号', value: formatMetaVal(raw[snKey]) });
+        normalizeMetaFilterExtraFields(viewer).forEach((ex) => {
+            const v = raw[ex.column];
+            if (v != null && String(v).trim() !== '') rows.push({ label: ex.label || ex.column, value: formatMetaVal(v) });
+        });
         const nv = (noteInput || '').trim();
         if (nv) rows.push({ label: '备注', value: nv });
         return rows;
-    }, [currentImage, metaFieldMap, noteInput]);
+    }, [currentImage, metaFieldMap, noteInput, viewer]);
     const propertyRowsExtra = React.useMemo(() => {
         const raw = (currentImage && currentImage.image_meta && typeof currentImage.image_meta === 'object') ? currentImage.image_meta : {};
         const used = new Set(['id', 'file_name', 'width', 'height', 'source_path', 'note', 'image_category', 'image_categories', metaFieldMap.c_time, metaFieldMap.position, metaFieldMap.product_id]);
+        normalizeMetaFilterExtraFields(viewer).forEach((ex) => used.add(ex.column));
         return Object.entries(raw)
             .filter(([k]) => !used.has(k) && raw[k] != null && String(raw[k]).trim() !== '')
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([k, v]) => ({ label: k, value: formatMetaVal(v) }));
-    }, [currentImage, metaFieldMap]);
+    }, [currentImage, metaFieldMap, viewer]);
     const linkedPredIdxSet = React.useMemo(() => {
         if (hoveredAnnIdx == null) return new Set();
         const gtAnn = currentImage.annotations?.[hoveredAnnIdx];
@@ -8659,8 +9583,8 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                 <div style={{ display:'flex', alignItems:'center', gap:'6px', padding:'6px 12px', background:'var(--bg-soft)', borderBottom:'1px solid var(--border)', fontSize:'12px', color:'var(--text-muted)', flexWrap:'wrap' }}>
                     <span style={{ color:'var(--text-secondary)', fontWeight:600, marginRight:'2px' }}>图像</span>
                     <span style={{ color:'var(--text-muted)', fontSize:'11px' }}>亮度</span>
-                    <input type="range" min="30" max="200" value={brightness} onChange={e => setBrightness(Number(e.target.value))}
-                        style={{ width:'72px', accentColor:'#ffaa00' }} title={`亮度 ${brightness}%`} />
+                    <input type="range" min={BRIGHTNESS_SLIDER_MIN} max={brightnessMax} value={brightness} onChange={e => setBrightness(Math.min(brightnessMax, Math.max(BRIGHTNESS_SLIDER_MIN, Number(e.target.value))))}
+                        style={{ width:'72px', accentColor:'#ffaa00' }} title={`亮度 ${brightness}%（${BRIGHTNESS_SLIDER_MIN}–${brightnessMax}%）`} />
                     <span style={{ color: brightness !== 100 ? '#ffaa00' : 'var(--text-muted)', fontSize:'10px', minWidth:'32px' }}>{brightness}%</span>
                     <span style={{ color:'var(--text-muted)', fontSize:'11px' }}>对比度</span>
                     <input type="range" min="30" max="300" value={contrast} onChange={e => setContrast(Number(e.target.value))}
@@ -8686,8 +9610,8 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
                     <button type="button" className="viewer-nav-btn" style={{padding:'2px 8px',fontSize:'13px'}} onClick={() => { setZoom(fitZoom()); setPanX(0); setPanY(0); }}>适应</button>
                     <span style={{width:'1px', height:'14px', background:'var(--border)', margin:'0 8px'}}></span>
                     <span style={{color:'var(--text-muted)', fontSize:'11px'}}>亮度</span>
-                    <input type="range" min="30" max="200" value={brightness} onChange={e=>setBrightness(Number(e.target.value))}
-                        style={{width:'70px', accentColor:'#ffaa00'}} title={`亮度 ${brightness}%`} />
+                    <input type="range" min={BRIGHTNESS_SLIDER_MIN} max={brightnessMax} value={brightness} onChange={e=>setBrightness(Math.min(brightnessMax, Math.max(BRIGHTNESS_SLIDER_MIN, Number(e.target.value))))}
+                        style={{width:'70px', accentColor:'#ffaa00'}} title={`亮度 ${brightness}%（${BRIGHTNESS_SLIDER_MIN}–${brightnessMax}%）`} />
                     <span style={{color: brightness!==100?'#ffaa00':'var(--text-muted)', fontSize:'10px', minWidth:'30px'}}>{brightness}%</span>
                     <span style={{color:'var(--text-muted)', fontSize:'11px'}}>对比度</span>
                     <input type="range" min="30" max="300" value={contrast} onChange={e=>setContrast(Number(e.target.value))}

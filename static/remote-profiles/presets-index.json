@@ -1,0 +1,11 @@
+{
+  "presets": [
+    {
+      "id": "builtin-basic",
+      "name": "基础默认",
+      "author": "https://github.com/algo-boost/COCOVisualizer",
+      "description": "浅色主题、默认图片分类与图库选项；与仓库 static/config.json 对齐并补齐元数据筛选等内置项。仓库：https://github.com/algo-boost/COCOVisualizer 。推送后由 raw 加载本索引，path 相对本文件 URL 自动解析 default-profile.json。",
+      "path": "default-profile.json"
+    }
+  ]
+}

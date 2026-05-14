@@ -2024,7 +2024,7 @@ html, body, #root {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.62);
+    background: rgba(0, 0, 0, 0.78);
     z-index: 2000;
     display: flex;
     align-items: center;
@@ -2033,7 +2033,8 @@ html, body, #root {
     isolation: isolate;
 }
 
-.modal-content {
+.modal-content,
+.modal-dialog {
     background: var(--bg-surface);
     border-radius: var(--radius-lg);
     box-shadow: var(--elev-modal);
@@ -2053,7 +2054,8 @@ html, body, #root {
     border-bottom: 1px solid var(--border);
 }
 
-.modal-header h3 {
+.modal-header h3,
+.modal-title {
     font-size: var(--font-xl);
     font-weight: 650;
     letter-spacing: 0.02em;
@@ -3042,6 +3044,106 @@ html, body, #root {
     border-bottom: 1px solid var(--border);
     font-size: var(--font-md);
     flex-shrink: 0;
+}
+
+.meta-filter-bar--chips {
+    align-items: flex-start;
+    gap: 12px 14px;
+}
+
+.meta-filter-bar__title {
+    font-weight: 600;
+    color: var(--text-secondary);
+    font-size: var(--font-sm);
+    letter-spacing: 0.02em;
+    flex-shrink: 0;
+    padding-top: 6px;
+    white-space: nowrap;
+}
+
+.meta-filter-bar__chips {
+    display: flex;
+    flex-wrap: wrap;
+    flex: 1;
+    gap: 10px 12px;
+    align-items: flex-start;
+    min-width: 0;
+}
+
+.meta-filter-bar__apply {
+    flex-shrink: 0;
+    align-self: center;
+}
+
+.meta-filter-chip {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    max-width: 100%;
+    padding: 8px 10px;
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+
+.meta-filter-chip--wide {
+    min-width: min(100%, 360px);
+}
+
+.meta-filter-chip__label {
+    font-size: var(--font-sm);
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.meta-filter-chip__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+}
+
+.meta-filter-chip__or {
+    font-size: var(--font-sm);
+    color: var(--text-muted);
+    user-select: none;
+}
+
+.meta-filter-chip__input {
+    flex: 1 1 120px;
+    min-width: 100px;
+    max-width: 220px;
+    padding: 4px 8px;
+    font-size: var(--font-md);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-raised);
+    color: var(--text-primary);
+}
+
+.meta-filter-chip__input:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+.meta-filter-chip__select {
+    flex: 1 1 110px;
+    min-width: 100px;
+    max-width: 240px;
+    padding: 4px 8px;
+    font-size: var(--font-md);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-raised);
+    color: var(--text-primary);
+}
+
+.meta-filter-chip__select:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
 }
 
 /* 对比模式面板标题 */

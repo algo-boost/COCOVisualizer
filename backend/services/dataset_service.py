@@ -188,10 +188,20 @@ def _normalize_meta_filter_mapping(mapping: Any) -> dict:
         v = str(v).strip() if v is not None else ''
         return v or default
 
+    string_filter_columns: dict[str, str] = {}
+    sfc = m.get('string_filter_columns')
+    if isinstance(sfc, dict):
+        for k, v in sfc.items():
+            kid = str(k).strip()
+            col = str(v).strip() if v is not None else ''
+            if kid and col:
+                string_filter_columns[kid] = col
+
     return {
         'c_time': _pick('c_time', 'c_time'),
         'product_id': _pick('product_id', 'product_id'),
         'position': _pick('position', 'position'),
+        'string_filter_columns': string_filter_columns,
     }
 
 
@@ -202,6 +212,7 @@ def apply_image_meta_filters(
     c_time_end=None,
     product_id_query=None,
     position=None,
+    meta_string_queries=None,
     meta_filter_mapping=None,
 ) -> set[int]:
     if images_df.empty or 'id' not in images_df.columns:
@@ -243,16 +254,38 @@ def apply_image_meta_filters(
         allowed &= set(images_df.loc[mask, 'id'].astype(int).tolist())
 
     if position and str(position).strip() and fm['position'] in images_df.columns:
-        pos_val = str(position).strip()
+        q = str(position).strip().lower()
         col = fm['position']
 
         def match(row):
             p = row.get(col)
             if p is None or (isinstance(p, float) and math.isnan(p)):
                 return False
-            return str(p).strip() == pos_val
+            return q in str(p).lower()
 
         mask = images_df.apply(match, axis=1)
+        allowed &= set(images_df.loc[mask, 'id'].astype(int).tolist())
+
+    sfc = fm.get('string_filter_columns') or {}
+    mq = meta_string_queries if isinstance(meta_string_queries, dict) else {}
+    for lid, qraw in mq.items():
+        lid = str(lid).strip()
+        if not lid:
+            continue
+        col = sfc.get(lid)
+        if not col or col not in images_df.columns:
+            continue
+        q = str(qraw).strip().lower()
+        if not q:
+            continue
+
+        def match_extra(row):
+            val = row.get(col)
+            if val is None or (isinstance(val, float) and math.isnan(val)):
+                return False
+            return q in str(val).lower()
+
+        mask = images_df.apply(match_extra, axis=1)
         allowed &= set(images_df.loc[mask, 'id'].astype(int).tolist())
 
     return allowed
@@ -274,12 +307,13 @@ def build_meta_filter_options(images_df: pd.DataFrame, meta_filter_mapping=None)
         'product_ids': [],
         'c_time_min': None,
         'c_time_max': None,
+        'extra_string_filters': {},
     }
     if images_df.empty:
         return opts
     if opts['has_position']:
         positions = images_df[fm['position']].dropna().astype(str).str.strip()
-        opts['positions'] = sorted(positions.unique().tolist())
+        opts['positions'] = sorted(positions.unique().tolist())[: config.META_FILTER_PRODUCT_IDS_LIMIT]
     if opts['has_product_id']:
         pids = images_df[fm['product_id']].dropna().astype(str).str.strip()
         pids = pids[pids.str.len() > 0].unique().tolist()
@@ -293,6 +327,22 @@ def build_meta_filter_options(images_df: pd.DataFrame, meta_filter_mapping=None)
         if times:
             opts['c_time_min'] = min(times).strftime('%Y-%m-%dT%H:%M:%S')
             opts['c_time_max'] = max(times).strftime('%Y-%m-%dT%H:%M:%S')
+
+    sfc = fm.get('string_filter_columns') or {}
+    extra_out: dict[str, dict] = {}
+    for lid, col in sfc.items():
+        lid = str(lid).strip()
+        col = str(col).strip()
+        if not lid or not col:
+            continue
+        entry: dict = {'has_field': col in images_df.columns, 'column': col, 'values': []}
+        if entry['has_field'] and not images_df.empty:
+            vals = images_df[col].dropna().astype(str).str.strip()
+            vals = vals[vals.str.len() > 0].unique().tolist()
+            entry['values'] = sorted(vals)[: config.META_FILTER_PRODUCT_IDS_LIMIT]
+        extra_out[lid] = entry
+    opts['extra_string_filters'] = extra_out
+
     return opts
 
 

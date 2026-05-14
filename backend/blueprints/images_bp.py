@@ -131,6 +131,9 @@ def get_images_by_category():
     c_time_end = data.get('c_time_end')
     product_id_query = data.get('product_id_query')
     position = data.get('position')
+    meta_string_queries = data.get('meta_string_queries')
+    if not isinstance(meta_string_queries, dict):
+        meta_string_queries = None
     meta_filter_mapping = data.get('meta_filter_mapping') if isinstance(data.get('meta_filter_mapping'), dict) else None
 
     eda = dataset_service.ensure_loaded(dataset_id)
@@ -159,6 +162,7 @@ def get_images_by_category():
         c_time_end=c_time_end or None,
         product_id_query=product_id_query or None,
         position=position or None,
+        meta_string_queries=meta_string_queries,
         meta_filter_mapping=meta_filter_mapping,
     )
     if meta_allowed is not None and len(meta_allowed) > 0:

@@ -6,7 +6,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.62);
+    background: rgba(0, 0, 0, 0.78);
     z-index: 2000;
     display: flex;
     align-items: center;
@@ -15,7 +15,8 @@
     isolation: isolate;
 }
 
-.modal-content {
+.modal-content,
+.modal-dialog {
     background: var(--bg-surface);
     border-radius: var(--radius-lg);
     box-shadow: var(--elev-modal);
@@ -35,7 +36,8 @@
     border-bottom: 1px solid var(--border);
 }
 
-.modal-header h3 {
+.modal-header h3,
+.modal-title {
     font-size: var(--font-xl);
     font-weight: 650;
     letter-spacing: 0.02em;

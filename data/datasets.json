@@ -5,19 +5,19 @@
     "image_dir": "/Users/rookie/Desktop/yfmb-0420/raw_snapshots/皮带背景抑制打标_V28"
   },
   "dataset_0": {
-    "coco_json_path": "/Users/rookie/Desktop/coco_export_08edcfde-9671-423b-83a4-59cb0619b1a5/merged_dataset_4b85a96566529ed2.json",
+    "coco_json_path": "/Users/rookie/Desktop/漏检分析/延锋门板4月至今漏检样本汇总分析/merged_dataset_835ab3d60397343a.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Desktop/coco_export_08edcfde-9671-423b-83a4-59cb0619b1a5"
+    "image_dir": "/Users/rookie/Desktop/漏检分析/延锋门板4月至今漏检样本汇总分析/yfmb-miss-F2A/4.12"
   },
   "dataset_1": {
-    "coco_json_path": "/Users/rookie/Desktop/coco_export_08edcfde-9671-423b-83a4-59cb0619b1a5/merged_dataset_4b85a96566529ed2.json",
+    "coco_json_path": "/Users/rookie/Desktop/5.7误检/merged_dataset_e3b1b475d18137e2.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Desktop/coco_export_08edcfde-9671-423b-83a4-59cb0619b1a5"
+    "image_dir": "/Users/rookie/Desktop/5.7误检/类别误检"
   },
   "dataset_2": {
-    "coco_json_path": "/Users/rookie/Desktop/yfmb-0420/yfmb-0420/merged_dataset_d44da1d8a6bca3be.json",
+    "coco_json_path": "/Users/rookie/Desktop/5.7误检/merged_dataset_e3b1b475d18137e2.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Desktop/yfmb-0420/yfmb-0420/train"
+    "image_dir": "/Users/rookie/Desktop/5.7误检/类别误检"
   },
   "dataset_4": {
     "coco_json_path": "/Users/rookie/Desktop/随机采样100张漏打标/merged_dataset_e0ba8a7b0384d21e.json",

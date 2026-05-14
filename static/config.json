@@ -48,7 +48,8 @@
     "backgroundStyle": "checkerboard",
     "backgroundColor": "#1a1a2e",
     "checkerboardColor1": "#2d2d44",
-    "checkerboardColor2": "#252548"
+    "checkerboardColor2": "#252548",
+    "brightnessSliderMax": 350
   },
   "settings": {
     "modalTitle": "设置",
@@ -116,6 +117,8 @@
     "chartLongShortRatio": "长短边比分布 (长边/短边)",
     "chartCenter": "中心点分布",
     "chartBbox": "BBox分布（宽×高）",
-    "chartDensity": "密度分布"
-  }
+    "chartDensity": "密度分布",
+    "chartScore": "置信度分布（按类别）"
+  },
+  "profilePresetIndexUrl": "https://raw.githubusercontent.com/algo-boost/COCOVisualizer/main/static/remote-profiles/presets-index.json"
 }

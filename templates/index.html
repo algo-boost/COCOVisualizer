@@ -49,7 +49,7 @@
         <script type="text/babel" src="/static/react-app.jsx"></script>
     {% endif %}
 
-    <!-- 应用内更新提示（自包含，独立于 React 主应用） -->
+    <!-- 应用内更新提示（自包含，独立于 React）：页面 load 后自动请求 /api/app/check_update；有新版时右上角横幅。手动检查：⚙️ 设置 → 「关于」→ 检查更新。 -->
     <style>
       #app-update-banner {
         position: fixed; top: 16px; right: 16px; z-index: 99999;
