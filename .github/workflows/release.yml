@@ -1,8 +1,12 @@
-# COCO Visualizer - 安装包构建与发布
-# 触发方式：
-#   1. 推送版本标签（如 v1.0.0）: git tag v1.0.0 && git push origin v1.0.0
-#   2. 手动运行：Actions -> Release -> Run workflow
-
+# COCO Visualizer - 安装包构建与发布（正式发布）
+#
+# 触发方式（二选一）：
+#   1) 打版本标签并推送：git tag v1.7.2 && git push origin v1.7.2
+#      → 自动构建 Windows + macOS，并创建 GitHub Release，上传 .exe / .zip / .dmg
+#   2) 手动：Actions → Release → Run workflow（可填版本号，生成预发布/手动构建）
+#
+# 说明：仅把提交 push 到 main 不会触发本工作流。若希望每次 push 都生成安装包（不上传 Release），
+#       使用工作流「Push build (artifacts)」（.github/workflows/push-build-artifacts.yml）。
 name: Release
 
 on:

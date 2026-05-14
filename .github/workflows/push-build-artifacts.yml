@@ -1,0 +1,75 @@
+# 每次推送到默认分支时自动构建安装包产物，上传到 Actions「Artifacts」
+# （不创建 GitHub Release；正式发布仍请用 release.yml：打 v1.x.x 标签或手动 Release）
+#
+# 下载：仓库 → Actions → 选中本次运行 → Artifacts
+
+name: Push build (artifacts)
+
+on:
+  push:
+    branches: [main, master]
+
+concurrency:
+  group: push-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装构建依赖
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-build.txt
+          pip install pyinstaller
+
+      - name: 安装 Inno Setup
+        run: choco install innosetup -y
+
+      - name: 构建 Windows ZIP + EXE
+        run: .\packaging\build.ps1 -CreateInstaller
+
+      - name: 上传 Windows 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ github.run_id }}
+          path: |
+            dist/COCO-Visualizer-Windows-x64-*.zip
+            dist/*.exe
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 构建 .app 与 DMG
+        run: |
+          chmod +x scripts/build_mac_app.sh scripts/create_mac_dmg.sh
+          ./scripts/build_mac_app.sh
+          ./scripts/create_mac_dmg.sh
+
+      - name: 读取版本号
+        id: version
+        run: |
+          VER=$(sed -n '1p' version.txt | tr -d '\r\t ')
+          echo "VERSION=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: 上传 macOS DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ steps.version.outputs.VERSION }}-${{ github.run_id }}
+          path: dist/COCO-Visualizer-mac-${{ steps.version.outputs.VERSION }}.dmg
+          if-no-files-found: error
