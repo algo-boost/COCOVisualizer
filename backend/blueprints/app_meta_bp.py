@@ -2,6 +2,7 @@
 
 - /api/app/version       返回 version.txt 中的版本号
 - /api/app/check_update  调用 GitHub Releases API，比较版本并附带国内镜像直链
+- /api/app/user_manual_sections  读取 ``docs/用户手册.md``，拆主章节并渲染为 HTML（打包版与源码一致）
 
 设计要点：
 - 网络调用包在 try/except 里，失败静默返回 has_update=false，不影响主流程
@@ -20,6 +21,7 @@ import urllib.request
 from flask import Blueprint, jsonify, request
 
 from .. import config
+from ..user_manual import render_user_manual_sections
 
 bp = Blueprint('app_meta', __name__)
 
@@ -97,6 +99,23 @@ def _build_mirrors(url: str) -> list[dict]:
         else:
             out.append({'name': m['name'], 'url': m['prefix'].rstrip('/') + '/' + url})
     return out
+
+
+@bp.route('/api/app/user_manual_sections', methods=['GET'])
+def user_manual_sections():
+    """应用内「使用手册」：与仓库 ``docs/用户手册.md`` 同源，打包时一并打入。"""
+    path = config.USER_MANUAL_PATH
+    if not path.is_file():
+        return jsonify({'success': False, 'error': 'not_found', 'path': str(path)}), 404
+    try:
+        sections = render_user_manual_sections(path)
+    except RuntimeError as exc:
+        return jsonify({'success': False, 'error': 'markdown_missing', 'message': str(exc)}), 500
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({'success': False, 'error': 'render_failed', 'message': str(exc)}), 500
+    if not sections:
+        return jsonify({'success': False, 'error': 'empty'}), 500
+    return jsonify({'success': True, 'sections': sections})
 
 
 @bp.route('/api/app/version', methods=['GET'])

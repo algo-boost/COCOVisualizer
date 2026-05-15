@@ -1273,164 +1273,122 @@ function SidebarNav({ page, setPage, datasetLoaded, onOpenSettings, onOpenHelp }
     );
 }
 
-// ==================== 完整使用文档 (User Guide) ====================
+// ==================== 使用手册（docs/用户手册.md，经 /api/app/user_manual_sections） ====================
 function HelpModal({ onClose }) {
-    const [activeTab, setActiveTab] = useState('overview');
+    const [loading, setLoading] = useState(true);
+    const [loadErr, setLoadErr] = useState(null);
+    const [sections, setSections] = useState([]);
+    const [active, setActive] = useState('');
+
+    useEffect(() => {
+        let cancelled = false;
+        fetch('/api/app/user_manual_sections')
+            .then(async (r) => {
+                let j = {};
+                try {
+                    j = await r.json();
+                } catch {
+                    j = {};
+                }
+                if (!r.ok || !j.success) {
+                    throw new Error(j.error || 'bad');
+                }
+                return j;
+            })
+            .then((j) => {
+                if (cancelled) return;
+                const list = j.sections || [];
+                if (!list.length) {
+                    setLoadErr('empty');
+                    setLoading(false);
+                    return;
+                }
+                setSections(list);
+                setActive(String(list[0].id));
+                setLoading(false);
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setLoadErr('network');
+                    setLoading(false);
+                }
+            });
+        return () => { cancelled = true; };
+    }, []);
+
+    const activeHtml = (sections.find((s) => String(s.id) === String(active)) || {}).html || '';
 
     return (
         <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-content help-modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', width: '90vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
-                <div className="modal-header">
-                    <h3>📖 COCOVisualizer 完整使用文档</h3>
-                    <button className="modal-close" onClick={onClose}>✕</button>
+            <div
+                className="modal-content"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                    maxWidth: '920px', width: '92vw', maxHeight: '88vh',
+                    display: 'flex', flexDirection: 'column', borderRadius: '12px', overflow: 'hidden',
+                }}
+            >
+                <div className="modal-header" style={{ flexShrink: 0, padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 600 }}>📖 使用手册</h3>
+                    <button type="button" className="modal-close" onClick={onClose}>✕</button>
                 </div>
-                <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--bg-raised)' }}>
-                    {[
-                        { id: 'overview', label: '功能总览' },
-                        { id: 'load', label: '加载与COCO模板' },
-                        { id: 'gallery', label: '图库与筛选' },
-                        { id: 'viewer', label: '看图与对比' },
-                        { id: 'annotate', label: '画框与打标' },
-                        { id: 'agent', label: 'Agent 使用' },
-                        { id: 'shortcuts', label: '快捷键' }
-                    ].map(tab => (
-                        <button
-                            key={tab.id}
-                            style={{
-                                flex: 1, padding: '12px 0', border: 'none', background: activeTab === tab.id ? 'var(--bg-surface)' : 'transparent',
-                                color: activeTab === tab.id ? 'var(--accent)' : 'var(--text-secondary)',
-                                borderBottom: activeTab === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
-                                cursor: 'pointer', fontWeight: activeTab === tab.id ? 'bold' : 'normal', fontSize: '14px'
-                            }}
-                            onClick={() => setActiveTab(tab.id)}
-                        >{tab.label}</button>
-                    ))}
+                <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+                    <nav style={{
+                        width: '168px', flexShrink: 0, overflowY: 'auto',
+                        borderRight: '1px solid var(--border)', background: 'var(--bg-raised)',
+                        padding: '8px 0',
+                    }}>
+                        {loading && (
+                            <div style={{ padding: '10px 14px', fontSize: '12px', color: 'var(--text-muted)' }}>加载中…</div>
+                        )}
+                        {!loading && sections.map((s) => (
+                            <button
+                                key={s.id}
+                                type="button"
+                                onClick={() => setActive(String(s.id))}
+                                style={{
+                                    display: 'block', width: '100%', textAlign: 'left',
+                                    padding: '8px 14px', border: 'none', cursor: 'pointer',
+                                    fontSize: '13px', lineHeight: 1.3,
+                                    background: String(s.id) === String(active) ? 'var(--accent-dim)' : 'transparent',
+                                    color: String(s.id) === String(active) ? 'var(--accent)' : 'var(--text-secondary)',
+                                    fontWeight: String(s.id) === String(active) ? 600 : 400,
+                                    borderLeft: String(s.id) === String(active) ? '2px solid var(--accent)' : '2px solid transparent',
+                                    transition: 'background 0.12s, color 0.12s',
+                                }}
+                            >{s.label}</button>
+                        ))}
+                    </nav>
+                    <div style={{
+                        flex: 1, overflowY: 'auto', padding: '20px 26px',
+                        fontSize: '13px', lineHeight: '1.65', color: 'var(--text-primary)',
+                        background: 'var(--bg-surface)',
+                    }}>
+                        {loading && <p style={{ margin: 0, color: 'var(--text-muted)' }}>正在加载手册…</p>}
+                        {!loading && loadErr && (
+                            <p style={{ margin: 0, color: 'var(--text-muted)' }}>
+                                无法加载使用手册（{loadErr === 'network' ? '网络或接口错误' : '内容为空'}）。请确认已安装依赖
+                                <code style={{ margin: '0 4px' }}>markdown</code>
+                                且仓库内存在
+                                <code style={{ margin: '0 4px' }}>docs/用户手册.md</code>
+                                ；打包版需使用包含该文件的发行构建。
+                            </p>
+                        )}
+                        {!loading && !loadErr && (
+                            <div
+                                className="help-modal-body user-manual-prose"
+                                dangerouslySetInnerHTML={{ __html: activeHtml }}
+                            />
+                        )}
+                    </div>
                 </div>
-                <div className="modal-body help-modal-body" style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', lineHeight: '1.6', fontSize: '14px', color: 'var(--text-primary)' }}>
-                    {activeTab === 'overview' && (
-                        <div>
-                            <h4>🚀 功能总览</h4>
-                            <p>COCOVisualizer 是一个面向目标检测项目的 <b>数据浏览、对比评估、标注修正、智能分析</b> 一体化工具。</p>
-                            <ol style={{ paddingLeft: '20px', marginTop: '10px' }}>
-                                <li><b>加载数据：</b>导入 COCO JSON + 图片目录，快速启动可视化。</li>
-                                <li><b>图库筛选：</b>按类别、目录、置信度、Python 代码等条件定位目标图片。</li>
-                                <li><b>看图对比：</b>同屏查看 GT 与预测，支持独立阈值和联动高亮。</li>
-                                <li><b>标注修正：</b>进入编辑模式增删改框，并可接受预测框为 GT。</li>
-                                <li><b>智能分析：</b>在 Agent 中用自然语言完成筛图、统计、导出。</li>
-                                <li><b>保存回滚：</b>版本化保存，可追溯可回滚。</li>
-                            </ol>
-                        </div>
-                    )}
-                    {activeTab === 'load' && (
-                        <div>
-                            <h4>📂 加载数据与 COCO JSON 模板（重点）</h4>
-                            <p>建议优先保证 COCO 结构规范，再加载到系统。最小可用模板如下：</p>
-                            <pre style={{ background: 'var(--bg-soft)', border: '1px solid var(--border)', padding: '10px', borderRadius: '8px', overflowX: 'auto', fontSize: '12px' }}>
-{`{
-  "images": [{"id": 1, "file_name": "images/0001.jpg", "width": 1920, "height": 1080}],
-  "annotations": [{"id": 1, "image_id": 1, "category_id": 1, "bbox": [100, 200, 300, 150], "area": 45000, "iscrowd": 0}],
-  "categories": [{"id": 1, "name": "defect"}]
-}`}
-                            </pre>
-                            <ul style={{ paddingLeft: '20px' }}>
-                                <li><b>必填关系：</b><code>annotations.image_id</code> 必须能关联到 <code>images.id</code>；<code>category_id</code> 必须存在于 <code>categories.id</code>。</li>
-                                <li><b>bbox 格式：</b><code>[x, y, w, h]</code>，宽高必须大于 0。</li>
-                                <li><b>路径规范：</b>若 <code>file_name</code> 是相对路径，请在加载页填写图片目录。</li>
-                                <li><b>宽高建议：</b>建议在 <code>images</code> 中写入 <code>width/height</code>，可提高显示与缩放稳定性。</li>
-                            </ul>
-                            <p><b>加载步骤：</b>选择 COCO → 选择图片目录（可选）→ 填写数据集名 → 点击加载。</p>
-                        </div>
-                    )}
-                    {activeTab === 'gallery' && (
-                        <div>
-                            <h4>🖼 图库与代码筛选</h4>
-                            <ul style={{ paddingLeft: '20px' }}>
-                                <li><b>快速筛选：</b>按 GT 类别、图片级分类、目录、关键词快速过滤；图库标题旁「GT 全部 / 有GT / 无GT」可只看待标图或完全无 GT 框的图（与图片级「未分类」无关）。</li>
-                                <li><b>代码筛选：</b>点击工具栏「代码筛选」打开弹窗，编写 Python（与 Agent 消息里代码块相同执行环境）。最后一行表达式为 <code>image_id</code> 列表时应用为图库筛选；也可运行统计/导出类脚本在弹窗内查看报告。</li>
-                                <li><b>排序：</b>可按文件名、GT 框数、预测框数、文件大小、时间排序。</li>
-                                <li><b>批量操作：</b>支持批量打图片级分类、批量清理标注。</li>
-                                <li><b>实验导出：</b>「实验 train/valid」：默认同 basename 只保留最小 image_id，其余丢弃；可关闭为遇重名报错。ZIP 默认同数据集名。</li>
-                                <li><b>自动联动：</b>Agent 聊天中运行代码块筛选结果会跳转图库；图库内运行筛选与之一致。</li>
-                            </ul>
-                        </div>
-                    )}
-                    {activeTab === 'viewer' && (
-                        <div>
-                            <h4>🔍 看图与对比</h4>
-                            <ul style={{ paddingLeft: '20px' }}>
-                                <li><b>缩放平移：</b>滚轮缩放，拖拽平移，支持全屏与适应窗口。</li>
-                                <li><b>双侧栏：</b>左侧预测、右侧 GT/编辑；无预测时左栏自动隐藏。</li>
-                                <li><b>独立阈值：</b>GT 与预测可分开设置置信度阈值。</li>
-                                <li><b>联动高亮：</b>悬停一侧框项，另一侧 IoU 达阈值的框会联动高亮（阈值在设置中可调）。</li>
-                                <li><b>对比模式：</b>一键切换 GT vs 预测双栏同步对比。</li>
-                                <li><b>缩略图导航：</b>底部快速切图，连续审查更高效。</li>
-                            </ul>
-                        </div>
-                    )}
-                    {activeTab === 'annotate' && (
-                        <div>
-                            <h4>✏️ 画框与打标</h4>
-                            <p>在看图模式下：<b>双击空白处</b>进入画框模式；<b>双击已有 GT 框</b>进入选择模式并选中该框（可拖拽、改类别）。也可点击 <b>✏️ 标注</b>。</p>
-                            <ul style={{ paddingLeft: '20px' }}>
-                                <li><b>画框：</b>B 键切画框工具，拖拽即可新建框。</li>
-                                <li><b>选框：</b>V 键切选择工具，支持移动/缩放/多选；双击框可快速进入。</li>
-                                <li><b>精修：</b>方向键微调，Shift+方向键快速移动，坐标面板可精确改数值。</li>
-                                <li><b>预测转 GT：</b>支持单条 <b>+GT</b> 和批量“全部接受”。</li>
-                                <li><b>撤销重做：</b><code>Ctrl+Z / Ctrl+Y</code> 全链路可回退。</li>
-                                <li><b>保存机制：</b>支持自动保存与手动保存，建议每轮修订及时保存。</li>
-                            </ul>
-                        </div>
-                    )}
-                    {activeTab === 'agent' && (
-                        <div>
-                            <h4>🤖 Agent 使用方法（重点）</h4>
-                            <p>Agent 支持用自然语言驱动筛图、统计、导出、页面联动与技能调用。建议按“目标 + 条件 + 输出”提问。</p>
-                            <ul style={{ paddingLeft: '20px' }}>
-                                <li><b>高效提问模板：</b>“请筛出【条件】的图片，并【输出动作】”。</li>
-                                <li><b>结果类型：</b>可返回筛选列表、统计表格、图表、导出文件。</li>
-                                <li><b>技能调用：</b>在技能面板启用/固定后，可直接让 Agent “使用某技能完成任务”。</li>
-                                <li><b>推荐流程：</b>先筛图 → 再解释原因 → 最后导出复核材料。</li>
-                            </ul>
-                            <p style={{ marginTop: '8px' }}><b>示例指令：</b></p>
-                            <ul style={{ paddingLeft: '20px' }}>
-                                <li>“筛出预测框数量&gt;10 且包含漏检的图片，并在图库里只显示这些图。”</li>
-                                <li>“统计各类别误检数量，生成表格并导出 CSV。”</li>
-                                <li>“使用已启用的验证技能，对当前数据批次生成评估报告。”</li>
-                            </ul>
-                        </div>
-                    )}
-                    {activeTab === 'shortcuts' && (
-                        <div>
-                            <h4>⌨ 快捷键清单</h4>
-                            <table className="help-shortcut-table" style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px' }}>
-                        <tbody>
-                                    <tr style={{borderBottom:'1px solid var(--border)'}}><td style={{padding:'8px', fontWeight:'bold'}}>通用 & 导航</td><td></td></tr>
-                                    <tr><td className="help-key">← / A 或 → / D</td><td>上一张 / 下一张图片（自带预加载，零延迟秒切）</td></tr>
-                                    <tr><td className="help-key">Tab / Shift+Tab</td><td>在当前图的不同标注框之间循环切换并居中高亮</td></tr>
-                                    <tr><td className="help-key">N</td><td>快速聚焦到备注输入框</td></tr>
-                                    <tr><td className="help-key">0</td><td>图片缩放比例复位（适应窗口大小）</td></tr>
-                                    <tr><td className="help-key">F</td><td>全屏 / 退出全屏模式</td></tr>
-                                    
-                                    <tr style={{borderBottom:'1px solid var(--border)'}}><td style={{padding:'8px', fontWeight:'bold', paddingTop:'16px'}}>标注模式专属</td><td></td></tr>
-                                    <tr><td className="help-key">B / V</td><td>切换 画框工具(B) / 选中工具(V)</td></tr>
-                                    <tr><td className="help-key">Del / Backspace</td><td>删除选中的标注框</td></tr>
-                                    <tr><td className="help-key">Ctrl+C / Ctrl+V</td><td>复制 / 粘贴选中的标注框（支持跨图片粘贴）</td></tr>
-                                    <tr><td className="help-key">Ctrl+Z / Ctrl+Y</td><td>撤销 (Undo) / 重做 (Redo)</td></tr>
-                                    <tr><td className="help-key">方向键</td><td>微调选中框位置（加按 Shift 每次移动 10px）</td></tr>
-                                    <tr><td className="help-key">Space + 拖拽</td><td>画框模式下临时切换为手形工具平移画布</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-                    )}
-                </div>
-                <div className="modal-footer" style={{ borderTop: '1px solid var(--border)' }}>
-                    <button type="button" className="btn btn-primary" onClick={onClose}>了解，关闭</button>
+                <div className="modal-footer" style={{ flexShrink: 0, borderTop: '1px solid var(--border)', padding: '10px 20px', display: 'flex', justifyContent: 'flex-end' }}>
+                    <button type="button" className="btn btn-primary" onClick={onClose}>关闭</button>
                 </div>
             </div>
         </div>
     );
 }
-
 // ==================== 路径选择弹窗（浏览服务器目录） ====================
 function PathPickerModal({ initialPath, onSelect, onClose }) {
     const defaultRoot = (typeof navigator !== 'undefined' && navigator.platform && navigator.platform.toLowerCase().includes('win')) ? 'C:\\' : '/';

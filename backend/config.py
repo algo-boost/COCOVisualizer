@@ -28,6 +28,13 @@ def _resolve_dirs() -> tuple[Path, Path, Path, Path, Path]:
 
 APP_DIR, TEMPLATE_FOLDER, STATIC_FOLDER, UPLOAD_FOLDER, DATA_DIR = _resolve_dirs()
 
+# 用户手册 Markdown（PyInstaller 时打入 _MEIPASS/docs/）
+if getattr(sys, 'frozen', False):
+    DOCS_DIR = Path(getattr(sys, '_MEIPASS', APP_DIR)) / 'docs'
+else:
+    DOCS_DIR = APP_DIR / 'docs'
+USER_MANUAL_PATH = DOCS_DIR / '用户手册.md'
+
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 

@@ -44,6 +44,7 @@ def _bundle_icon_arg():
 datas = [
     (str(project_dir / "templates"), "templates"),
     (str(project_dir / "static"), "static"),
+    (str(project_dir / "docs"), "docs"),
     # 把 version.txt 放进 _MEIPASS 根，供 backend.config 读取应用版本
     (str(project_dir / "version.txt"), "."),
 ]
@@ -72,6 +73,9 @@ hiddenimports = [
     "backend.blueprints.agent_modules_bp",
     "backend.blueprints.chat_bp",
     "backend.blueprints.app_meta_bp",
+    "backend.user_manual",
+    "markdown",
+    "markdown.extensions",
     "backend.repositories",
     "backend.repositories.datasets_repo",
     "backend.repositories.versions_repo",
