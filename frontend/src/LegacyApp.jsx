@@ -124,7 +124,8 @@ const DEFAULT_CONFIG = {
         appCheckingUpdate: '正在连接 GitHub 检查…',
         appUpdateUpToDate: '已是最新版本。',
         appUpdateAvailableTitle: '发现新版本',
-        appUpdateCheckFailed: '检查失败（网络不可达或未配置更新仓库）。',
+        appUpdateCheckFailed: '无法连接 GitHub 获取版本（请检查网络，或见下方说明）。',
+        appUpdateOpenReleasesPage: '在浏览器中打开 Releases',
         appUpdateOpenRelease: 'Release 详情',
         appUpdateHintAutoBanner: '打开页面时也会在后台自动检查；若有新版本，右上角会出现下载提示横幅。',
         closeButtonText: '关闭',
@@ -6461,7 +6462,22 @@ function SettingsModal({ onClose, cocoImageCategoryDefsActive = false }) {
                                     {updateCheck && !updateCheck.loading && updateCheck.data && (
                                         <div style={{ marginTop: '12px', fontSize: 'var(--font-sm)', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
                                             {!updateCheck.data.success && (
-                                                <p style={{ margin: 0 }}>{st.appUpdateCheckFailed || '检查失败'}</p>
+                                                <div style={{ margin: 0 }}>
+                                                    <p style={{ margin: 0 }}>
+                                                        {updateCheck.data.hint || st.appUpdateCheckFailed || '检查失败'}
+                                                    </p>
+                                                    {updateCheck.data.release_url ? (
+                                                        <p style={{ margin: '10px 0 0' }}>
+                                                            <a
+                                                                href={updateCheck.data.release_url}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                            >
+                                                                {st.appUpdateOpenReleasesPage || '在浏览器中打开 Releases'}
+                                                            </a>
+                                                        </p>
+                                                    ) : null}
+                                                </div>
                                             )}
                                             {updateCheck.data.success && !updateCheck.data.has_update && (
                                                 <p style={{ margin: 0 }}>

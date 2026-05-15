@@ -7,6 +7,7 @@
 - 网络调用包在 try/except 里，失败静默返回 has_update=false，不影响主流程
 - 结果缓存 30 分钟，避免每次刷新页面都打 GitHub
 - 不依赖 requests，使用标准库 urllib
+- ``releases/latest`` 在「仅有 Pre-release」时会 404，自动回退到 ``/releases`` 列表
 """
 from __future__ import annotations
 
@@ -41,11 +42,8 @@ _CACHE_TTL = 30 * 60  # seconds
 _LOCK = threading.Lock()
 
 
-def _fetch_latest_release() -> dict | None:
-    repo = config.UPDATE_REPO
-    if not repo:
-        return None
-    url = f'https://api.github.com/repos/{repo}/releases/latest'
+def _github_api_json(url: str) -> dict | list | None:
+    """GET JSON；失败返回 None。"""
     req = urllib.request.Request(
         url,
         headers={
@@ -56,8 +54,37 @@ def _fetch_latest_release() -> dict | None:
     try:
         with urllib.request.urlopen(req, timeout=config.UPDATE_CHECK_TIMEOUT) as resp:
             return json.loads(resp.read().decode('utf-8'))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, ValueError):
         return None
+
+
+def _fetch_latest_release() -> dict | None:
+    """取「用于对比版本」的最新 Release。
+
+    优先 ``/releases/latest``（仅含正式版）。若仓库只有 Pre-release（例如 CI 自动发版），
+    GitHub 对该接口返回 404，此时回退到 ``/releases`` 列表的第一条非草稿记录。
+    """
+    repo = config.UPDATE_REPO
+    if not repo:
+        return None
+    base = config.GITHUB_API_BASE
+    latest_url = f'{base}/repos/{repo}/releases/latest'
+    data = _github_api_json(latest_url)
+    if isinstance(data, dict) and data.get('tag_name'):
+        return data
+
+    list_url = f'{base}/repos/{repo}/releases?per_page=40'
+    lst = _github_api_json(list_url)
+    if not isinstance(lst, list):
+        return None
+    for rel in lst:
+        if not isinstance(rel, dict):
+            continue
+        if rel.get('draft'):
+            continue
+        if rel.get('tag_name'):
+            return rel
+    return None
 
 
 def _build_mirrors(url: str) -> list[dict]:
@@ -94,12 +121,17 @@ def check_update():
     if not data:
         return jsonify({
             'success': False,
-            'reason': 'network',
+            'reason': 'network_or_empty' if config.UPDATE_REPO else 'no_repo',
             'current': current,
             'latest': None,
             'has_update': False,
             'repo': config.UPDATE_REPO,
-            'release_url': f'https://github.com/{config.UPDATE_REPO}/releases',
+            'release_url': f'https://github.com/{config.UPDATE_REPO}/releases' if config.UPDATE_REPO else '',
+            'hint': (
+                '无法访问 GitHub API。若在国内网络，可设置环境变量 '
+                'COCO_VIZ_GITHUB_API_BASE=https://mirror.ghproxy.com/https://api.github.com 后重启；'
+                '或点击下方链接在浏览器中查看 Releases。'
+            ),
         })
 
     latest_tag = (data.get('tag_name') or '').lstrip('vV')

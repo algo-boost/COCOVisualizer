@@ -44,7 +44,8 @@ GitHub 在国内访问可能较慢/不稳。直接把下载链接里的 `https:/
 - 有新版本时显示横幅，含 **macOS / Windows 直链**、**Release 详情**与**国内镜像**入口
 - 点击横幅右上 `×` 关闭，关闭后该版本不再提示，**直到下一次发布**
 - 可通过环境变量 `COCO_VIZ_UPDATE_REPO=owner/repo` 指向自托管仓库
-- 检查超时由 `COCO_VIZ_UPDATE_TIMEOUT`（秒）控制，网络异常静默忽略
+- 检查超时由 `COCO_VIZ_UPDATE_TIMEOUT`（秒）控制，默认 **12**；仅「正式 Latest」不存在时（例如仓库只有 CI Pre-release）会自动改用 **releases 列表** 比对版本
+- 国内若 **api.github.com** 不可达，可设 **`COCO_VIZ_GITHUB_API_BASE=https://mirror.ghproxy.com/https://api.github.com`**（或你信任的 API 反代根 URL，勿尾斜杠）后重启后端
 
 ---
 

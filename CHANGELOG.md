@@ -2,6 +2,12 @@
 
 发版时 GitHub Actions 会按 `version.txt` 截取本节中对应 `## [x.y.z]` 写入 Release 说明。
 
+## [Unreleased]
+
+### 修复
+
+- **检查更新**：`GET .../releases/latest` 在仓库仅有 **Pre-release**（如 CI 自动发版）时 GitHub 返回 404，导致「检查失败」；现失败时回退到 **`/releases` 列表**取最新非草稿版本。默认 API 超时改为 **12s**；支持环境变量 **`COCO_VIZ_GITHUB_API_BASE`**（国内可指向 ghproxy 等 API 反代）。失败时接口返回 **`hint`** 与 **Releases 页链接**，「关于」里可手动打开。
+
 ## [1.7.0] - 2026-05-11
 
 ### 新增

@@ -89,8 +89,10 @@ APP_VERSION = _read_app_version()
 
 # 检查更新使用的 GitHub 仓库（owner/repo），可通过环境变量覆盖
 UPDATE_REPO = os.environ.get('COCO_VIZ_UPDATE_REPO', 'algo-boost/COCOVisualizer')
+# GitHub REST API 根（国内可设镜像，例如 https://mirror.ghproxy.com/https://api.github.com）
+GITHUB_API_BASE = os.environ.get('COCO_VIZ_GITHUB_API_BASE', 'https://api.github.com').rstrip('/')
 # /api/app/check_update 调用 GitHub API 的超时时间（秒）
-UPDATE_CHECK_TIMEOUT = float(os.environ.get('COCO_VIZ_UPDATE_TIMEOUT', '4'))
+UPDATE_CHECK_TIMEOUT = float(os.environ.get('COCO_VIZ_UPDATE_TIMEOUT', '12'))
 # 国内常用的 GitHub 镜像前缀。第一个空前缀代表 GitHub 官方。
 UPDATE_MIRRORS = (
     {'name': 'GitHub 官方', 'prefix': ''},
