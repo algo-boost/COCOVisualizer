@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import os
 import sys
-import threading
-import webbrowser
 
 from backend import create_app, reload_agent_modules_at_startup
 
@@ -20,10 +18,30 @@ app = create_app()
 reload_agent_modules_at_startup()
 
 
-if __name__ == '__main__':
+def main(argv: list[str] | None = None) -> None:
+    """命令行入口：``coco-viz`` 与 ``python app.py`` 等价。"""
     import argparse
+    import threading
+    import webbrowser
+    from pathlib import Path
 
-    parser = argparse.ArgumentParser(add_help=True)
+    from backend import config as app_config
+
+    if not getattr(sys, 'frozen', False):
+        tpl = Path(app_config.TEMPLATE_FOLDER)
+        if not tpl.is_dir():
+            print(
+                '\n[错误] 找不到模板目录：',
+                tpl,
+                '\n本仓库需使用「可编辑安装」以保留项目根下的 templates/static，例如：',
+                '\n  pip install -e /path/to/COCOVisualizer',
+                '\n  pipx install -e /path/to/COCOVisualizer',
+                '\n勿使用不含 -e 的 pip install .（wheel 不含前端与模板）。\n',
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
+    parser = argparse.ArgumentParser(prog='coco-viz', add_help=True)
     parser.add_argument(
         '--port', type=int,
         default=int(os.environ.get('COCO_VIZ_PORT', '6010')),
@@ -33,7 +51,11 @@ if __name__ == '__main__':
         '--open-browser', action='store_true',
         help='启动后自动在本机打开浏览器（与打包版行为一致）',
     )
-    args, _unknown = parser.parse_known_args()
+    parser.add_argument(
+        '--no-browser', action='store_true',
+        help='不自动打开浏览器（覆盖 --open-browser；源码模式默认即不打开）',
+    )
+    args, _unknown = parser.parse_known_args(argv)
     port = args.port
     url = f'http://127.0.0.1:{port}'
 
@@ -42,7 +64,7 @@ if __name__ == '__main__':
     print('（本机其他设备可用局域网 IP，见下方 "Running on" 行）')
     print('')
 
-    if getattr(sys, 'frozen', False) or args.open_browser:
+    if getattr(sys, 'frozen', False) or (args.open_browser and not args.no_browser):
         def _open_browser():
             import time
             time.sleep(1.5)
@@ -57,3 +79,7 @@ if __name__ == '__main__':
         use_reloader=False,
         threaded=True,
     )
+
+
+if __name__ == '__main__':
+    main()

@@ -60,6 +60,19 @@ chmod +x packaging/build.sh
 2. 执行：`.\packaging\build.ps1 -CreateInstaller`
 3. 安装包输出到 `dist/COCO-Visualizer-Setup-x.x.x.exe`
 
+## 命令行安装（`coco-viz`）
+
+从克隆目录执行 **可编辑安装**（须带 `-e`，否则缺少 `templates/` 与 `static/`）：
+
+```bash
+cd /path/to/COCOVisualizer
+pip install -e .
+# 或：pipx install -e .
+coco-viz --help
+```
+
+详见仓库根目录 `pyproject.toml` 与 README「命令行全局安装」。
+
 ## macOS DMG 与一键安装
 
 生成 DMG 前需先完成 `./scripts/build_mac_app.sh`。`./scripts/create_mac_dmg.sh` 会在映像根目录附带：

@@ -36,6 +36,12 @@ python3 scripts/coco_viz_launch.py "<COCO目录或json路径>" --image-dir "<可
 - 默认会打开浏览器；仅调试自动化时加 `--no-open-browser`。
 
 ## 备选：只起服务 + 手动加载
+已 **`pip install -e .`** 时可直接：
+
+```bash
+coco-viz --open-browser --port 6010
+```
+
 仅启动服务并自动打开首页（不预加载数据集）：
 
 ```bash

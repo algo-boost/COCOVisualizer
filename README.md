@@ -97,6 +97,26 @@ python app.py
 - 开发源码默认**不**自动打开浏览器；打包版或加 `--open-browser` 会打开
 - 访问：`http://127.0.0.1:6010`
 
+### 命令行全局安装（`coco-viz`）
+
+仓库根目录含 **`pyproject.toml`**，支持用 **可编辑模式** 安装后，在终端直接运行 **`coco-viz`**（与 `python app.py` 等价）：
+
+```bash
+cd /path/to/COCOVisualizer
+pip install -e .
+# 或隔离到独立环境（推荐）：
+pipx install -e .
+```
+
+```bash
+coco-viz                  # 默认端口 6010
+coco-viz --port 8080
+coco-viz --open-browser   # 启动后自动打开浏览器
+coco-viz --no-browser     # 不自动打开（与源码默认一致）
+```
+
+**说明**：必须使用 **`pip install -e .` / `pipx install -e .`**（带 `-e`）。纯 `pip install .` 打成的 wheel **不会**带上 `templates/`、`static/` 等资源，启动时会报错退出。
+
 可选：拉取 Plotly 等 vendor 脚本（离线/内网环境）：
 
 ```bash
@@ -146,6 +166,7 @@ cd frontend && npm run dev
 ├── static/config.json        # LLM 等配置（示例见仓库内文件）
 ├── templates/index.html      # 根据 manifest 选择 Vite 或 Babel
 ├── docs/用户手册.md
+├── pyproject.toml            # pip/pipx 可编辑安装，入口 coco-viz
 ├── scripts/                  # run / 打包 / 启动辅助
 ├── coco_visualizer.spec      # PyInstaller
 └── requirements.txt

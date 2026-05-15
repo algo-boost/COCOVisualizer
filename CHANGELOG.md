@@ -4,9 +4,9 @@
 
 ## [Unreleased]
 
-### 变更
+### 新增
 
-- **CI 推送发版**：`push-build-artifacts` 创建的 GitHub Release 改为**正式版**（`prerelease: false`），并 `make_latest: true`，不再使用 Pre-release。
+- **命令行全局启动**：根目录增加 `pyproject.toml`，支持 `pip install -e .` / `pipx install -e .` 后使用 **`coco-viz`**（与 `python app.py` 等价）；非 `-e` 的 wheel 安装会因缺少模板/静态资源被拒绝并提示说明。
 
 ### 修复
 
