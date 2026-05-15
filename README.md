@@ -117,6 +117,25 @@ coco-viz --no-browser     # 不自动打开（与源码默认一致）
 
 **说明**：必须使用 **`pip install -e .` / `pipx install -e .`**（带 `-e`）。纯 `pip install .` 打成的 wheel **不会**带上 `templates/`、`static/` 等资源，启动时会报错退出。
 
+### Homebrew（macOS，类似 `brew install`）
+
+仓库内提供 **Cask**，从 GitHub **正式 Release**（`v*` 标签）下载 DMG 安装到「应用程序」（与 `.app` 分发一致，不依赖本机 Python 源码树）：
+
+```bash
+brew tap algo-boost/coco-visualizer https://github.com/algo-boost/COCOVisualizer.git
+brew install --cask algo-boost/coco-visualizer/coco-visualizer
+```
+
+升级：
+
+```bash
+brew update && brew upgrade --cask algo-boost/coco-visualizer/coco-visualizer
+```
+
+**发版维护**：`Casks/coco-visualizer.rb` 里的 **`version`** 须与 `version.txt` 及 GitHub 上 **`v{version}`** 发布的 DMG 文件名 `COCO-Visualizer-mac-{version}.dmg` 一致；发新版时请同步修改该 Cask 并提交（或使用 `brew bump-cask-pr` 流程）。
+
+当前 Cask 使用 **`sha256 :no_check`**（便于国内镜像/代理环境安装）；若你希望与 Homebrew 上游规范一致，可在有稳定下载环境时填入 DMG 的 sha256。
+
 可选：拉取 Plotly 等 vendor 脚本（离线/内网环境）：
 
 ```bash
@@ -165,6 +184,7 @@ cd frontend && npm run dev
 ├── static/react-app.css      # 未构建时的样式回退
 ├── static/config.json        # LLM 等配置（示例见仓库内文件）
 ├── templates/index.html      # 根据 manifest 选择 Vite 或 Babel
+├── Casks/coco-visualizer.rb # Homebrew Cask（brew tap 本仓库后 brew install --cask）
 ├── docs/用户手册.md
 ├── pyproject.toml            # pip/pipx 可编辑安装，入口 coco-viz
 ├── scripts/                  # run / 打包 / 启动辅助

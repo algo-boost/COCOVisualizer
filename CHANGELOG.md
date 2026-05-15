@@ -6,7 +6,7 @@
 
 ### 新增
 
-- **命令行全局启动**：根目录增加 `pyproject.toml`，支持 `pip install -e .` / `pipx install -e .` 后使用 **`coco-viz`**（与 `python app.py` 等价）；非 `-e` 的 wheel 安装会因缺少模板/静态资源被拒绝并提示说明。
+- **Homebrew Cask（macOS）**：仓库根 `Casks/coco-visualizer.rb`，`brew tap algo-boost/coco-visualizer <本仓库 URL>` 后 `brew install --cask …/coco-visualizer`；发版需同步 Cask 内 `version` 与 `v*` DMG。
 
 ### 修复
 

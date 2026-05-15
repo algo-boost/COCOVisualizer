@@ -73,6 +73,10 @@ coco-viz --help
 
 详见仓库根目录 `pyproject.toml` 与 README「命令行全局安装」。
 
+## Homebrew（macOS）
+
+与本仓库同源的 Cask：`brew tap algo-boost/coco-visualizer https://github.com/algo-boost/COCOVisualizer.git` 后执行 `brew install --cask algo-boost/coco-visualizer/coco-visualizer`。发版时请同步 `Casks/coco-visualizer.rb` 中的 `version` 与 `version.txt` / GitHub `v*` DMG。详见 README。
+
 ## macOS DMG 与一键安装
 
 生成 DMG 前需先完成 `./scripts/build_mac_app.sh`。`./scripts/create_mac_dmg.sh` 会在映像根目录附带：

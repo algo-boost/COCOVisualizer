@@ -41,12 +41,26 @@
 
 每次向 **`main` / `master`** 推送会触发 **Push build** 工作流：构建 Windows / macOS 安装包，并创建 **正式 Release**（非 Pre-release），标签形如 `v1.7.3-ci.<run_id>`，且会标记为仓库 **Latest**，便于 `/releases/latest` 与应用内「检查更新」指向最近一次 main 构建。
 
+## 发布产物
+
 每次成功发布后，可在 [Releases](../../releases) 页面下载：
 
 | 文件 | 说明 |
 |------|------|
-| `COCO-Visualizer-Windows-x64-x.x.x.zip` | 便携版，解压即用 |
-| `COCO-Visualizer-Setup-x.x.x.exe` | Inno Setup 安装程序 |
+| `COCO-Visualizer-mac-<版本>.dmg` | macOS 磁盘映像（内含 `.app` 与一键安装脚本） |
+| `COCO-Visualizer-Windows-x64-<版本>.zip` | Windows 便携版 |
+| `COCO-Visualizer-Setup-<版本>.exe` | Windows Inno Setup 安装程序 |
+
+## Homebrew Cask（macOS）
+
+仓库根目录 **`Casks/coco-visualizer.rb`** 供用户：
+
+```bash
+brew tap algo-boost/coco-visualizer https://github.com/algo-boost/COCOVisualizer.git
+brew install --cask algo-boost/coco-visualizer/coco-visualizer
+```
+
+**发版时请同步**：`Casks/coco-visualizer.rb` 中的 **`version`** 与 **`version.txt`**、GitHub 上 **`v{version}`** Release 中的 DMG 文件名 **`COCO-Visualizer-mac-{version}.dmg`** 三者一致。可选：将 DMG 的 `shasum -a 256` 写入 Cask 的 `sha256` 字段以通过更严格的 `brew audit`。
 
 ## 本地构建
 
