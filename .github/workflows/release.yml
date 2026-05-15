@@ -6,7 +6,7 @@
 #   2) 手动：Actions → Release → Run workflow（可填版本号，生成预发布/手动构建）
 #
 # 说明：仅把提交 push 到 main 不会触发本工作流。若希望每次 push 都生成安装包并挂到 Releases，
-#       使用工作流「Push build (artifacts + CI release)」（会创建 Pre-release，标签形如 v*.*.*-ci.<run_id>）。
+#       使用工作流「Push build (artifacts + CI release)」（会创建正式 Release，标签形如 v*.*.*-ci.<run_id>）。
 name: Release
 
 on:

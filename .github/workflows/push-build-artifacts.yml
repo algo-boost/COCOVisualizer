@@ -1,7 +1,8 @@
-# 每次推送到默认分支时：构建 Windows + macOS，上传 Artifacts，并创建一条 GitHub **Pre-release**
-#（标签形如 v1.7.2-ci.<run_id>，每次运行唯一，含重跑；不会设为 latest；正式发布仍用 release.yml：打 v*.*.* 标签）
+# 每次推送到默认分支时：构建 Windows + macOS，上传 Artifacts，并创建一条 GitHub **正式 Release**
+#（标签形如 v1.7.2-ci.<run_id>，每次运行唯一，含重跑；标记为仓库 Latest，便于 /releases/latest 与「检查更新」）
+# 仍可通过 release.yml 打 v*.*.* 标签发布「版本号标签」版；二者均为正式 Release，按发布时间参与 Latest。
 #
-# 下载：Releases 里筛选「Pre-release」；或 Actions → 本次运行 → Artifacts
+# 下载：Releases 页面；或 Actions → 本次运行 → Artifacts
 
 name: Push build (artifacts + CI release)
 
@@ -75,7 +76,7 @@ jobs:
           if-no-files-found: error
 
   publish-ci-release:
-    name: Publish CI pre-release (GitHub Releases)
+    name: Publish CI release (GitHub Releases)
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     permissions:
@@ -106,16 +107,16 @@ jobs:
       - name: 列出待发布文件
         run: find ci-assets -type f -print
 
-      - name: 创建 Pre-release 并上传资产
+      - name: 创建 Release 并上传资产
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.TAG }}
           name: COCO Visualizer ${{ steps.meta.outputs.VERSION }} (CI #${{ github.run_number }}, ${{ steps.meta.outputs.TAG }})
-          prerelease: true
-          make_latest: false
+          prerelease: false
+          make_latest: true
           generate_release_notes: true
           body: |
-            由 **Push build** 工作流在分支 **`${{ github.ref_name }}`** 上自动构建的 CI 预发布包（非正式版）。
+            由 **Push build** 工作流在分支 **`${{ github.ref_name }}`** 上自动构建的安装包（正式 Release）。
 
             - 提交：`${{ github.sha }}`
             - 工作流运行：[#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})

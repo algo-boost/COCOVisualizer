@@ -37,7 +37,9 @@
 
 手动构建会生成预发布（Pre-release），标签格式为 `v1.0.0-manual.xxx`，便于区分正式发布。
 
-## 发布产物
+### 方式三：推送到 main 自动发版
+
+每次向 **`main` / `master`** 推送会触发 **Push build** 工作流：构建 Windows / macOS 安装包，并创建 **正式 Release**（非 Pre-release），标签形如 `v1.7.3-ci.<run_id>`，且会标记为仓库 **Latest**，便于 `/releases/latest` 与应用内「检查更新」指向最近一次 main 构建。
 
 每次成功发布后，可在 [Releases](../../releases) 页面下载：
 

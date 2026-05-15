@@ -139,4 +139,4 @@ if $LOCAL_MAC; then
 fi
 
 echo ""
-echo "完成。安装包由 GitHub Actions 构建（push main → Pre-release；若使用了 --tag 则另有正式 Release）。"
+echo "完成。安装包由 GitHub Actions 构建（push main → 正式 Release；若使用了 --tag 则另有标签版 Release）。"

@@ -92,7 +92,7 @@ chmod +x scripts/push-release.sh
 ./scripts/push-release.sh --yes --local-mac 1.7.3 "chore: release 1.7.3"
 ```
 
-说明：**无法在单一操作系统上本地打出 Windows + macOS 双端包**；`git push` 后由 Actions 分别构建。`--tag` 会创建并推送 `v1.7.3`，与仅 push 触发的 CI 预发布可并存，按需选用。
+说明：**无法在单一操作系统上本地打出 Windows + macOS 双端包**；`git push` 后由 Actions 分别构建。`--tag` 会创建并推送 `v1.7.3`，与仅 push 触发的 **CI 正式 Release**（`v*.*.*-ci.<run_id>`）可并存；二者在 GitHub 上均为非预发布，Latest 由发布时间决定。
 
 ## Linux AppImage（可选）
 
