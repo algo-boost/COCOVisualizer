@@ -69,6 +69,31 @@ chmod +x packaging/build.sh
 
 若需「系统级 /Applications」，仍可由用户手动把 `.app` 拖入 DMG 内提供的「应用程序」替身（可能需要密码）。
 
+### 自测（发布前建议）
+
+1. **本机 DMG 内容**：`./scripts/build_mac_app.sh && ./scripts/create_mac_dmg.sh`，挂载生成的 `dist/COCO-Visualizer-mac-*.dmg`，确认根目录有 `COCO-Visualizer.app`、`安装到用户应用程序.command`、`首次安装说明.txt`。
+2. **（可选）真机安装**：在测试用户下双击 `安装到用户应用程序.command`，确认 `~/Applications` 中出现应用且能启动；若脚本被拦，验证「右键 → 打开」路径。
+3. **CI**：推送到 `main` 后打开 GitHub Actions「Push build」，确认 Windows / macOS job 与 `publish-ci-release` 成功。
+
+### 一键推送并由 CI 构建安装包
+
+仓库内脚本（写入 `version.txt`、提交、push；**默认** `git add -u` 包含所有已跟踪修改，请先 `git restore` 不想提交的文件）：
+
+```bash
+chmod +x scripts/push-release.sh
+
+# 仅 bump 版本并推送（会带上当前所有已跟踪文件的修改）
+./scripts/push-release.sh --yes 1.7.3 "chore: release 1.7.3"
+
+# 同时打正式标签，触发 release.yml（GitHub Releases 正式包）
+./scripts/push-release.sh --yes --tag 1.7.3 "chore: release 1.7.3"
+
+# push 后在本机再打一份 DMG（仅 macOS）
+./scripts/push-release.sh --yes --local-mac 1.7.3 "chore: release 1.7.3"
+```
+
+说明：**无法在单一操作系统上本地打出 Windows + macOS 双端包**；`git push` 后由 Actions 分别构建。`--tag` 会创建并推送 `v1.7.3`，与仅 push 触发的 CI 预发布可并存，按需选用。
+
 ## Linux AppImage（可选）
 
 需要 [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy) 及对应插件，可参考其文档在 PyInstaller 输出基础上生成 AppImage。
