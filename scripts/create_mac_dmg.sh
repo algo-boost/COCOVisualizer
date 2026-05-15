@@ -19,6 +19,13 @@ trap 'rm -rf "$STAGE"' EXIT
 cp -R "$APP" "$STAGE/"
 ln -sf /Applications "$STAGE/Applications"
 
+# 用户侧最低成本安装：双击 .command → 安装到 ~/Applications + 去隔离 + 启动（无需管理员密码）
+HELPER="${ROOT}/packaging/macos/install-to-applications.command"
+DMG_CMD="${STAGE}/安装到用户应用程序.command"
+cp "${HELPER}" "${DMG_CMD}"
+chmod +x "${DMG_CMD}"
+cp "${ROOT}/packaging/macos/DMG-README-zh.txt" "${STAGE}/首次安装说明.txt"
+
 # 进入 stage 后再清一次扩展属性，避免拷贝过程中 macOS 添加 com.apple.metadata 等
 /usr/bin/xattr -cr "${STAGE}" || true
 

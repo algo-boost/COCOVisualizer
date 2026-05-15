@@ -60,12 +60,14 @@ chmod +x packaging/build.sh
 2. 执行：`.\packaging\build.ps1 -CreateInstaller`
 3. 安装包输出到 `dist/COCO-Visualizer-Setup-x.x.x.exe`
 
-## macOS DMG（可选）
+## macOS DMG 与一键安装
 
-```bash
-brew install create-dmg
-./packaging/build.sh --installer
-```
+生成 DMG 前需先完成 `./scripts/build_mac_app.sh`。`./scripts/create_mac_dmg.sh` 会在映像根目录附带：
+
+- **安装到用户应用程序.command**：将 `.app` 复制到 `~/Applications`、去除隔离标记并启动（无需 sudo，适合未公证分发）。
+- **首次安装说明.txt**：给最终用户的简要说明与备选命令。
+
+若需「系统级 /Applications」，仍可由用户手动把 `.app` 拖入 DMG 内提供的「应用程序」替身（可能需要密码）。
 
 ## Linux AppImage（可选）
 

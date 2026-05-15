@@ -15,7 +15,8 @@
 | **Windows 安装版** | `COCO-Visualizer-Setup-<版本>.exe` | [GitHub Releases](https://github.com/algo-boost/COCOVisualizer/releases/latest) |
 | **Windows 免安装** | `COCO-Visualizer-Windows-x64-<版本>.zip` | [GitHub Releases](https://github.com/algo-boost/COCOVisualizer/releases/latest) |
 
-> macOS 双击 DMG → 把 **COCO-Visualizer.app** 拖到「应用程序」。首次启动**右键 .app → 打开 → 仍要打开**（应用已 ad-hoc 签名但未做 Apple 付费公证）。
+> **macOS（推荐流程，无需管理员密码）**：打开 DMG → 双击 **「安装到用户应用程序.command」** → 按终端提示完成（会安装到 `~/Applications` 并尝试去掉隔离标记后启动）。若系统拦截脚本，对 `.command` **右键 → 打开 → 仍要打开** 一次即可。  
+> **备选**：把 **COCO-Visualizer.app** 拖到右侧「应用程序」，再对应用 **右键 → 打开**。DMG 内另有 **「首次安装说明.txt」**。未做 Apple 开发者公证时，系统仍可能提示安全对话框，属正常现象。
 
 ### 国内镜像加速
 
