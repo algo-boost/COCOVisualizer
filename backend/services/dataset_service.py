@@ -31,10 +31,91 @@ def get_in_memory(dataset_id: str) -> CocoEDA | None:
     return _current_datasets.get(dataset_id)
 
 
-def register_dataset(eda: CocoEDA, dataset_name: str = 'dataset') -> str:
+def register_dataset(eda: CocoEDA, dataset_name: str = 'dataset', dataset_id: str | None = None) -> str:
+    if dataset_id:
+        _current_datasets[dataset_id] = eda
+        return dataset_id
     dataset_id = f"{dataset_name}_{len(_current_datasets)}"
     _current_datasets[dataset_id] = eda
     return dataset_id
+
+
+def find_dataset_id_by_coco(coco_json_path: str) -> str | None:
+    """按 COCO 文件绝对路径查找已注册 dataset_id。"""
+    target = str(Path(coco_json_path).resolve())
+    for did, eda in _current_datasets.items():
+        try:
+            if str(Path(eda.coco_json_path).resolve()) == target:
+                return did
+        except Exception:
+            continue
+    map_path = config.DATASETS_MAP_FILE
+    if not map_path.exists():
+        return None
+    try:
+        with open(map_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return None
+        for did, info in data.items():
+            try:
+                if str(Path(info.get('coco_json_path', '')).resolve()) == target:
+                    if ensure_loaded(did):
+                        return did
+            except Exception:
+                continue
+    except Exception:
+        return None
+    return None
+
+
+def _viz_open_payload(eda: CocoEDA, dataset_id: str, dataset_name: str) -> dict:
+    class_dist = eda.get_class_distribution()
+    categories = class_dist['name'].tolist()
+    payload: dict = {
+        'dataset_id': dataset_id,
+        'dataset_name': dataset_name,
+        'categories': categories,
+        'num_images': len(eda.images_df),
+        'num_annotations': len(eda.annotations_df),
+        'num_categories': len(eda.categories_df),
+    }
+    try:
+        with open(eda.coco_json_path, 'r', encoding='utf-8') as f:
+            coco_data = json.load(f)
+        cat_defs = infer_image_category_definitions(coco_data)
+        if cat_defs and cat_defs.get('categories'):
+            payload['image_category_definitions'] = cat_defs
+    except Exception:
+        pass
+    return payload
+
+
+def ensure_viz_dataset(
+    coco_json_path: str,
+    image_dir: str | None,
+    dataset_name: str,
+    *,
+    dataset_id: str | None = None,
+) -> dict:
+    """看图桥接：复用已加载数据集，跳过重型 EDA 统计。"""
+    coco_path = Path(coco_json_path).resolve()
+    if not coco_path.is_file():
+        raise FileNotFoundError(f'COCO 文件不存在: {coco_json_path}')
+
+    stable_id = dataset_id or dataset_name
+    existing = find_dataset_id_by_coco(str(coco_path))
+    if existing:
+        eda = get_in_memory(existing) or ensure_loaded(existing)
+        if eda is not None:
+            return _viz_open_payload(eda, existing, dataset_name)
+
+    eda = CocoEDA(coco_json_path=str(coco_path), name=dataset_name, image_dir=image_dir or None)
+    image_service.fill_image_dimensions(eda)
+    did = register_dataset(eda, dataset_name=dataset_name, dataset_id=stable_id)
+    datasets_repo.persist(did, str(coco_path), dataset_name, image_dir or None)
+    loader_record_repo.write_record(str(coco_path), dataset_name, image_dir or '')
+    return _viz_open_payload(eda, did, dataset_name)
 
 
 def replace_in_memory(dataset_id: str, eda: CocoEDA) -> None:
@@ -526,6 +607,12 @@ def load_single(coco_json_path: str, image_dir: str | None, dataset_name: str, m
         safe_log(f'[warn] load_dataset pre-sync: {exc}')
 
     eda = CocoEDA(coco_json_path=str(coco_path), name=dataset_name, image_dir=image_dir or None)
+    with open(coco_path, 'r', encoding='utf-8') as f:
+        coco_data = json.load(f)
+    if isinstance(coco_data.get('source_dirs'), dict):
+        eda.source_dirs = coco_data['source_dirs']
+    if isinstance(coco_data.get('source_coco_paths'), dict):
+        eda.source_coco_paths = coco_data['source_coco_paths']
     image_service.fill_image_dimensions(eda)
 
     dataset_id = register_dataset(eda, dataset_name=dataset_name)
@@ -781,6 +868,8 @@ __all__ = [
     'build_meta_filter_options',
     'build_eda_payload',
     'load_single',
+    'ensure_viz_dataset',
+    'find_dataset_id_by_coco',
     'load_merged',
     'prepare_merge_item',
 ]

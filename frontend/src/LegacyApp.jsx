@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } from 'react';
+import { buildImageURL } from './api/images.js';
+import { buildChatDownloadURL } from './api/chat.js';
 /* global Plotly */
 
 /** 官方仓库远程配置索引（默认 main 分支；若仓库默认分支不同请改此处与 static/config.json） */
@@ -739,6 +741,33 @@ function App() {
         }
         setPage('gallery');
     };
+
+    // DefectLoop 嵌入：/?defectloop_session=xxx 自动进入图库主页
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const sessionId = params.get('defectloop_session');
+        if (!sessionId) return;
+        let cancelled = false;
+        (async () => {
+            setLoading(true);
+            try {
+                const res = await fetch(`/api/viz/session/${encodeURIComponent(sessionId)}`);
+                const data = await res.json();
+                if (cancelled) return;
+                if (data.success && data.payload) {
+                    await applyDatasetAndFetchImages(data.payload);
+                } else {
+                    alert('样本图库会话加载失败: ' + (data.error || 'unknown'));
+                }
+            } catch (err) {
+                if (!cancelled) alert('样本图库会话错误: ' + err.message);
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // 按图片元数据筛选后重新拉取列表（时间 / SN / 位置 / 自定义字符串字段）
     const refetchImagesWithMetaFilters = useCallback(async (filters) => {
@@ -2511,7 +2540,7 @@ function AgentBubble({ msg, datasetId, onFilterByIds, onAdoptCodeTemplate, isStr
         return (
             <div className="agent-file-list">
                 {files.map((f, fi) => (
-                    <a key={fi} href={`/api/chat/download/${f.file_id}`} download={f.filename}
+                    <a key={fi} href={buildChatDownloadURL(f.file_id)} download={f.filename}
                         className="agent-file-chip" target="_blank" rel="noreferrer">
                         📄 {f.filename}
                     </a>
@@ -3454,7 +3483,7 @@ function ChatPage({ datasetData, images, onFilterByIds,
                                                             {(templateRunResult.data.files || []).map((f, idx) => (
                                                                 <a
                                                                     key={idx}
-                                                                    href={`/api/chat/download/${f.file_id}`}
+                                                                    href={buildChatDownloadURL(f.file_id)}
                                                                     download={f.filename}
                                                                     className="agent-file-chip"
                                                                     target="_blank"
@@ -6339,8 +6368,7 @@ function VersionModal({ datasetData, onClose, onRollback }) {
 
 // ==================== 图片卡片 ====================
 function ImageCard({ image, datasetId, selected, imageCategory, imageCategoryColors, colorPalette, hasNote, onSelect, onClick }) {
-    let thumbUrl = `/api/get_image?dataset_id=${datasetId}&file_name=${encodeURIComponent(image.file_name)}`;
-    if (image.source_path != null && image.source_path !== '') thumbUrl += `&source_path=${encodeURIComponent(image.source_path)}`;
+    let thumbUrl = buildImageURL(datasetId, image.file_name, image.source_path || undefined);
     const labelCategories = [...new Set(image.annotations.map(a => a.category))].slice(0, 3);
     const isUnannotated = !image.annotations || image.annotations.length === 0;
     const catColors = imageCategoryColors || {};
@@ -6574,8 +6602,7 @@ function Filmstrip({ images, currentIndex, datasetId, onNavigateTo, leftInset = 
         >
             {visibleImages.map(({ img, idx }) => {
                 const isActive = idx === currentIndex;
-                let thumbUrl = `/api/get_image?dataset_id=${datasetId}&file_name=${encodeURIComponent(img.file_name)}`;
-                if (img.source_path != null && img.source_path !== '') thumbUrl += `&source_path=${encodeURIComponent(img.source_path)}`;
+                let thumbUrl = buildImageURL(datasetId, img.file_name, img.source_path || undefined);
                 
                 return (
                     <div 
@@ -6828,8 +6855,7 @@ function ExportModal({ images, imageClassifications, imageNotes, datasetData, im
                     const img = catImages[i];
                     const imageName = img.file_name.split('/').pop() || img.file_name;
                     try {
-                        let url = `/api/get_image?dataset_id=${encodeURIComponent(datasetId)}&file_name=${encodeURIComponent(img.file_name)}`;
-                        if (img.source_path != null && img.source_path !== '') url += `&source_path=${encodeURIComponent(img.source_path)}`;
+                        let url = buildImageURL(datasetId, img.file_name, img.source_path || undefined);
                         const res = await fetch(url);
                         if (res.ok) {
                             const blob = await res.blob();
@@ -7831,8 +7857,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
     }
 
     const imageIdx = images.findIndex(i => i.image_id === currentImage.image_id);
-    let imageUrl = `/api/get_image?dataset_id=${datasetId}&file_name=${encodeURIComponent(currentImage.file_name)}`;
-    if (currentImage.source_path != null && currentImage.source_path !== '') imageUrl += `&source_path=${encodeURIComponent(currentImage.source_path)}`;
+    let imageUrl = buildImageURL(datasetId, currentImage.file_name, currentImage.source_path || undefined);
     
     // 前后图预加载
     useEffect(() => {
@@ -7840,8 +7865,7 @@ function ImageViewer({ image, images, datasetId, categories, imageClassification
         const preload = (idx) => {
             if (idx >= 0 && idx < images.length) {
                 const img = images[idx];
-                let url = `/api/get_image?dataset_id=${datasetId}&file_name=${encodeURIComponent(img.file_name)}`;
-                if (img.source_path != null && img.source_path !== '') url += `&source_path=${encodeURIComponent(img.source_path)}`;
+                let url = buildImageURL(datasetId, img.file_name, img.source_path || undefined);
                 const imageObj = new Image();
                 imageObj.src = url;
             }

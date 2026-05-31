@@ -4,25 +4,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>COCO数据集可视化工具</title>
-    <link rel="icon" type="image/png" href="/static/logo.png">
+    {% set m = mount_prefix|default('') %}
+    <script>window.__COCO_VIZ_MOUNT__ = {{ m|tojson }};</script>
+    <link rel="icon" type="image/png" href="{{ m }}/static/logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600&family=Plus+Jakarta+Sans:wght@500;600&display=swap" rel="stylesheet">
-    <script src="/static/vendor/plotly.min.js"></script>
-    <script src="/static/vendor/jszip.min.js"></script>
+    <script src="{{ m }}/static/vendor/plotly.min.js"></script>
+    <script src="{{ m }}/static/vendor/jszip.min.js"></script>
     {% if vite_assets %}
-        {# Vite 构建产物（npm run build 后由后端检测 manifest.json 自动启用）。
-           CSS 已由 src/styles/index.css @import 链路打包进 assets/main-*.css，
-           不再单独加载 react-app.css。 #}
         {% for css in vite_assets.css %}
-            <link rel="stylesheet" href="/static/dist/{{ css }}">
+            <link rel="stylesheet" href="{{ m }}/static/dist/{{ css }}">
         {% endfor %}
     {% else %}
         {# 开发/兜底模式：旧的 Babel-in-browser + 单文件 react-app.jsx #}
         <script src="/static/vendor/react.production.min.js"></script>
         <script src="/static/vendor/react-dom.production.min.js"></script>
         <script src="/static/vendor/babel.min.js"></script>
-        <link rel="stylesheet" href="/static/react-app.css">
+        <link rel="stylesheet" href="{{ m }}/static/react-app.css">
     {% endif %}
 </head>
 <body>
@@ -44,9 +43,9 @@
       })();
     </script>
     {% if vite_assets %}
-        <script type="module" src="/static/dist/{{ vite_assets.entry }}"></script>
+        <script type="module" src="{{ m }}/static/dist/{{ vite_assets.entry }}"></script>
     {% else %}
-        <script type="text/babel" src="/static/react-app.jsx"></script>
+        <script type="text/babel" src="{{ m }}/static/react-app.jsx"></script>
     {% endif %}
 
     <!-- 应用内更新提示（自包含，独立于 React）：页面 load 后自动请求 /api/app/check_update；有新版时右上角横幅。手动检查：⚙️ 设置 → 「关于」→ 检查更新。 -->

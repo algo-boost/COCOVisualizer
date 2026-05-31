@@ -4,7 +4,7 @@ from __future__ import annotations
 from flask import Flask
 
 
-def register_blueprints(app: Flask) -> None:
+def register_blueprints(app: Flask, url_prefix: str = '') -> None:
     from .uploads_bp import bp as uploads_bp
     from .datasets_bp import bp as datasets_bp
     from .images_bp import bp as images_bp
@@ -20,4 +20,4 @@ def register_blueprints(app: Flask) -> None:
         versions_bp, export_bp, agent_modules_bp, chat_bp,
         app_meta_bp,
     ):
-        app.register_blueprint(bp)
+        app.register_blueprint(bp, url_prefix=url_prefix)

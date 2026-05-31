@@ -5,9 +5,9 @@
     "image_dir": "/Users/rookie/Desktop/yfmb-0420/raw_snapshots/皮带背景抑制打标_V28"
   },
   "dataset_0": {
-    "coco_json_path": "/Users/rookie/Desktop/漏检分析/延锋门板4月至今漏检样本汇总分析/merged_dataset_835ab3d60397343a.json",
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/datasets/approach_598/皮带背景抑制打标_3063/merged_dataset_824016129800551a.json",
     "dataset_name": "dataset",
-    "image_dir": "/Users/rookie/Desktop/漏检分析/延锋门板4月至今漏检样本汇总分析/yfmb-miss-F2A/4.12"
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/datasets/approach_598/皮带背景抑制打标_3063"
   },
   "dataset_1": {
     "coco_json_path": "/Users/rookie/Desktop/5.7误检/merged_dataset_e3b1b475d18137e2.json",
@@ -258,5 +258,175 @@
     "coco_json_path": "/private/var/folders/44/j39jwp7d2qqdwlf7m953k1880000gn/T/coco_smoke_f1prp4bp/imgs/_annotations.coco.json",
     "dataset_name": "smoke",
     "image_dir": "/var/folders/44/j39jwp7d2qqdwlf7m953k1880000gn/T/coco_smoke_f1prp4bp/imgs"
+  },
+  "日常捞图 · 300 条_0": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/e94f160b-4579-4192-90f0-dac4b62d6685/_annotations.coco.json",
+    "dataset_name": "日常捞图 · 300 条",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/e94f160b-4579-4192-90f0-dac4b62d6685"
+  },
+  "日常捞图 · 300 条_1": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/16685e92-09ad-4078-922a-07b2121fc091/_annotations.coco.json",
+    "dataset_name": "日常捞图 · 300 条",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/16685e92-09ad-4078-922a-07b2121fc091"
+  },
+  "query-f7981ad1-7ade-456a-abef-5e9cbbbedea5_2": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/f7981ad1-7ade-456a-abef-5e9cbbbedea5/_annotations.coco.json",
+    "dataset_name": "query-f7981ad1-7ade-456a-abef-5e9cbbbedea5",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/f7981ad1-7ade-456a-abef-5e9cbbbedea5"
+  },
+  "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688_3": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688/_annotations.coco.json",
+    "dataset_name": "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688"
+  },
+  "日常捞图 · 300 条_4": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/6c899c0d-2137-457d-9238-f629edcc3565/_annotations.coco.json",
+    "dataset_name": "日常捞图 · 300 条",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/6c899c0d-2137-457d-9238-f629edcc3565"
+  },
+  "日常捞图 · 300 条_5": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/1e57a7f9-8b22-41ce-8278-450dcfbf96a0/_annotations.coco.json",
+    "dataset_name": "日常捞图 · 300 条",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/1e57a7f9-8b22-41ce-8278-450dcfbf96a0"
+  },
+  "日常捞图 · 227 条_6": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/683fcebf-928a-4dfb-ab03-fd131cc016d2/_annotations.coco.json",
+    "dataset_name": "日常捞图 · 227 条",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/683fcebf-928a-4dfb-ab03-fd131cc016d2"
+  },
+  "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688_7": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688/_annotations.coco.json",
+    "dataset_name": "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688"
+  },
+  "日常捞图 · 227 条_8": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/0c815a29-dc30-4c7c-9841-747cbf3fd25e/_annotations.coco.json",
+    "dataset_name": "日常捞图 · 227 条",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/0c815a29-dc30-4c7c-9841-747cbf3fd25e"
+  },
+  "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688_9": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688/_annotations.coco.json",
+    "dataset_name": "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688"
+  },
+  "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688_10": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688/_annotations.coco.json",
+    "dataset_name": "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688"
+  },
+  "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688_11": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688/_annotations.coco.json",
+    "dataset_name": "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688"
+  },
+  "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688_12": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688/_annotations.coco.json",
+    "dataset_name": "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688"
+  },
+  "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688_13": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688/_annotations.coco.json",
+    "dataset_name": "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688"
+  },
+  "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688_14": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688/_annotations.coco.json",
+    "dataset_name": "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688"
+  },
+  "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688_15": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688/_annotations.coco.json",
+    "dataset_name": "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688"
+  },
+  "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688_0": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688/_annotations.coco.json",
+    "dataset_name": "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688"
+  },
+  "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688_1": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688/_annotations.coco.json",
+    "dataset_name": "query-feaf9c4d-9d6c-4487-8a73-a4fc4518c688",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/feaf9c4d-9d6c-4487-8a73-a4fc4518c688"
+  },
+  "日常捞图 · 300 条_2": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/8c816846-ae85-47aa-88e3-47949d2868ca/_annotations.coco.json",
+    "dataset_name": "日常捞图 · 300 条",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/8c816846-ae85-47aa-88e3-47949d2868ca"
+  },
+  "日常捞图 · 191 条_3": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/18028d03-87fa-4f7e-93c4-c03ce94f4ccb/_annotations.coco.json",
+    "dataset_name": "日常捞图 · 191 条",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/18028d03-87fa-4f7e-93c4-c03ce94f4ccb"
+  },
+  "query-18028d03-87fa-4f7e-93c4-c03ce94f4ccb_4": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/18028d03-87fa-4f7e-93c4-c03ce94f4ccb/_annotations.coco.json",
+    "dataset_name": "query-18028d03-87fa-4f7e-93c4-c03ce94f4ccb",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/18028d03-87fa-4f7e-93c4-c03ce94f4ccb"
+  },
+  "bench-timing_0": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/18028d03-87fa-4f7e-93c4-c03ce94f4ccb/_annotations.coco.json",
+    "dataset_name": "bench-timing",
+    "image_dir": "exports/18028d03-87fa-4f7e-93c4-c03ce94f4ccb"
+  },
+  "query-3c9e697a-e24a-4e8a-8429-5baff3343e0d": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/3c9e697a-e24a-4e8a-8429-5baff3343e0d/_annotations.coco.json",
+    "dataset_name": "日常捞图 · 191 条",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/3c9e697a-e24a-4e8a-8429-5baff3343e0d"
+  },
+  "人为制造缺陷_0": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/datasets/approach_598/人为制造缺陷_2918/_annotations.coco.json",
+    "dataset_name": "人为制造缺陷",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/datasets/approach_598/人为制造缺陷_2918"
+  },
+  "人为制造缺陷_1": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/datasets/approach_598/人为制造缺陷_2918/_annotations.coco.json",
+    "dataset_name": "人为制造缺陷",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/datasets/approach_598/人为制造缺陷_2918"
+  },
+  "延锋门板-不确定性采样集_0": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/datasets/approach_598/延锋门板-不确定性采样集_2986/_annotations.coco.json",
+    "dataset_name": "延锋门板-不确定性采样集",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/datasets/approach_598/延锋门板-不确定性采样集_2986"
+  },
+  "延锋门板-缺陷集_1": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/datasets/approach_598/延锋门板-缺陷集_2845/_annotations.coco.json",
+    "dataset_name": "延锋门板-缺陷集",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/datasets/approach_598/延锋门板-缺陷集_2845"
+  },
+  "人为制造缺陷 · V28_19plus_0": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/predict_job_38/_annotations.coco.json",
+    "dataset_name": "人为制造缺陷 · V28_19plus",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/predict_job_38"
+  },
+  "predict-#38 · 人为制造缺陷 · V28_19plus_1": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/predict_job_38/_annotations.coco.json",
+    "dataset_name": "predict-#38 · 人为制造缺陷 · V28_19plus",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/predict_job_38"
+  },
+  "predict-#38 · 人为制造缺陷 · V28_19plus_2": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/predict_job_38/_annotations.coco.json",
+    "dataset_name": "predict-#38 · 人为制造缺陷 · V28_19plus",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/predict_job_38"
+  },
+  "predict-#38 · 人为制造缺陷 · V28_19plus_0": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/predict_job_38/_annotations.coco.json",
+    "dataset_name": "predict-#38 · 人为制造缺陷 · V28_19plus",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/predict_job_38"
+  },
+  "人为制造缺陷 · V28_19plus_1": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/predict_job_38/_annotations.coco.json",
+    "dataset_name": "人为制造缺陷 · V28_19plus",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/predict_job_38"
+  },
+  "query-d1836af1-66ea-448d-9f32-bd1ac3a70282": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/d1836af1-66ea-448d-9f32-bd1ac3a70282/_annotations.coco.json",
+    "dataset_name": "日常捞图 · 191 条",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/d1836af1-66ea-448d-9f32-bd1ac3a70282"
+  },
+  "query-25bf028f-4af4-4825-a0dd-a544a986b642": {
+    "coco_json_path": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/25bf028f-4af4-4825-a0dd-a544a986b642/_annotations.coco.json",
+    "dataset_name": "日常捞图 · 188 条",
+    "image_dir": "/Users/rookie/Desktop/AI/online_data_tool/tools/DetForge-Studio/exports/25bf028f-4af4-4825-a0dd-a544a986b642"
   }
 }

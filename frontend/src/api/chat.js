@@ -1,4 +1,5 @@
 import { postForm, postJSON } from './client.js';
+import { mountUrl } from '../mount.js';
 
 export const runCode = (code, datasetId) =>
   postJSON('/api/chat/run_code', { code, dataset_id: datasetId });
@@ -9,7 +10,7 @@ export const uploadChatAttachment = (file) => {
   return postForm('/api/chat/upload', fd);
 };
 
-export const buildChatDownloadURL = (fileId) => `/api/chat/download/${fileId}`;
+export const buildChatDownloadURL = (fileId) => mountUrl(`/api/chat/download/${fileId}`);
 
 /**
  * 启动 SSE 聊天流。

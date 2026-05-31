@@ -1,4 +1,5 @@
 import { postJSON } from './client.js';
+import { mountUrl } from '../mount.js';
 
 export const getFilteredData = (datasetId, selectedCategories) =>
   postJSON('/api/get_filtered_data', {
@@ -12,5 +13,5 @@ export const getImagesByCategory = (payload) =>
 export const buildImageURL = (datasetId, fileName, sourcePath) => {
   const params = new URLSearchParams({ dataset_id: datasetId, file_name: fileName });
   if (sourcePath) params.set('source_path', sourcePath);
-  return `/api/get_image?${params.toString()}`;
+  return mountUrl(`/api/get_image?${params.toString()}`);
 };
